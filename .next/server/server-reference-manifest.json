@@ -3630,6 +3630,18 @@
       "filename": "src/lib/crm-actions.ts",
       "exportedName": "updateTaskStatusAction"
     },
+    "40ed24c9307df6909a440d44e57276be879c262fc5": {
+      "workers": {
+        "app/login/page": {
+          "moduleId": 59087,
+          "async": true,
+          "exportedName": "adminPasswordLoginAction",
+          "filename": "src/lib/crm-actions.ts"
+        }
+      },
+      "filename": "src/lib/crm-actions.ts",
+      "exportedName": "adminPasswordLoginAction"
+    },
     "40df0ddaef71e83aa9e9cb083b59ac4beffc3b1338": {
       "workers": {
         "app/login/page": {

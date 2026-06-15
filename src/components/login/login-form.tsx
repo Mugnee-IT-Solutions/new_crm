@@ -10,14 +10,17 @@ import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { sendOtpAction, verifyOtpAction } from "@/lib/crm-actions";
+import { adminPasswordLoginAction, sendOtpAction, verifyOtpAction } from "@/lib/crm-actions";
 
-const mobileSchema = z.object({
-  mobile: z.string().min(10, "Enter a valid mobile number"),
+const loginSchema = z.object({
+  login: z.string().min(3, "Enter your email or mobile number"),
+  password: z.string().optional(),
 });
 
-function normalizeMobile(value: string) {
-  const digits = value.replace(/\D/g, "");
+function normalizeLogin(value: string) {
+  const trimmed = value.trim();
+  if (trimmed.includes("@")) return trimmed.toLowerCase();
+  const digits = trimmed.replace(/\D/g, "");
   return digits.startsWith("88") ? digits.slice(2) : digits;
 }
 
@@ -31,12 +34,15 @@ export function LoginForm() {
   const [submitting, setSubmitting] = React.useState(false);
   const inputsRef = React.useRef<Array<HTMLInputElement | null>>([]);
 
-  const form = useForm<z.infer<typeof mobileSchema>>({
-    resolver: zodResolver(mobileSchema),
+  const form = useForm<z.infer<typeof loginSchema>>({
+    resolver: zodResolver(loginSchema),
     defaultValues: {
-      mobile: "01700000001",
+      login: "admin@crm.com",
+      password: "",
     },
   });
+  const loginValue = form.watch("login");
+  const isAdminLogin = normalizeLogin(loginValue) === "admin@crm.com";
 
   React.useEffect(() => {
     if (!brandRef.current) return;
@@ -53,10 +59,16 @@ export function LoginForm() {
     return () => window.clearInterval(interval);
   }, [otpSent, timer]);
 
+  React.useEffect(() => {
+    setOtpSent(false);
+    setOtp(["", "", "", "", "", ""]);
+    setMessage(isAdminLogin ? "Admin login uses email and password." : "Enter your email to receive OTP.");
+  }, [isAdminLogin, loginValue]);
+
   function handleSendOtp() {
-    void form.handleSubmit(async ({ mobile }) => {
+    void form.handleSubmit(async ({ login }) => {
       const formData = new FormData();
-      formData.set("mobile", normalizeMobile(mobile));
+      formData.set("login", normalizeLogin(login));
       const result = await sendOtpAction(formData);
 
       setOtpSent(Boolean(result.ok));
@@ -67,6 +79,24 @@ export function LoginForm() {
     })();
   }
 
+  function handleAdminLogin() {
+    void form.handleSubmit(async ({ login, password }) => {
+      setSubmitting(true);
+      const formData = new FormData();
+      formData.set("login", normalizeLogin(login));
+      formData.set("password", password ?? "");
+      const result = await adminPasswordLoginAction(formData);
+
+      if (!result.ok || !result.redirectTo) {
+        setSubmitting(false);
+        setMessage(result.message ?? "Admin login failed.");
+        return;
+      }
+
+      router.push(result.redirectTo);
+    })();
+  }
+
   function updateOtp(index: number, value: string) {
     const digit = value.replace(/\D/g, "").slice(-1);
     setOtp((current) => current.map((item, itemIndex) => (itemIndex === index ? digit : item)));
@@ -74,7 +104,7 @@ export function LoginForm() {
   }
 
   async function verifyOtp() {
-    const mobile = normalizeMobile(form.getValues("mobile"));
+    const login = normalizeLogin(form.getValues("login"));
     const entered = otp.join("");
 
     if (!otpSent) {
@@ -84,7 +114,7 @@ export function LoginForm() {
 
     setSubmitting(true);
     const formData = new FormData();
-    formData.set("mobile", mobile);
+    formData.set("login", login);
     formData.set("otp", entered);
     const result = await verifyOtpAction(formData);
 
@@ -162,32 +192,48 @@ export function LoginForm() {
             </div>
             <h2 className="mt-4 text-2xl font-black text-slate-950">Mugnee CRM</h2>
             <p className="mt-2 text-sm font-semibold text-blue-700">Welcome Back</p>
-            <p className="mt-1 text-sm text-slate-500">Enter your mobile number to receive OTP.</p>
+            <p className="mt-1 text-sm text-slate-500">Admin uses password. Team users receive OTP by email.</p>
           </div>
 
           <form className="mt-8 space-y-5" onSubmit={(event) => event.preventDefault()}>
             <div>
-              <label className="text-sm font-semibold text-slate-700" htmlFor="mobile">
-                Mobile Number
+              <label className="text-sm font-semibold text-slate-700" htmlFor="login">
+                Email or Mobile Number
               </label>
               <div className="mt-2 flex overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm focus-within:ring-4 focus-within:ring-blue-100">
-                <span className="flex items-center border-r border-slate-200 px-3 text-sm font-bold text-slate-500">+88</span>
                 <input
-                  id="mobile"
+                  id="login"
                   className="h-11 flex-1 px-3 text-sm outline-none"
-                  placeholder="01700000001"
-                  {...form.register("mobile")}
+                  placeholder="admin@crm.com"
+                  {...form.register("login")}
                 />
-                <Button type="button" className="m-1 h-9" onClick={handleSendOtp}>
-                  Send OTP
-                </Button>
+                {!isAdminLogin ? (
+                  <Button type="button" className="m-1 h-9" onClick={handleSendOtp}>
+                    Send OTP
+                  </Button>
+                ) : null}
               </div>
-              {form.formState.errors.mobile ? (
-                <p className="mt-1 text-xs font-semibold text-red-600">{form.formState.errors.mobile.message}</p>
+              {form.formState.errors.login ? (
+                <p className="mt-1 text-xs font-semibold text-red-600">{form.formState.errors.login.message}</p>
               ) : null}
             </div>
 
-            <div>
+            {isAdminLogin ? (
+              <div>
+                <label className="text-sm font-semibold text-slate-700" htmlFor="password">
+                  Admin Password
+                </label>
+                <Input
+                  id="password"
+                  type="password"
+                  className="mt-2 h-11"
+                  placeholder="Crm@admin1234"
+                  {...form.register("password")}
+                />
+              </div>
+            ) : null}
+
+            {!isAdminLogin ? <div>
               <div className="flex items-center justify-between">
                 <label className="text-sm font-semibold text-slate-700">Enter OTP</label>
                 <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500">
@@ -215,14 +261,14 @@ export function LoginForm() {
                   />
                 ))}
               </div>
-            </div>
+            </div> : null}
 
             <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-center text-sm font-semibold text-blue-700">
               {message}
             </div>
 
-            <Button type="button" className="w-full" size="lg" disabled={submitting} onClick={verifyOtp}>
-              {submitting ? "Opening Dashboard..." : "Login to Dashboard"}
+            <Button type="button" className="w-full" size="lg" disabled={submitting} onClick={isAdminLogin ? handleAdminLogin : verifyOtp}>
+              {submitting ? "Opening Dashboard..." : isAdminLogin ? "Login as Admin" : "Login to Dashboard"}
             </Button>
           </form>
 

@@ -7,9 +7,28 @@ import { getCurrentSession } from "@/lib/auth";
 import { getPrisma } from "@/lib/prisma";
 import { roleHome, type Role } from "@/lib/utils";
 
+const DEFAULT_ADMIN_EMAIL = "admin@crm.com";
+const DEFAULT_ADMIN_PASSWORD = "Crm@admin1234";
+const DEFAULT_ADMIN_MOBILE = "01700000001";
+
 function normalizeMobile(value: FormDataEntryValue | null) {
   const digits = String(value ?? "").replace(/\D/g, "");
   return digits.startsWith("88") ? digits.slice(2) : digits;
+}
+
+function normalizeEmail(value: FormDataEntryValue | null) {
+  const email = String(value ?? "").trim().toLowerCase();
+  return email.includes("@") ? email : "";
+}
+
+function normalizeLoginIdentifier(value: FormDataEntryValue | null) {
+  const raw = String(value ?? "").trim();
+  if (raw.includes("@")) return raw.toLowerCase();
+  return normalizeMobile(raw);
+}
+
+function internalMobileForEmail(email: string) {
+  return `email:${email}`;
 }
 
 function text(formData: FormData, key: string) {
@@ -233,19 +252,118 @@ async function applyReward(trigger: string, userId: string, entity: string, enti
   ]);
 }
 
-export async function sendOtpAction(formData: FormData) {
-  const mobile = normalizeMobile(formData.get("mobile"));
+async function sendLoginOtpEmail(to: string, otp: string) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM_EMAIL ?? process.env.EMAIL_FROM;
+  const appUrl = (process.env.AUTH_EMAIL_REDIRECT_TO ?? "https://crm.mugnee.com").replace(/\/$/, "");
+
+  if (!apiKey || !from) return false;
+
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to,
+        subject: "Your Mugnee CRM login OTP",
+        html: `<p>Your Mugnee CRM login OTP is <strong>${otp}</strong>.</p><p>This code will expire in 5 minutes.</p><p><a href="${appUrl}/login">Open Mugnee CRM</a></p>`,
+        text: `Your Mugnee CRM login OTP is ${otp}. This code will expire in 5 minutes. Open CRM: ${appUrl}/login`,
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn("OTP email provider returned an error.", await response.text());
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.warn("OTP email could not be sent.", error);
+    return false;
+  }
+}
+
+async function ensureOfficeAdmin() {
   const prisma = getPrisma();
-  const user = await prisma.user.findUnique({ where: { mobile } });
+  const adminEmail = (process.env.CRM_ADMIN_EMAIL ?? DEFAULT_ADMIN_EMAIL).toLowerCase();
+  const adminMobile = process.env.CRM_ADMIN_MOBILE ?? DEFAULT_ADMIN_MOBILE;
+
+  const existing =
+    (await prisma.user.findUnique({ where: { email: adminEmail } })) ??
+    (await prisma.user.findUnique({ where: { mobile: adminMobile } })) ??
+    (await prisma.user.findFirst({ where: { role: "ADMIN" }, orderBy: { createdAt: "asc" } }));
+
+  if (existing) {
+    return prisma.user.update({
+      where: { id: existing.id },
+      data: {
+        name: existing.name || "CRM Admin",
+        email: adminEmail,
+        mobile: adminMobile,
+        role: "ADMIN",
+        status: "ACTIVE",
+        designation: existing.designation ?? "Administrator",
+      },
+    });
+  }
+
+  return prisma.user.create({
+    data: {
+      name: "CRM Admin",
+      email: adminEmail,
+      mobile: adminMobile,
+      role: "ADMIN",
+      status: "ACTIVE",
+      designation: "Administrator",
+    },
+  });
+}
+
+export async function adminPasswordLoginAction(formData: FormData) {
+  const login = normalizeLoginIdentifier(formData.get("login") ?? formData.get("email") ?? formData.get("mobile"));
+  const password = String(formData.get("password") ?? "");
+  const adminEmail = (process.env.CRM_ADMIN_EMAIL ?? DEFAULT_ADMIN_EMAIL).toLowerCase();
+  const adminPassword = process.env.CRM_ADMIN_PASSWORD ?? DEFAULT_ADMIN_PASSWORD;
+
+  if (login !== adminEmail || password !== adminPassword) {
+    return { ok: false, message: "Admin email or password is incorrect." };
+  }
+
+  const admin = await ensureOfficeAdmin();
+  const store = await cookies();
+  store.set("crm_role", "ADMIN", { path: "/", maxAge: 60 * 60 * 24, sameSite: "lax" });
+  store.set("crm_mobile", admin.mobile, { path: "/", maxAge: 60 * 60 * 24, sameSite: "lax" });
+
+  return { ok: true, redirectTo: roleHome.ADMIN };
+}
+
+export async function sendOtpAction(formData: FormData) {
+  const login = normalizeLoginIdentifier(formData.get("login") ?? formData.get("mobile"));
+  const prisma = getPrisma();
+  const isEmailLogin = login.includes("@");
+  const user = await prisma.user.findFirst({
+    where: {
+      status: "ACTIVE",
+      OR: isEmailLogin ? [{ email: login }, { mobile: internalMobileForEmail(login) }] : [{ mobile: login }],
+    },
+  });
 
   if (!user || user.status !== "ACTIVE") {
-    return { ok: false, message: "No active CRM user exists for this mobile number." };
+    return { ok: false, message: "No active CRM user exists for this email or mobile number." };
   }
 
   const otp = String(Math.floor(100000 + Math.random() * 900000));
+  const emailTarget = user.email ?? (isEmailLogin ? login : undefined);
+  const emailSent = emailTarget ? await sendLoginOtpEmail(emailTarget, otp) : false;
+  const shouldShowOtp = process.env.CRM_SHOW_LOGIN_OTP === "true" || (!emailSent && process.env.CRM_SHOW_LOGIN_OTP !== "false");
+
   await prisma.oTP.create({
     data: {
-      mobile,
+      mobile: login,
       otp,
       userId: user.id,
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
@@ -254,13 +372,13 @@ export async function sendOtpAction(formData: FormData) {
 
   return {
     ok: true,
-    message: process.env.NODE_ENV === "production" ? "OTP sent to your mobile number." : `Development OTP: ${otp}`,
-    otp: process.env.NODE_ENV === "production" ? undefined : otp,
+    message: emailSent ? `OTP sent to ${emailTarget}.` : shouldShowOtp ? `Login OTP: ${otp}` : "OTP sent to your account.",
+    otp: shouldShowOtp ? otp : undefined,
   };
 }
 
 export async function verifyOtpAction(formData: FormData) {
-  const mobile = normalizeMobile(formData.get("mobile"));
+  const login = normalizeLoginIdentifier(formData.get("login") ?? formData.get("mobile"));
   const otp = text(formData, "otp");
   const prisma = getPrisma();
 
@@ -268,7 +386,7 @@ export async function verifyOtpAction(formData: FormData) {
 
   const record = await prisma.oTP.findFirst({
     where: {
-      mobile,
+      mobile: login,
       otp,
       used: false,
       expiresAt: { gt: new Date() },
@@ -993,11 +1111,12 @@ export async function createUserAction(formData: FormData) {
 
   const prisma = getPrisma();
   const requestedRole = text(formData, "role") ?? "MARKETER";
-  const mobile = normalizeMobile(formData.get("mobile"));
-  const email = text(formData, "email");
+  const email = normalizeEmail(formData.get("email"));
+  const typedMobile = normalizeMobile(formData.get("mobile"));
+  const mobile = typedMobile || internalMobileForEmail(email);
 
-  if (!mobile) {
-    return { ok: false, message: "Mobile number is required." };
+  if (!email) {
+    return { ok: false, message: "Valid email is required." };
   }
 
   if (user.role === "SUPERVISOR" && requestedRole !== "MARKETER") {

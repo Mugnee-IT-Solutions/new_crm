@@ -1464,7 +1464,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
       id: employee.id,
       name: employee.name,
       email: employee.email ?? "-",
-      mobile: employee.mobile,
+      mobile: employee.mobile.startsWith("email:") ? "-" : employee.mobile,
       role: labelize(employee.role),
       status: labelize(employee.status),
       leads: total,

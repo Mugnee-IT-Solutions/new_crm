@@ -78,7 +78,7 @@ export function AppHeader({
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-bold text-slate-950">{user.name}</p>
-                  <p className="truncate text-xs text-slate-500">{user.mobile ?? user.email ?? roleLabels[role]}</p>
+                  <p className="truncate text-xs text-slate-500">{user.email ?? user.mobile ?? roleLabels[role]}</p>
                 </div>
               </div>
             </div>

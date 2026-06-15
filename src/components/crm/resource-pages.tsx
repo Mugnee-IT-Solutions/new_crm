@@ -2153,8 +2153,8 @@ export function TeamPage({ role, workspace }: { role: Role; workspace: CrmWorksp
         <ActionForm action={createUserAction} onDone={() => setCreateOpen(false)} submitLabel="Create Marketer">
           <input type="hidden" name="role" value="MARKETER" />
           <TextField label="Full Name" name="name" required />
-          <TextField label="Email" name="email" type="email" />
-          <TextField label="Mobile Number" name="mobile" required />
+          <TextField label="Email" name="email" type="email" required />
+          <TextField label="Mobile Number (Optional)" name="mobile" />
           <TextField label="Designation" name="designation" defaultValue="Sales Marketer" />
         </ActionForm>
       </FormModal>
@@ -2187,8 +2187,8 @@ export function UsersPage({ workspace }: { workspace: CrmWorkspace }) {
       <FormModal title="Create User" open={open} onClose={() => setOpen(false)}>
         <ActionForm action={createUserAction} onDone={() => setOpen(false)} submitLabel="Create User">
           <TextField label="Full Name" name="name" />
-          <TextField label="Email" name="email" type="email" />
-          <TextField label="Mobile Number" name="mobile" />
+          <TextField label="Email" name="email" type="email" required />
+          <TextField label="Mobile Number (Optional)" name="mobile" />
           <TextField label="Designation" name="designation" />
           <SelectBox label="Role" name="role" defaultValue="MARKETER"><option value="MARKETER">Marketer</option><option value="SUPERVISOR">Supervisor</option></SelectBox>
           <SelectBox label="Supervisor" name="supervisorId"><EntityOptions workspace={workspace} type="supervisors" /></SelectBox>
