@@ -2,7 +2,7 @@
 
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { getCurrentSession } from "@/lib/auth";
 import { getPrisma } from "@/lib/prisma";
 import { roleHome, type Role } from "@/lib/utils";
@@ -84,6 +84,27 @@ async function resolveTaskAssignee(prisma: ReturnType<typeof getPrisma>, user: {
   if (!requestedAssignedToId) {
     throw new Error("Assigned marketer is required.");
   }
+
+  const assignee = await prisma.user.findFirst({
+    where: {
+      id: requestedAssignedToId,
+      role: "MARKETER",
+      status: "ACTIVE",
+      ...(user.role === "SUPERVISOR" ? { supervisorId: user.id } : {}),
+    },
+    select: { id: true },
+  });
+
+  if (!assignee) {
+    throw new Error(user.role === "SUPERVISOR" ? "Selected marketer is not in your team." : "Selected marketer was not found.");
+  }
+
+  return assignee.id;
+}
+
+async function resolveOptionalMarketerAssignee(prisma: ReturnType<typeof getPrisma>, user: { id: string; role: Role }, requestedAssignedToId?: string) {
+  if (user.role === "MARKETER") return user.id;
+  if (!requestedAssignedToId) return undefined;
 
   const assignee = await prisma.user.findFirst({
     where: {
@@ -273,7 +294,7 @@ export async function verifyOtpAction(formData: FormData) {
 export async function createLeadAction(formData: FormData) {
   const user = await actionUser();
   const prisma = getPrisma();
-  const assignedToId = canManage(user.role as Role) ? text(formData, "assignedToId") ?? user.id : user.id;
+  const assignedToId = await resolveOptionalMarketerAssignee(prisma, { id: user.id, role: user.role as Role }, text(formData, "assignedToId"));
   const companyId = text(formData, "companyId");
   const productInterestId = text(formData, "productId");
 
@@ -327,6 +348,7 @@ export async function createCustomerAction(formData: FormData) {
   const prisma = getPrisma();
   const contactPerson = text(formData, "contactPerson");
   const phone = text(formData, "phone") ?? "";
+  const assignedToId = await resolveOptionalMarketerAssignee(prisma, { id: user.id, role: user.role as Role }, text(formData, "assignedToId"));
   const company = await prisma.customerCompany.create({
     data: {
       name: text(formData, "name") ?? "New Company",
@@ -337,7 +359,7 @@ export async function createCustomerAction(formData: FormData) {
       address: text(formData, "address"),
       website: text(formData, "website"),
       notes: text(formData, "notes"),
-      assignedToId: text(formData, "assignedToId") ?? user.id,
+      assignedToId,
       contacts: {
         create: {
           name: contactPerson ?? "Primary Contact",
@@ -370,6 +392,43 @@ export async function createCustomerAction(formData: FormData) {
   });
   revalidatePath("/");
   return { ok: true, id: company.id };
+}
+
+export async function createProductAction(formData: FormData) {
+  const user = await actionUser();
+  if (user.role !== "ADMIN") return { ok: false, message: "Only Admin can create products." };
+
+  const prisma = getPrisma();
+  const name = text(formData, "name");
+  const category = text(formData, "category");
+  const price = Number(formData.get("price"));
+
+  if (!name) return { ok: false, message: "Product name is required." };
+  if (!category) return { ok: false, message: "Category is required." };
+  if (!Number.isFinite(price) || price < 0) return { ok: false, message: "Valid price is required." };
+
+  const product = await prisma.productService.create({
+    data: {
+      name,
+      category,
+      brand: text(formData, "brand"),
+      price,
+      imageUrl: text(formData, "imageUrl"),
+      description: text(formData, "description"),
+      specification: text(formData, "specification"),
+      status: "ACTIVE",
+    },
+  });
+
+  await addTimeline({
+    title: "Product Created",
+    description: product.name,
+    entity: "ProductService",
+    entityId: product.id,
+    userId: user.id,
+  });
+  revalidatePath("/");
+  return { ok: true, id: product.id };
 }
 
 export async function createTaskAction(formData: FormData) {
@@ -756,14 +815,15 @@ export async function createFollowUpAction(formData: FormData) {
 
   const leadId = text(formData, "leadId");
   const companyId = text(formData, "companyId");
-  let assignedToId = canManage(user.role as Role) ? text(formData, "assignedToId") ?? user.id : user.id;
-  if (!assignedToId && linkedTaskId) {
+  let requestedAssignedToId = text(formData, "assignedToId");
+  if (!requestedAssignedToId && linkedTaskId) {
     const linkedTask = await prisma.task.findUnique({
       where: { id: linkedTaskId },
       select: { assignedToId: true },
     });
-    if (linkedTask?.assignedToId) assignedToId = linkedTask.assignedToId;
+    if (linkedTask?.assignedToId) requestedAssignedToId = linkedTask.assignedToId;
   }
+  const assignedToId = await resolveOptionalMarketerAssignee(prisma, { id: user.id, role: user.role as Role }, requestedAssignedToId);
 
   const rating = formData.has("rating") ? clampEngagementRating(formData.get("rating")) : undefined;
   const followUpDate = validDate(dateValue(formData, "followUpDate"));
@@ -927,28 +987,76 @@ export async function createCommunicationAction(formData: FormData) {
 
 export async function createUserAction(formData: FormData) {
   const user = await actionUser();
-  if (user.role !== "ADMIN") return { ok: false, message: "Only Admin can create users." };
+  if (!["ADMIN", "SUPERVISOR"].includes(user.role)) {
+    return { ok: false, message: "Only Admin or Supervisor can create users." };
+  }
 
   const prisma = getPrisma();
-  const created = await prisma.user.create({
-    data: {
-      name: text(formData, "name") ?? "CRM User",
-      mobile: normalizeMobile(formData.get("mobile")),
-      email: text(formData, "email"),
-      role: (text(formData, "role") ?? "MARKETER") as never,
-      designation: text(formData, "designation"),
-      supervisorId: text(formData, "supervisorId"),
-    },
-  });
-  await addTimeline({
-    title: "User Created",
-    description: created.name,
-    entity: "User",
-    entityId: created.id,
-    userId: user.id,
-  });
-  revalidatePath("/");
-  return { ok: true, id: created.id };
+  const requestedRole = text(formData, "role") ?? "MARKETER";
+  const mobile = normalizeMobile(formData.get("mobile"));
+  const email = text(formData, "email");
+
+  if (!mobile) {
+    return { ok: false, message: "Mobile number is required." };
+  }
+
+  if (user.role === "SUPERVISOR" && requestedRole !== "MARKETER") {
+    return { ok: false, message: "Supervisor can create Marketer users only." };
+  }
+
+  if (user.role === "ADMIN" && !["SUPERVISOR", "MARKETER"].includes(requestedRole)) {
+    return { ok: false, message: "Admin can create Supervisor or Marketer users." };
+  }
+
+  const supervisorId = user.role === "SUPERVISOR"
+    ? user.id
+    : requestedRole === "MARKETER"
+      ? text(formData, "supervisorId")
+      : undefined;
+
+  if (supervisorId) {
+    const supervisor = await prisma.user.findFirst({
+      where: {
+        id: supervisorId,
+        role: "SUPERVISOR",
+        status: "ACTIVE",
+      },
+      select: { id: true },
+    });
+
+    if (!supervisor) {
+      return { ok: false, message: "Selected supervisor was not found." };
+    }
+  }
+
+  try {
+    const created = await prisma.user.create({
+      data: {
+        name: text(formData, "name") ?? "CRM User",
+        mobile,
+        email,
+        role: requestedRole as never,
+        designation: text(formData, "designation"),
+        supervisorId,
+      },
+    });
+    await addTimeline({
+      title: "User Created",
+      description: created.name,
+      entity: "User",
+      entityId: created.id,
+      userId: user.id,
+    });
+    revalidatePath("/");
+    return { ok: true, id: created.id };
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const target = Array.isArray(error.meta?.target) ? error.meta.target.join(", ") : "mobile or email";
+      return { ok: false, message: `A user with this ${target} already exists.` };
+    }
+
+    throw error;
+  }
 }
 
 export async function saveSettingsAction(formData: FormData) {

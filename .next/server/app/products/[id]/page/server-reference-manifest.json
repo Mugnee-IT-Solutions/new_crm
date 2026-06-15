@@ -60,6 +60,18 @@
       "exportedName": "createLeadAction",
       "filename": "src/lib/crm-actions.ts"
     },
+    "407dca98ecfcbf8cf0d0dbfad68ed488b88f01fdd6": {
+      "workers": {
+        "app/products/[id]/page": {
+          "moduleId": 33128,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        }
+      },
+      "exportedName": "createProductAction",
+      "filename": "src/lib/crm-actions.ts"
+    },
     "402739456f7ba21fc63de322532abec13ede69a206": {
       "workers": {
         "app/products/[id]/page": {

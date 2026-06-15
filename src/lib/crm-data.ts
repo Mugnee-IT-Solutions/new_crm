@@ -352,6 +352,7 @@ export type CrmWorkspace = {
     followUps: number;
     leads: number;
     customers: number;
+    tasks: number;
     todaysPlan: number;
     products: number;
     rewards: number;
@@ -611,9 +612,9 @@ function mapCommunicationHistoryRow(log: CommunicationHistoryRecord): Communicat
   };
 }
 
-function combineWhere(...conditions: (Prisma.FollowUpWhereInput | undefined)[]): Prisma.FollowUpWhereInput {
-  const active = conditions.filter(Boolean) as Prisma.FollowUpWhereInput[];
-  return active.length ? { AND: active } : {};
+function combineWhere<T extends object>(...conditions: (T | undefined)[]): T {
+  const active = conditions.filter(Boolean) as T[];
+  return (active.length ? { AND: active } : {}) as T;
 }
 
 function followUpScopeWhere(scopedUserIds: string[] | undefined): Prisma.FollowUpWhereInput {
@@ -1030,7 +1031,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
       }
     : {};
 
-  const taskWhere = scopedUserIds
+  const taskWhere: Prisma.TaskWhereInput = scopedUserIds
     ? {
         OR: [
           { assignedToId: { in: scopedUserIds } },
@@ -1053,6 +1054,15 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
   const planWidgetWhere = (planWhere
     ? { ...planWhere, status: { not: "COMPLETED" }, plannedAt: { lt: tomorrow } }
     : { status: { not: "COMPLETED" }, plannedAt: { lt: tomorrow } }) as Prisma.TodayPlanWhereInput;
+  const activeTaskBadgeWhere = combineWhere(taskWhere, { status: { not: "COMPLETED" } });
+  const todayTaskBadgeWhere = combineWhere(activeTaskBadgeWhere, { taskDate: { lt: tomorrow } });
+  const followUpBadgeWhere = combineWhere(followUpWhere, {
+    status: { not: "COMPLETED" },
+    OR: [
+      { status: { in: ["DUE", "TODAY", "OVERDUE"] } },
+      { followUpDate: { lt: tomorrow } },
+    ],
+  });
   const rewardWhere = scopedUserIds ? { userId: { in: scopedUserIds } } : {};
 
   const [
@@ -1073,6 +1083,9 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     leadCount,
     customerCount,
     todaysPlanCount,
+    activeTaskBadgeCount,
+    todayTaskBadgeCount,
+    followUpBadgeCount,
     activeProductCount,
     rewardAggregate,
     permissions,
@@ -1164,6 +1177,9 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     prisma.lead.count({ where: leadWhere }),
     prisma.customerCompany.count({ where: companyWhere }),
     prisma.todayPlan.count({ where: planWidgetWhere }),
+    prisma.task.count({ where: activeTaskBadgeWhere }),
+    prisma.task.count({ where: todayTaskBadgeWhere }),
+    prisma.followUp.count({ where: followUpBadgeWhere }),
     prisma.productService.count({ where: { status: "ACTIVE" } }),
     prisma.reward.aggregate({ where: rewardWhere, _sum: { points: true } }),
     (async () => {
@@ -1573,10 +1589,11 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     ],
     followUpSummary,
     sidebarCounts: {
-      followUps: followUpSummary.actionable,
+      followUps: followUpBadgeCount,
       leads: leadCount,
       customers: customerCount,
-      todaysPlan: todaysPlanCount,
+      tasks: activeTaskBadgeCount,
+      todaysPlan: todaysPlanCount + todayTaskBadgeCount + followUpBadgeCount,
       products: activeProductCount,
       rewards: rewardAggregate._sum.points ?? 0,
     },

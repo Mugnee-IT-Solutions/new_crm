@@ -16,6 +16,7 @@ const sidebarGroupOrder = [
   { title: "CORE WORKFLOW", labels: ["Today's Plan", "Tasks", "Follow-ups"] },
   { title: "SALES CRM", labels: ["Products", "Customers", "Leads"] },
   { title: "COMMUNICATION", labels: ["Communication"] },
+  { title: "TEAM", labels: ["Team"] },
   { title: "ANALYTICS", labels: ["Reports"] },
   { title: "ADMIN", labels: ["Users", "Roles & Permissions"] },
   { title: "INCENTIVE", labels: ["Rewards"] },
@@ -62,6 +63,7 @@ export function AppSidebar({
     followUps: followUpCount,
     leads: 0,
     customers: 0,
+    tasks: 0,
     todaysPlan: 0,
     products: 0,
     rewards: 0,
@@ -71,6 +73,7 @@ export function AppSidebar({
     if (label === "Follow-ups") return counts.followUps;
     if (label === "Leads") return counts.leads;
     if (label === "Customers" || label === "Customers/Companies") return counts.customers;
+    if (label === "Tasks") return counts.tasks;
     if (label === "Today's Plan") return counts.todaysPlan;
     if (label === "Products" || label === "Products/Services") return counts.products;
     if (label === "Rewards") return counts.rewards;

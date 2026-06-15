@@ -50,6 +50,7 @@ import {
   createFollowUpAction,
   createImportExportLogAction,
   createLeadAction,
+  createProductAction,
   createReportLogAction,
   createRewardRuleAction,
   createTaskAction,
@@ -170,6 +171,7 @@ function ActionForm({
 }) {
   const [pending, startTransition] = React.useTransition();
   const [message, setMessage] = React.useState("");
+  const router = useRouter();
 
   return (
     <form
@@ -187,6 +189,7 @@ function ActionForm({
             }
             form.reset();
             setMessage("");
+            router.refresh();
             onDone?.();
           } catch (error) {
             setMessage(error instanceof Error ? error.message : "Action failed.");
@@ -237,13 +240,14 @@ function EntityLink({ href, children, className, stopPropagation = false }: { hr
   );
 }
 
-function EntityOptions({ workspace, type }: { workspace: CrmWorkspace; type: "users" | "marketers" | "companies" | "leads" | "products" }) {
+function EntityOptions({ workspace, type }: { workspace: CrmWorkspace; type: "users" | "marketers" | "supervisors" | "companies" | "leads" | "products" }) {
   const rows =
     type === "users" ? workspace.employees.map((item) => [item.id, item.name])
       : type === "marketers" ? workspace.employees.filter((item) => item.role === "Marketer").map((item) => [item.id, item.name])
-        : type === "companies" ? workspace.companies.map((item) => [item.id, item.name])
-          : type === "leads" ? workspace.leads.map((item) => [item.id, item.title])
-            : workspace.products.map((item) => [item.id, item.name]);
+        : type === "supervisors" ? workspace.employees.filter((item) => item.role === "Supervisor").map((item) => [item.id, item.name])
+          : type === "companies" ? workspace.companies.map((item) => [item.id, item.name])
+            : type === "leads" ? workspace.leads.map((item) => [item.id, item.title])
+              : workspace.products.map((item) => [item.id, item.name]);
 
   return (
     <>
@@ -358,7 +362,7 @@ function LeadForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: () =
       <TextField label="Email" name="email" type="email" />
       <SelectBox label="Company" name="companyId"><EntityOptions workspace={workspace} type="companies" /></SelectBox>
       <SelectBox label="Interested Product" name="productId"><EntityOptions workspace={workspace} type="products" /></SelectBox>
-      <SelectBox label="Assigned Marketer" name="assignedToId"><EntityOptions workspace={workspace} type="users" /></SelectBox>
+      <SelectBox label="Assigned Marketer" name="assignedToId"><EntityOptions workspace={workspace} type="marketers" /></SelectBox>
       <div className="grid gap-3 sm:grid-cols-3">
         <SelectBox label="Priority" name="priority"><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option><option value="URGENT">Urgent</option></SelectBox>
         <TextField label="Lead Score" name="score" type="number" defaultValue={10} />
@@ -426,7 +430,7 @@ function FollowUpForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
       <div className="grid gap-3 sm:grid-cols-2">
         <SelectBox label="Customer / Company" name="companyId"><EntityOptions workspace={workspace} type="companies" /></SelectBox>
         <SelectBox label="Lead" name="leadId"><EntityOptions workspace={workspace} type="leads" /></SelectBox>
-        <SelectBox label="Assigned To" name="assignedToId"><EntityOptions workspace={workspace} type="users" /></SelectBox>
+        <SelectBox label="Assigned To" name="assignedToId"><EntityOptions workspace={workspace} type="marketers" /></SelectBox>
         <SelectBox label="Method" name="method"><option>Phone Call</option><option>WhatsApp</option><option>Email</option><option>Physical Visit</option><option>Meeting</option></SelectBox>
       </div>
       <TextField label="Follow-up Date" name="followUpDate" type="datetime-local" />
@@ -448,10 +452,26 @@ function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
         <TextField label="WhatsApp" name="whatsapp" />
         <TextField label="Industry" name="industry" />
       </div>
-      <SelectBox label="Assigned Marketer" name="assignedToId"><EntityOptions workspace={workspace} type="users" /></SelectBox>
+      <SelectBox label="Assigned Marketer" name="assignedToId"><EntityOptions workspace={workspace} type="marketers" /></SelectBox>
       <TextField label="Website" name="website" />
       <TextAreaField label="Address" name="address" />
       <TextAreaField label="Notes" name="notes" />
+    </ActionForm>
+  );
+}
+
+function ProductForm({ onDone }: { onDone: () => void }) {
+  return (
+    <ActionForm action={createProductAction} onDone={onDone} submitLabel="Save Product">
+      <TextField label="Product / Service Name" name="name" required />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <TextField label="Category" name="category" required />
+        <TextField label="Brand" name="brand" />
+        <TextField label="Price" name="price" type="number" defaultValue={0} required />
+        <TextField label="Image URL" name="imageUrl" />
+      </div>
+      <TextAreaField label="Description" name="description" />
+      <TextAreaField label="Specification" name="specification" />
     </ActionForm>
   );
 }
@@ -1681,9 +1701,11 @@ function ProductVisual({ product }: { product: ProductRow }) {
 }
 
 export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
+  const [open, setOpen] = React.useState(false);
+
   return (
     <>
-      <PageHeader title="Product / Services" description="Products and opportunity analytics by interested customers, follow-ups, sales, and conversion." actions={role === "ADMIN" ? pageActions([{ label: "Add Product", icon: Plus, variant: "default" }]) : undefined} />
+      <PageHeader title="Product / Services" description="Products and opportunity analytics by interested customers, follow-ups, sales, and conversion." actions={role === "ADMIN" ? pageActions([{ label: "Add Product", icon: Plus, variant: "default", onClick: () => setOpen(true) }]) : undefined} />
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
         {workspace.products.map((product) => (
           <Link href={`/products/${product.id}`} key={product.id} className="group rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-xl">
@@ -1698,6 +1720,10 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
           </Link>
         ))}
       </div>
+      {!workspace.products.length ? <EmptyState title="No products yet" description="Create your real product or service catalog to start tracking opportunities." /> : null}
+      <FormModal title="Create Product / Service" open={open} onClose={() => setOpen(false)}>
+        <ProductForm onDone={() => setOpen(false)} />
+      </FormModal>
     </>
   );
 }
@@ -2105,9 +2131,16 @@ function TeamManagementTable({ workspace }: { workspace: CrmWorkspace }) {
 
 export function TeamPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
   const [drawerOpen, setDrawerOpen] = React.useState(false);
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const headerActions = role === "ADMIN"
+    ? pageActions([{ label: "Add Employee", icon: Plus, variant: "default", href: "/admin/users" }])
+    : role === "SUPERVISOR"
+      ? pageActions([{ label: "Create Marketer", icon: Plus, variant: "default", onClick: () => setCreateOpen(true) }])
+      : undefined;
+
   return (
     <>
-      <PageHeader title="Team Management" description="Monitor employees, activity level, sales, and reward performance." actions={role === "ADMIN" ? pageActions([{ label: "Add Employee", icon: Plus, variant: "default", href: "/admin/users" }]) : undefined} />
+      <PageHeader title="Team Management" description="Monitor employees, activity level, sales, and reward performance." actions={headerActions} />
       <div className="grid gap-4 md:grid-cols-4">
         <StatCard title="Total Employees" value={String(workspace.employees.length)} helper="Team users" icon={UserPlus} tone="bg-blue-100 text-blue-700" />
         <StatCard title="Active Employees" value={String(workspace.employees.filter((item) => item.status === "Active").length)} helper="Currently active" icon={Check} tone="bg-emerald-100 text-emerald-700" />
@@ -2116,6 +2149,15 @@ export function TeamPage({ role, workspace }: { role: Role; workspace: CrmWorksp
       </div>
       <Card className="p-5"><TeamManagementTable workspace={workspace} /></Card>
       <DetailsDrawer title="Employee Profile" open={drawerOpen} onClose={() => setDrawerOpen(false)}><p className="text-sm text-slate-500">Employee detail drawer is ready for selected employee context.</p></DetailsDrawer>
+      <FormModal title="Create Marketer" open={createOpen} onClose={() => setCreateOpen(false)}>
+        <ActionForm action={createUserAction} onDone={() => setCreateOpen(false)} submitLabel="Create Marketer">
+          <input type="hidden" name="role" value="MARKETER" />
+          <TextField label="Full Name" name="name" required />
+          <TextField label="Email" name="email" type="email" />
+          <TextField label="Mobile Number" name="mobile" required />
+          <TextField label="Designation" name="designation" defaultValue="Sales Marketer" />
+        </ActionForm>
+      </FormModal>
     </>
   );
 }
@@ -2148,8 +2190,8 @@ export function UsersPage({ workspace }: { workspace: CrmWorkspace }) {
           <TextField label="Email" name="email" type="email" />
           <TextField label="Mobile Number" name="mobile" />
           <TextField label="Designation" name="designation" />
-          <SelectBox label="Role" name="role"><option value="MARKETER">Marketer</option><option value="SUPERVISOR">Supervisor</option><option value="ADMIN">Admin</option></SelectBox>
-          <SelectBox label="Supervisor" name="supervisorId"><EntityOptions workspace={workspace} type="users" /></SelectBox>
+          <SelectBox label="Role" name="role" defaultValue="MARKETER"><option value="MARKETER">Marketer</option><option value="SUPERVISOR">Supervisor</option></SelectBox>
+          <SelectBox label="Supervisor" name="supervisorId"><EntityOptions workspace={workspace} type="supervisors" /></SelectBox>
         </ActionForm>
       </FormModal>
     </>

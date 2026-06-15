@@ -63,6 +63,7 @@ export const sidebarMenus: Record<Role, { label: string; href: string; icon: typ
     { label: "Customers", href: "/supervisor/customers", icon: BriefcaseBusiness },
     { label: "Leads", href: "/supervisor/leads", icon: Target },
     { label: "Communication", href: "/supervisor/communication", icon: MessageSquare },
+    { label: "Team", href: "/supervisor/team", icon: Users },
     { label: "Reports", href: "/supervisor/reports", icon: FileBarChart },
     { label: "Rewards", href: "/supervisor/rewards", icon: Award },
   ],

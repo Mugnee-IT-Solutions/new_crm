@@ -1380,6 +1380,282 @@
       "filename": "src/lib/crm-actions.ts",
       "exportedName": "createLeadAction"
     },
+    "407dca98ecfcbf8cf0d0dbfad68ed488b88f01fdd6": {
+      "workers": {
+        "app/admin/customers/page": {
+          "moduleId": 29047,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/follow-ups/page": {
+          "moduleId": 60878,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/import-export/page": {
+          "moduleId": 22812,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/leads/page": {
+          "moduleId": 43675,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/notifications/page": {
+          "moduleId": 1340,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/permissions/page": {
+          "moduleId": 91902,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/products/page": {
+          "moduleId": 49844,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/quotations/page": {
+          "moduleId": 38666,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/reports/page": {
+          "moduleId": 99337,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/rewards/page": {
+          "moduleId": 680,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/settings/page": {
+          "moduleId": 83052,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/tasks/page": {
+          "moduleId": 86351,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/team/page": {
+          "moduleId": 89082,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/admin/users/page": {
+          "moduleId": 77994,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/customers/[id]/page": {
+          "moduleId": 28377,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/leads/[id]/page": {
+          "moduleId": 98448,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/calendar/page": {
+          "moduleId": 67756,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/communication/page": {
+          "moduleId": 71467,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/customers/page": {
+          "moduleId": 12150,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/follow-ups/page": {
+          "moduleId": 29621,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/import-export/page": {
+          "moduleId": 98078,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/leads/page": {
+          "moduleId": 43140,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/my-performance/page": {
+          "moduleId": 22356,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/notifications/page": {
+          "moduleId": 62565,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/products/page": {
+          "moduleId": 79458,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/quotations/page": {
+          "moduleId": 70901,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/reports/page": {
+          "moduleId": 73899,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/rewards/page": {
+          "moduleId": 50957,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/settings/page": {
+          "moduleId": 90018,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/tasks/page": {
+          "moduleId": 21622,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/marketer/todays-plan/page": {
+          "moduleId": 63913,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/products/[id]/page": {
+          "moduleId": 33128,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/quotations/[id]/page": {
+          "moduleId": 77713,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/supervisor/communication/page": {
+          "moduleId": 86968,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/supervisor/customers/page": {
+          "moduleId": 14159,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/supervisor/follow-ups/page": {
+          "moduleId": 90603,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/supervisor/import-export/page": {
+          "moduleId": 66548,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/supervisor/leads/page": {
+          "moduleId": 73525,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/supervisor/notifications/page": {
+          "moduleId": 67120,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/supervisor/products/page": {
+          "moduleId": 90341,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/supervisor/quotations/page": {
+          "moduleId": 94946,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/supervisor/reports/page": {
+          "moduleId": 42618,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/supervisor/rewards/page": {
+          "moduleId": 47717,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/supervisor/tasks/page": {
+          "moduleId": 1687,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        },
+        "app/supervisor/team/page": {
+          "moduleId": 33853,
+          "async": true,
+          "exportedName": "createProductAction",
+          "filename": "src/lib/crm-actions.ts"
+        }
+      },
+      "filename": "src/lib/crm-actions.ts",
+      "exportedName": "createProductAction"
+    },
     "402739456f7ba21fc63de322532abec13ede69a206": {
       "workers": {
         "app/admin/customers/page": {
