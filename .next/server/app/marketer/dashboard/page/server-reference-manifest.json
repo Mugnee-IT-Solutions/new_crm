@@ -1,0 +1,29 @@
+{
+  "node": {
+    "40ddb6fe1e53ee99aaa6ed9125988679546d6f361d": {
+      "workers": {
+        "app/marketer/dashboard/page": {
+          "moduleId": 38140,
+          "async": true,
+          "exportedName": "updateFollowUpStatusAction",
+          "filename": "src/lib/crm-actions.ts"
+        }
+      },
+      "exportedName": "updateFollowUpStatusAction",
+      "filename": "src/lib/crm-actions.ts"
+    },
+    "40558564a9523f9d8b25a88c5ba386714edd3bdf69": {
+      "workers": {
+        "app/marketer/dashboard/page": {
+          "moduleId": 38140,
+          "async": true,
+          "exportedName": "updateTaskStatusAction",
+          "filename": "src/lib/crm-actions.ts"
+        }
+      },
+      "exportedName": "updateTaskStatusAction",
+      "filename": "src/lib/crm-actions.ts"
+    }
+  },
+  "edge": {}
+}
