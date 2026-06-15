@@ -4,11 +4,43 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { sidebarMenus } from "@/lib/navigation";
+import { isActiveRoute, sidebarMenus } from "@/lib/navigation";
 import { cn, type Role } from "@/lib/utils";
 import type { CrmWorkspace } from "@/lib/crm-data";
 
 type SidebarCounts = Pick<CrmWorkspace, "sidebarCounts">["sidebarCounts"];
+type SidebarMenuItem = (typeof sidebarMenus)[Role][number];
+
+const sidebarGroupOrder = [
+  { title: "", labels: ["Dashboard"] },
+  { title: "CORE WORKFLOW", labels: ["Today's Plan", "Tasks", "Follow-ups"] },
+  { title: "SALES CRM", labels: ["Products", "Customers", "Leads"] },
+  { title: "COMMUNICATION", labels: ["Communication"] },
+  { title: "ANALYTICS", labels: ["Reports"] },
+  { title: "ADMIN", labels: ["Users", "Roles & Permissions"] },
+  { title: "INCENTIVE", labels: ["Rewards"] },
+];
+
+function groupSidebarItems(items: SidebarMenuItem[]) {
+  const groupedLabels = new Set(sidebarGroupOrder.flatMap((group) => group.labels));
+  const groups = sidebarGroupOrder
+    .map((group) => ({
+      title: group.title,
+      items: group.labels
+        .map((label) => items.find((item) => item.label === label))
+        .filter((item): item is SidebarMenuItem => Boolean(item)),
+    }))
+    .filter((group) => group.items.length > 0);
+
+  const extraItems = items.filter((item) => !groupedLabels.has(item.label));
+  if (!extraItems.length) return groups;
+
+  const incentiveIndex = groups.findIndex((group) => group.title === "INCENTIVE");
+  const extraGroup = { title: "MORE", items: extraItems };
+
+  if (incentiveIndex === -1) return [...groups, extraGroup];
+  return [...groups.slice(0, incentiveIndex), extraGroup, ...groups.slice(incentiveIndex)];
+}
 
 export function AppSidebar({
   role,
@@ -50,6 +82,7 @@ export function AppSidebar({
     if (!Number.isFinite(value) || Number.isNaN(value)) return undefined;
     return value > 999 ? "999+" : String(value);
   };
+  const navGroups = groupSidebarItems(sidebarMenus[role]);
 
   return (
     <aside
@@ -87,56 +120,107 @@ export function AppSidebar({
         {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
       </Button>
 
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 pb-4 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-        {sidebarMenus[role].map((item) => {
-          const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-          const Icon = item.icon;
-          const currentCount = badgeValue(item.label);
-          const badgeText = formatCount(currentCount);
-          const showBadge = Boolean(badgeText);
-          const tooltip = badgeText ? `${item.label} (${badgeText})` : item.label;
-
-          return (
-            <Link
-              href={item.href}
-              key={item.href}
-              title={tooltip}
-              onClick={onNavigate}
-              className={cn(
-                "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-blue-100 transition",
-                active
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-950/30"
-                  : "hover:bg-white/10 hover:text-white",
-              )}
+      <nav className="flex-1 overflow-y-auto px-3 pb-4 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex min-h-full flex-col gap-3">
+          {navGroups.map((group) => (
+            <div
+              key={group.title || "PRIMARY"}
+              className={cn(group.title === "INCENTIVE" ? "mt-auto pt-2" : "space-y-1")}
             >
-              <Icon className="h-4 w-4 shrink-0" />
-              {!collapsed ? (
-                <>
-                  <span className="truncate">{item.label}</span>
-                  {showBadge ? (
-                    <span
-                      className={cn(
-                        "ml-auto inline-flex min-w-8 items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-black",
-                        active ? "bg-white text-blue-700" : "bg-blue-500/95 text-white",
-                      )}
-                    >
-                      {badgeText}
-                    </span>
-                  ) : null}
-                </>
-              ) : showBadge ? (
-                <span
+              {group.title && !collapsed ? (
+                <p
                   className={cn(
-                    "absolute right-2 top-1/2 inline-flex h-5 min-w-5 -translate-y-1/2 items-center justify-center rounded-full bg-blue-500/95 px-1 text-[10px] font-black text-white",
-                    active ? "bg-white/90 text-blue-700" : "bg-blue-500/95 text-white",
+                    "px-3 pb-1 text-[10px] font-black uppercase text-blue-100/55",
+                    group.title === "INCENTIVE" ? "text-amber-200/80" : "",
                   )}
                 >
-                  <span className="inline-flex min-w-5 items-center justify-center">{badgeText}</span>
-                </span>
+                  {group.title}
+                </p>
               ) : null}
-            </Link>
-          );
-        })}
+
+              <div className="space-y-1">
+                {group.items.map((item) => {
+                  const active = isActiveRoute(pathname, item.href);
+                  const Icon = item.icon;
+                  const currentCount = badgeValue(item.label);
+                  const badgeText = formatCount(currentCount);
+                  const showBadge = Boolean(badgeText);
+                  const tooltip = badgeText ? `${item.label} (${badgeText})` : item.label;
+                  const isRewards = item.label === "Rewards";
+
+                  return (
+                    <Link
+                      href={item.href}
+                      key={item.href}
+                      title={tooltip}
+                      onClick={onNavigate}
+                      className={cn(
+                        "group relative flex items-center gap-3 overflow-hidden rounded-xl border border-transparent px-3 py-2.5 text-sm font-semibold text-blue-100 transition duration-300",
+                        active && !isRewards
+                          ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-950/30"
+                          : "",
+                        active && isRewards
+                          ? "border-amber-200/30 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-lg shadow-orange-950/30"
+                          : "",
+                        !active && !isRewards ? "hover:bg-white/10 hover:text-white" : "",
+                        !active && isRewards
+                          ? "border-amber-300/20 bg-amber-400/10 text-amber-100 hover:bg-amber-400/20 hover:text-amber-50"
+                          : "",
+                        collapsed ? "justify-center px-2" : "",
+                      )}
+                    >
+                      {active ? (
+                        <span
+                          className={cn(
+                            "absolute left-0 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full",
+                            isRewards ? "bg-amber-100" : "bg-white",
+                          )}
+                        />
+                      ) : null}
+
+                      <Icon
+                        className={cn(
+                          "h-4 w-4 shrink-0 transition-colors",
+                          !active && isRewards ? "text-amber-200" : "",
+                        )}
+                      />
+                      {!collapsed ? (
+                        <>
+                          <span className="truncate">{item.label}</span>
+                          {showBadge ? (
+                            <span
+                              className={cn(
+                                "ml-auto inline-flex min-w-8 items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-black",
+                                active && !isRewards ? "bg-white text-blue-700" : "",
+                                active && isRewards ? "bg-white text-orange-700" : "",
+                                !active && !isRewards ? "bg-blue-500/95 text-white" : "",
+                                !active && isRewards ? "bg-amber-300 text-slate-950" : "",
+                              )}
+                            >
+                              {badgeText}
+                            </span>
+                          ) : null}
+                        </>
+                      ) : showBadge ? (
+                        <span
+                          className={cn(
+                            "absolute right-1 top-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-black",
+                            active && !isRewards ? "bg-white/90 text-blue-700" : "",
+                            active && isRewards ? "bg-white/90 text-orange-700" : "",
+                            !active && !isRewards ? "bg-blue-500/95 text-white" : "",
+                            !active && isRewards ? "bg-amber-300 text-slate-950" : "",
+                          )}
+                        >
+                          <span className="inline-flex min-w-5 items-center justify-center">{badgeText}</span>
+                        </span>
+                      ) : null}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
       </nav>
 
       <button

@@ -152,6 +152,7 @@ model User {
   createdLeads        Lead[]               @relation("CreatedLeads")
   tasksAssigned       Task[]               @relation("TaskAssignedTo")
   tasksCreated        Task[]               @relation("TaskAssignedBy")
+  tasksCompleted      Task[]               @relation("TaskCompletedBy")
   todayPlans          TodayPlan[]
   followUps           FollowUp[]           @relation("FollowUpAssignedTo")
   communications      CommunicationLog[]
@@ -188,6 +189,10 @@ model CustomerCompany {
   id             String             @id @default(cuid())
   name           String
   industry       String
+  contactPerson  String?
+  phone          String             @default("")
+  totalLeads     Int                @default(0)
+  lastCommunication DateTime?
   address        String?
   website        String?
   notes          String?
@@ -291,24 +296,35 @@ model Task {
   description   String?
   status        TaskStatus         @default(TODO)
   priority      Priority           @default(MEDIUM)
+  taskDate      DateTime           @default(now())
+  isPrevious    Boolean            @default(false)
   dueDate       DateTime?
   taskTime      DateTime?
   reminder      String?
+  companyName   String?
+  leadName      String?
   notes         String?
-  assignedById  String?
-  assignedBy    User?              @relation("TaskAssignedBy", fields: [assignedById], references: [id])
-  assignedToId  String?
-  assignedTo    User?              @relation("TaskAssignedTo", fields: [assignedToId], references: [id])
+  assignedById  String
+  assignedBy    User               @relation("TaskAssignedBy", fields: [assignedById], references: [id])
+  assignedToId  String
+  assignedTo    User               @relation("TaskAssignedTo", fields: [assignedToId], references: [id])
+  completedById String?
+  completedBy   User?              @relation("TaskCompletedBy", fields: [completedById], references: [id])
   leadId        String?
   lead          Lead?              @relation(fields: [leadId], references: [id])
   companyId     String?
   company       CustomerCompany?   @relation(fields: [companyId], references: [id])
   productId     String?
   product       ProductService?    @relation(fields: [productId], references: [id])
+  completedAt   DateTime?
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
   timelineItems ActivityTimeline[]
   followUps     FollowUp[]
+  communications CommunicationLog[]
+
+  @@index([status, taskDate])
+  @@index([assignedToId, taskDate])
 }
 
 model TodayPlan {
@@ -362,10 +378,14 @@ model CommunicationLog {
   company          CustomerCompany?   @relation(fields: [companyId], references: [id])
   leadId           String?
   lead             Lead?              @relation(fields: [leadId], references: [id])
+  taskId           String?
+  task             Task?              @relation(fields: [taskId], references: [id], onDelete: SetNull)
   userId           String?
   user             User?              @relation(fields: [userId], references: [id])
   method           String
   note             String
+  discussionTopic  String?
+  productDiscussed String?
   communicationAt  DateTime           @default(now())
   outcome          String?
   rating           Int?

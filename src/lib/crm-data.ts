@@ -50,6 +50,8 @@ export type TaskRow = {
   id: string;
   companyId?: string | null;
   leadId?: string | null;
+  companyName?: string | null;
+  leadName?: string | null;
   assignedToId?: string | null;
   href?: string;
   title: string;
@@ -58,10 +60,14 @@ export type TaskRow = {
   assignedBy: string;
   relatedTo: string;
   product: string;
+  taskDate: string;
   dueDate: string;
   time: string;
   priority: string;
   status: string;
+  isPrevious: boolean;
+  completedAt: string;
+  completedBy: string;
   reminder: string;
   notes: string;
 };
@@ -237,6 +243,28 @@ export type ActivityRow = {
   time: string;
 };
 
+export type CommunicationHistoryRow = {
+  id: string;
+  href?: string;
+  method: string;
+  summary: string;
+  discussionTopic: string;
+  productDiscussed: string;
+  outcome: string;
+  rating: string;
+  nextFollowUpDate: string;
+  notes: string;
+  createdBy: string;
+  time: string;
+};
+
+export type CustomerHistory = {
+  tasks: TaskRow[];
+  followUps: FollowUpRow[];
+  activities: ActivityRow[];
+  communications: CommunicationHistoryRow[];
+};
+
 export type NotificationRow = {
   id: string;
   href?: string;
@@ -386,6 +414,17 @@ function progressFromLead(status: string) {
   return `${Math.max(12, Math.round(((index + 1) / order.length) * 100))}%`;
 }
 
+const taskInclude = {
+  assignedTo: true,
+  assignedBy: true,
+  completedBy: true,
+  company: true,
+  lead: true,
+  product: true,
+} satisfies Prisma.TaskInclude;
+
+type TaskRecord = Prisma.TaskGetPayload<{ include: typeof taskInclude }>;
+
 const followUpInclude = {
   company: {
     include: {
@@ -408,6 +447,15 @@ const followUpInclude = {
 } satisfies Prisma.FollowUpInclude;
 
 type FollowUpRecord = Prisma.FollowUpGetPayload<{ include: typeof followUpInclude }>;
+
+const communicationHistoryInclude = {
+  user: true,
+  company: true,
+  lead: true,
+  task: true,
+} satisfies Prisma.CommunicationLogInclude;
+
+type CommunicationHistoryRecord = Prisma.CommunicationLogGetPayload<{ include: typeof communicationHistoryInclude }>;
 
 const productInclude = {
   interests: {
@@ -490,6 +538,37 @@ function lastCommunicationType(followUp: FollowUpRecord) {
   return leadCommunication?.method ?? companyCommunication?.method ?? "-";
 }
 
+function mapTaskRow(task: TaskRecord): TaskRow {
+  const taskDate = (task as { taskDate?: Date | null }).taskDate ?? task.dueDate ?? task.createdAt;
+  const previous = task.status !== "COMPLETED" && ((((task as { isPrevious?: boolean | null }).isPrevious) ?? false) || isBefore(startOfDay(taskDate), startOfDay(new Date())));
+
+  return {
+    id: task.id,
+    companyId: task.companyId,
+    leadId: task.leadId,
+    companyName: (task as { companyName?: string | null }).companyName,
+    leadName: (task as { leadName?: string | null }).leadName,
+    href: linkedEntityHref({ leadId: task.leadId, companyId: task.companyId }),
+    title: task.title,
+    description: task.description ?? "-",
+    assignedToId: task.assignedToId,
+    assignedTo: task.assignedTo?.name ?? "-",
+    assignedBy: task.assignedBy?.name ?? "-",
+    relatedTo: task.company?.name ?? task.lead?.title ?? (task as { companyName?: string | null }).companyName ?? (task as { leadName?: string | null }).leadName ?? "-",
+    product: task.product?.name ?? "-",
+    taskDate: dateLabel(taskDate),
+    dueDate: dateLabel(task.dueDate ?? taskDate),
+    time: dateLabel(task.taskTime ?? taskDate, "hh:mm a"),
+    priority: labelize(task.priority),
+    status: task.status,
+    isPrevious: previous,
+    completedAt: dateLabel(task.completedAt, "dd/MM/yyyy hh:mm a"),
+    completedBy: task.completedBy?.name ?? "-",
+    reminder: task.reminder ?? "-",
+    notes: task.notes ?? "-",
+  };
+}
+
 function mapFollowUpRow(followUp: FollowUpRecord): FollowUpRow {
   const bucket = followUpBucket(followUp.status, followUp.followUpDate);
   const followUpPriority = (followUp as { priority?: string }).priority;
@@ -512,6 +591,23 @@ function mapFollowUpRow(followUp: FollowUpRecord): FollowUpRow {
     priority: labelize(followUpPriority ?? "MEDIUM"),
     createdBy: followUp.timelineItems[0]?.user?.name ?? "-",
     createdAt: dateLabel(followUp.createdAt),
+  };
+}
+
+function mapCommunicationHistoryRow(log: CommunicationHistoryRecord): CommunicationHistoryRow {
+  return {
+    id: log.id,
+    href: linkedEntityHref({ leadId: log.leadId, companyId: log.companyId }),
+    method: log.method,
+    summary: log.note,
+    discussionTopic: (log as { discussionTopic?: string | null }).discussionTopic ?? "-",
+    productDiscussed: (log as { productDiscussed?: string | null }).productDiscussed ?? "-",
+    outcome: log.outcome ?? "-",
+    rating: typeof log.rating === "number" ? String(log.rating) : "-",
+    nextFollowUpDate: dateLabel(log.nextFollowUpDate, "dd/MM/yyyy hh:mm a"),
+    notes: log.followUpNote ?? "-",
+    createdBy: log.user?.name ?? "-",
+    time: dateLabel(log.communicationAt, "dd/MM/yyyy hh:mm a"),
   };
 }
 
@@ -1011,7 +1107,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     }),
     prisma.task.findMany({
       where: taskWhere,
-      include: { assignedTo: true, assignedBy: true, company: true, lead: true, product: true },
+      include: taskInclude,
       orderBy: [{ dueDate: "asc" }, { updatedAt: "desc" }],
       take: 200,
     }),
@@ -1125,40 +1221,22 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     return {
       id: company.id,
       name: company.name,
-      contactPerson: primary?.name ?? "-",
+      contactPerson: company.contactPerson ?? primary?.name ?? "-",
       email: primary?.email ?? "-",
-      phone: primary?.mobile ?? regular?.number ?? "-",
+      phone: company.phone || primary?.mobile || regular?.number || "-",
       whatsapp: primary?.whatsapp ?? whatsapp?.number ?? "-",
       industry: company.industry,
       address: company.address ?? "-",
       website: company.website ?? "-",
       assignedTo: company.assignedTo?.name ?? "-",
       status: labelize(company.status),
-      totalLeads: company.leads.length,
-      lastCommunication: dateLabel(company.communications[0]?.createdAt),
+      totalLeads: Math.max(company.totalLeads, company.leads.length),
+      lastCommunication: dateLabel(company.lastCommunication ?? company.communications[0]?.createdAt),
       notes: company.notes ?? "-",
     };
   });
 
-  const taskRows: TaskRow[] = tasks.map((task) => ({
-    id: task.id,
-    companyId: task.companyId,
-    leadId: task.leadId,
-    href: linkedEntityHref({ leadId: task.leadId, companyId: task.companyId }),
-    title: task.title,
-    description: task.description ?? "-",
-    assignedToId: task.assignedToId,
-    assignedTo: task.assignedTo?.name ?? "-",
-    assignedBy: task.assignedBy?.name ?? "-",
-    relatedTo: task.company?.name ?? task.lead?.title ?? "-",
-    product: task.product?.name ?? "-",
-    dueDate: dateLabel(task.dueDate),
-    time: dateLabel(task.taskTime ?? task.dueDate, "hh:mm a"),
-    priority: labelize(task.priority),
-    status: task.status,
-    reminder: task.reminder ?? "-",
-    notes: task.notes ?? "-",
-  }));
+  const taskRows: TaskRow[] = tasks.map(mapTaskRow);
 
   const planRows: TodayPlanRow[] = todayPlans.map((plan) => {
     const completed = plan.status === "COMPLETED";
@@ -1209,10 +1287,13 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
         };
       }),
     ...tasks
-      .filter((task) => task.status !== "COMPLETED" && (task.status === "OVERDUE" || (task.dueDate && isBefore(task.dueDate, tomorrow))))
+      .filter((task) => {
+        const taskDate = (task as { taskDate?: Date | null }).taskDate ?? task.dueDate ?? task.updatedAt;
+        return task.status !== "COMPLETED" && (task.status === "OVERDUE" || isBefore(taskDate, tomorrow));
+      })
       .map((task) => {
-        const dueDate = task.dueDate ?? task.updatedAt;
-        const overdue = task.status === "OVERDUE" || isBefore(startOfDay(dueDate), today);
+        const dueDate = (task as { taskDate?: Date | null }).taskDate ?? task.dueDate ?? task.updatedAt;
+        const overdue = task.status === "OVERDUE" || (((task as { isPrevious?: boolean | null }).isPrevious) ?? false) || isBefore(startOfDay(dueDate), today);
 
         return {
           id: `task-${task.id}`,
@@ -1223,7 +1304,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
           assignedToId: task.assignedToId,
           href: linkedEntityHref({ leadId: task.leadId, companyId: task.companyId }),
           title: task.title,
-          relatedTo: task.company?.name ?? task.lead?.title ?? "-",
+          relatedTo: task.company?.name ?? task.lead?.title ?? (task as { companyName?: string | null }).companyName ?? (task as { leadName?: string | null }).leadName ?? "-",
           date: dateLabel(dueDate),
           time: dateLabel(task.taskTime ?? dueDate, "hh:mm a"),
           priority: labelize(task.priority),
@@ -1634,12 +1715,118 @@ export async function getLeadDetail(id: string, role: Role, user: ShellUser) {
 }
 
 export async function getCustomerDetail(id: string, role: Role, user: ShellUser) {
+  const prisma = getPrisma();
   const workspace = await getCrmWorkspace(role, user);
   const lookup = decodeURIComponent(id);
   const lookupSlug = slugify(lookup);
+  const customer = workspace.companies.find((item) => item.id === lookup || slugify(item.name) === lookupSlug);
+
+  if (!customer) {
+    return {
+      workspace,
+      customer: undefined,
+      history: {
+        tasks: [],
+        followUps: [],
+        activities: [],
+        communications: [],
+      } satisfies CustomerHistory,
+    };
+  }
+
+  const scopedUserIds = await getScopedUserIds(role, user);
+  const taskScope = scopedUserIds
+    ? {
+        OR: [
+          { assignedToId: { in: scopedUserIds } },
+          { assignedById: { in: scopedUserIds } },
+        ],
+      }
+    : {};
+  const leadScope = scopedUserIds
+    ? {
+        OR: [
+          { assignedToId: { in: scopedUserIds } },
+          { createdById: { in: scopedUserIds } },
+        ],
+      }
+    : {};
+  const followUpScope = followUpScopeWhere(scopedUserIds);
+  const communicationScope = scopedUserIds
+    ? {
+        OR: [
+          { userId: { in: scopedUserIds } },
+          { task: { is: taskScope } },
+          { lead: { is: leadScope } },
+        ],
+      }
+    : {};
+  const timelineScope = scopedUserIds
+    ? {
+        OR: [
+          { userId: { in: scopedUserIds } },
+          { task: { is: taskScope } },
+          { followUp: { is: followUpScope } },
+          { lead: { is: leadScope } },
+          { communicationLog: { is: communicationScope } },
+        ],
+      }
+    : {};
+
+  const [tasks, followUps, communications, timeline] = await Promise.all([
+    prisma.task.findMany({
+      where: {
+        AND: [
+          {
+            OR: [
+              { companyId: customer.id },
+              { companyName: { equals: customer.name, mode: "insensitive" } },
+            ],
+          },
+          ...(taskScope.OR ? [{ OR: taskScope.OR }] : []),
+        ],
+      },
+      include: taskInclude,
+      orderBy: { updatedAt: "desc" },
+    }),
+    prisma.followUp.findMany({
+      where: combineWhere({ companyId: customer.id }, followUpScope),
+      include: followUpInclude,
+      orderBy: { updatedAt: "desc" },
+    }),
+    prisma.communicationLog.findMany({
+      where: {
+        companyId: customer.id,
+        ...(communicationScope.OR ? communicationScope : {}),
+      },
+      include: communicationHistoryInclude,
+      orderBy: { communicationAt: "desc" },
+    }),
+    prisma.activityTimeline.findMany({
+      where: {
+        companyId: customer.id,
+        ...(timelineScope.OR ? timelineScope : {}),
+      },
+      include: { user: true },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
+
   return {
     workspace,
-    customer: workspace.companies.find((item) => item.id === lookup || slugify(item.name) === lookupSlug),
+    customer,
+    history: {
+      tasks: tasks.map(mapTaskRow),
+      followUps: followUps.map(mapFollowUpRow),
+      communications: communications.map(mapCommunicationHistoryRow),
+      activities: timeline.map((item) => ({
+        id: item.id,
+        href: linkedEntityHref({ entity: item.entity, entityId: item.entityId, leadId: item.leadId, companyId: item.companyId }),
+        title: item.title,
+        detail: item.description ?? `${item.entity} activity${item.user?.name ? ` by ${item.user.name}` : ""}`,
+        time: dateLabel(item.createdAt, "dd/MM/yyyy hh:mm a"),
+      })),
+    } satisfies CustomerHistory,
   };
 }
 

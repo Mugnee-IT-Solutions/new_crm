@@ -4,10 +4,12 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeft,
   Award,
   CalendarClock,
+  ChevronDown,
   Check,
   Download,
   Edit,
@@ -51,18 +53,17 @@ import {
   createReportLogAction,
   createRewardRuleAction,
   createTaskAction,
-  createTodayPlanAction,
   createUserAction,
   giveManualRewardAction,
   markNotificationReadAction,
-  completeTaskFromTodayAction,
   saveSettingsAction,
   updateFollowUpStatusAction,
-  updateTaskStatusAction,
 } from "@/lib/crm-actions";
 import type {
   CompanyRow,
   CrmWorkspace,
+  CustomerHistory,
+  CommunicationHistoryRow,
   FollowUpPageData,
   FollowUpRow,
   LeadRow,
@@ -70,38 +71,10 @@ import type {
   ProductRow,
   QuotationRow,
   TaskRow,
-  TodayPlanRow,
 } from "@/lib/crm-data";
 import { cn, formatCurrency, rolePath, type Role } from "@/lib/utils";
 
 type ServerAction = (formData: FormData) => Promise<{ ok?: boolean; message?: string } | unknown>;
-type TodayWorkItem = CrmWorkspace["todayWorkItems"][number];
-
-type FollowUpFromTaskDraft = {
-  taskId: string;
-  companyId?: string;
-  leadId?: string;
-  assignedToId?: string;
-  title: string;
-  relatedTo: string;
-};
-
-function ratingBand(value: number) {
-  if (value <= 3) return "Cold Lead";
-  if (value <= 6) return "Warm Lead";
-  if (value <= 8) return "Hot Lead";
-  return "Very High Intent";
-}
-
-function formatDateTimeForInput(date = new Date()) {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  const year = date.getFullYear();
-  const month = pad(date.getMonth() + 1);
-  const day = pad(date.getDate());
-  const hours = pad(date.getHours());
-  const minutes = pad(date.getMinutes());
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
-}
 
 function pageActions(items: { label: string; icon: typeof Plus; variant?: "default" | "outline"; onClick?: () => void; href?: string }[]) {
   return items.map(({ label, icon: Icon, variant = "outline", onClick, href }) => {
@@ -128,11 +101,11 @@ function FilterBar({ children }: { children: React.ReactNode }) {
   return <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-5">{children}</div>;
 }
 
-function SelectBox({ label, name, children, defaultValue }: { label: string; name?: string; children: React.ReactNode; defaultValue?: string }) {
+function SelectBox({ label, name, children, defaultValue, compact = false }: { label: string; name?: string; children: React.ReactNode; defaultValue?: string; compact?: boolean }) {
   return (
-    <label className="space-y-1.5">
-      <span className="text-xs font-bold uppercase text-slate-500">{label}</span>
-      <select name={name} defaultValue={defaultValue} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+    <label className={cn("space-y-1.5", compact && "space-y-1")}>
+      <span className={cn("text-xs font-bold uppercase text-slate-500", compact && "text-[11px] leading-4")}>{label}</span>
+      <select name={name} defaultValue={defaultValue} className={cn("h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100", compact && "h-9 px-2.5 text-[13px]")}>
         {children}
       </select>
     </label>
@@ -146,6 +119,7 @@ function TextField({
   defaultValue,
   placeholder,
   required = false,
+  compact = false,
 }: {
   label: string;
   name: string;
@@ -153,24 +127,25 @@ function TextField({
   defaultValue?: string | number;
   placeholder?: string;
   required?: boolean;
+  compact?: boolean;
 }) {
   return (
-    <label className="block space-y-1.5">
-      <span className="text-sm font-semibold text-slate-700">{label}</span>
-      <Input name={name} type={type} required={required} defaultValue={defaultValue} placeholder={placeholder} />
+    <label className={cn("block space-y-1.5", compact && "space-y-1")}>
+      <span className={cn("text-sm font-semibold text-slate-700", compact && "text-xs leading-4")}>{label}</span>
+      <Input name={name} type={type} required={required} defaultValue={defaultValue} placeholder={placeholder} className={compact ? "h-9 px-2.5 text-[13px]" : undefined} />
     </label>
   );
 }
 
-function TextAreaField({ label, name, placeholder, required = false }: { label: string; name: string; placeholder?: string; required?: boolean }) {
+function TextAreaField({ label, name, placeholder, required = false, compact = false }: { label: string; name: string; placeholder?: string; required?: boolean; compact?: boolean }) {
   return (
-    <label className="block space-y-1.5">
-      <span className="text-sm font-semibold text-slate-700">{label}</span>
+    <label className={cn("block space-y-1.5", compact && "space-y-1")}>
+      <span className={cn("text-sm font-semibold text-slate-700", compact && "text-xs leading-4")}>{label}</span>
       <textarea
         name={name}
         required={required}
         placeholder={placeholder}
-        className="min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+        className={cn("min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100", compact && "min-h-16 px-2.5 py-1.5 text-[13px]")}
       />
     </label>
   );
@@ -181,18 +156,24 @@ function ActionForm({
   children,
   onDone,
   submitLabel = "Save",
+  className,
+  bodyClassName,
+  footerClassName,
 }: {
   action: ServerAction;
   children: React.ReactNode;
   onDone?: () => void;
   submitLabel?: string;
+  className?: string;
+  bodyClassName?: string;
+  footerClassName?: string;
 }) {
   const [pending, startTransition] = React.useTransition();
   const [message, setMessage] = React.useState("");
 
   return (
     <form
-      className="space-y-4"
+      className={cn("space-y-4", className)}
       onSubmit={(event) => {
         event.preventDefault();
         const form = event.currentTarget;
@@ -213,11 +194,13 @@ function ActionForm({
         });
       }}
     >
-      {children}
+      <div className={cn("space-y-4", bodyClassName)}>{children}</div>
       {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
-      <Button className="w-full" disabled={pending} type="submit">
-        {pending ? "Saving..." : submitLabel}
-      </Button>
+      <div className={footerClassName}>
+        <Button className="w-full" disabled={pending} type="submit">
+          {pending ? "Saving..." : submitLabel}
+        </Button>
+      </div>
     </form>
   );
 }
@@ -254,12 +237,13 @@ function EntityLink({ href, children, className, stopPropagation = false }: { hr
   );
 }
 
-function EntityOptions({ workspace, type }: { workspace: CrmWorkspace; type: "users" | "companies" | "leads" | "products" }) {
+function EntityOptions({ workspace, type }: { workspace: CrmWorkspace; type: "users" | "marketers" | "companies" | "leads" | "products" }) {
   const rows =
     type === "users" ? workspace.employees.map((item) => [item.id, item.name])
-      : type === "companies" ? workspace.companies.map((item) => [item.id, item.name])
-        : type === "leads" ? workspace.leads.map((item) => [item.id, item.title])
-          : workspace.products.map((item) => [item.id, item.name]);
+      : type === "marketers" ? workspace.employees.filter((item) => item.role === "Marketer").map((item) => [item.id, item.name])
+        : type === "companies" ? workspace.companies.map((item) => [item.id, item.name])
+          : type === "leads" ? workspace.leads.map((item) => [item.id, item.title])
+            : workspace.products.map((item) => [item.id, item.name]);
 
   return (
     <>
@@ -304,6 +288,67 @@ function Timeline({ rows }: { rows: CrmWorkspace["activities"] }) {
   );
 }
 
+function TaskHistoryList({ rows }: { rows: TaskRow[] }) {
+  return rows.length ? (
+    <div className="space-y-3">
+      {rows.map((task) => (
+        <div key={task.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <EntityLink href={task.href} className="text-sm font-black text-slate-900">{task.title}</EntityLink>
+            <StatusBadge value={task.status} />
+            <StatusBadge value={task.priority} />
+          </div>
+          <p className="mt-1 text-xs font-semibold text-slate-500">{task.dueDate} {task.time} - Assigned by {task.assignedBy}</p>
+          {task.description !== "-" ? <p className="mt-1 text-xs text-slate-500">{task.description}</p> : null}
+        </div>
+      ))}
+    </div>
+  ) : <EmptyState title="No task history" description="Customer-related task history will appear here." />;
+}
+
+function FollowUpHistoryList({ rows }: { rows: FollowUpRow[] }) {
+  return rows.length ? (
+    <div className="space-y-3">
+      {rows.map((followUp) => (
+        <div key={followUp.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <EntityLink href={followUp.href} className="text-sm font-black text-slate-900">{followUp.customer}</EntityLink>
+            <StatusBadge value={followUp.status} />
+            <StatusBadge value={followUp.priority} />
+          </div>
+          <p className="mt-1 text-xs font-semibold text-slate-500">{followUp.followUpDate} - {followUp.method} - {followUp.assignedTo}</p>
+          {followUp.note !== "-" ? <p className="mt-1 text-xs text-slate-500">{followUp.note}</p> : null}
+          {followUp.nextDiscussionPlan !== "-" ? <p className="mt-1 text-[11px] font-semibold text-slate-500">Next: {followUp.nextDiscussionPlan}</p> : null}
+        </div>
+      ))}
+    </div>
+  ) : <EmptyState title="No follow-up history" description="Customer follow-up records will appear here." />;
+}
+
+function CommunicationHistoryList({ rows }: { rows: CommunicationHistoryRow[] }) {
+  return rows.length ? (
+    <div className="space-y-3">
+      {rows.map((item) => (
+        <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <EntityLink href={item.href} className="text-sm font-black text-slate-900">{item.method}</EntityLink>
+            <StatusBadge value={item.outcome} />
+          </div>
+          <p className="mt-1 text-xs font-semibold text-slate-500">{item.time} - {item.createdBy}</p>
+          <p className="mt-1 text-xs text-slate-500">{item.summary}</p>
+          <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold text-slate-500">
+            {item.discussionTopic !== "-" ? <span>Topic: {item.discussionTopic}</span> : null}
+            {item.productDiscussed !== "-" ? <span>Product: {item.productDiscussed}</span> : null}
+            {item.rating !== "-" ? <span>Rating: {item.rating}</span> : null}
+            {item.nextFollowUpDate !== "-" ? <span>Next Follow-up: {item.nextFollowUpDate}</span> : null}
+          </div>
+          {item.notes !== "-" ? <p className="mt-2 text-[11px] text-slate-500">Notes: {item.notes}</p> : null}
+        </div>
+      ))}
+    </div>
+  ) : <EmptyState title="No communication history" description="Task and customer conversation logs will appear here." />;
+}
+
 function LeadForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: () => void }) {
   return (
     <ActionForm action={createLeadAction} onDone={onDone} submitLabel="Save Lead">
@@ -327,21 +372,30 @@ function LeadForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: () =
 
 function TaskForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: () => void }) {
   return (
-    <ActionForm action={createTaskAction} onDone={onDone} submitLabel="Save Task">
-      <TextField label="Task Title" name="title" />
-      <TextAreaField label="Task Description" name="description" />
-      <div className="grid gap-3 sm:grid-cols-2">
-        <SelectBox label="Assign To" name="assignedToId"><EntityOptions workspace={workspace} type="users" /></SelectBox>
-        <SelectBox label="Related Company" name="companyId"><EntityOptions workspace={workspace} type="companies" /></SelectBox>
-        <SelectBox label="Related Lead" name="leadId"><EntityOptions workspace={workspace} type="leads" /></SelectBox>
-        <SelectBox label="Related Product" name="productId"><EntityOptions workspace={workspace} type="products" /></SelectBox>
-        <TextField label="Due Date" name="dueDate" type="date" />
-        <TextField label="Time" name="taskTime" type="datetime-local" />
-        <SelectBox label="Priority" name="priority"><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option><option value="URGENT">Urgent</option></SelectBox>
-        <SelectBox label="Status" name="status"><option value="TODO">Pending</option><option value="IN_PROGRESS">In Progress</option><option value="COMPLETED">Completed</option></SelectBox>
+    <ActionForm
+      action={createTaskAction}
+      onDone={onDone}
+      submitLabel="Save Task"
+      className="flex h-full flex-col"
+      bodyClassName="space-y-3"
+      footerClassName="mt-auto border-t border-slate-100 pt-3"
+    >
+      <div className="grid gap-2.5 sm:grid-cols-2">
+        <TextField label="Task Title" name="title" compact />
+        <SelectBox label="Assign To" name="assignedToId" compact><EntityOptions workspace={workspace} type="marketers" /></SelectBox>
+        <TextField label="Company Name" name="companyName" compact />
+        <TextField label="Lead Name" name="leadName" compact />
+        <SelectBox label="Related Product" name="productId" compact><EntityOptions workspace={workspace} type="products" /></SelectBox>
+        <SelectBox label="Priority" name="priority" compact><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option><option value="URGENT">Urgent</option></SelectBox>
+        <TextField label="Due Date" name="dueDate" type="date" compact />
+        <SelectBox label="Status" name="status" compact><option value="PENDING">Pending</option><option value="COMPLETED">Completed</option></SelectBox>
+        <TextField label="Time" name="taskTime" type="datetime-local" compact />
+        <TextField label="Reminder" name="reminder" placeholder="1 hour before" compact />
       </div>
-      <TextField label="Reminder" name="reminder" placeholder="1 hour before" />
-      <TextAreaField label="Notes" name="notes" />
+      <div className="grid gap-2.5 sm:grid-cols-2">
+        <TextAreaField label="Task Description" name="description" compact />
+        <TextAreaField label="Notes" name="notes" compact />
+      </div>
     </ActionForm>
   );
 }
@@ -550,7 +604,15 @@ export function LeadDetailsPage({ role, workspace, lead }: { role: Role; workspa
 }
 
 export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
+  const router = useRouter();
   const [open, setOpen] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const exportMenuRef = React.useRef<HTMLDivElement>(null);
+  const [importing, setImporting] = React.useState(false);
+  const [exportingFormat, setExportingFormat] = React.useState<"xlsx" | "csv" | null>(null);
+  const [exportMenuOpen, setExportMenuOpen] = React.useState(false);
+  const [feedback, setFeedback] = React.useState<{ type: "success" | "error"; title: string; message: string } | null>(null);
+  const canTransfer = role === "ADMIN" || role === "MARKETER";
   const columns = React.useMemo<ColumnDef<CompanyRow>[]>(
     () => [
       { accessorKey: "name", header: "Company Name", cell: ({ row }) => <EntityLink href={`/customers/${row.original.id}`} className="font-bold">{row.original.name}</EntityLink> },
@@ -565,17 +627,176 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
     [],
   );
 
+  React.useEffect(() => {
+    if (!feedback) return undefined;
+
+    const timeout = window.setTimeout(() => setFeedback(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [feedback]);
+
+  React.useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!exportMenuRef.current?.contains(event.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
+  const handleImportClick = () => {
+    if (importing || !canTransfer) return;
+    fileInputRef.current?.click();
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) return;
+
+    const lowerName = file.name.toLowerCase();
+    const supportedFile = lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".csv");
+    if (!supportedFile) {
+      setFeedback({
+        type: "error",
+        title: "Import failed",
+        message: "Please choose a valid Excel or CSV file.",
+      });
+      return;
+    }
+
+    setImporting(true);
+    setFeedback(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("/api/customers/import", {
+        method: "POST",
+        body: formData,
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(typeof result.message === "string" ? result.message : "Customer import failed.");
+      }
+
+      setFeedback({
+        type: "success",
+        title: "Import complete",
+        message: `${result.inserted} inserted, ${result.updated} updated, ${result.failed.length} failed.${result.failed.length ? ` First issue: row ${result.failed[0].row} - ${result.failed[0].reason}` : ""}`,
+      });
+      router.refresh();
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        title: "Import failed",
+        message: error instanceof Error ? error.message : "Customer import failed.",
+      });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleExport = async (format: "xlsx" | "csv") => {
+    if (!canTransfer) return;
+
+    setExportMenuOpen(false);
+    setExportingFormat(format);
+    setFeedback(null);
+
+    try {
+      const response = await fetch(`/api/customers/export${format === "csv" ? "?format=csv" : ""}`);
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        throw new Error(result?.message ?? "Customer export failed.");
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = format === "csv" ? "customers-export.csv" : "customers-export.xlsx";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+
+      setFeedback({
+        type: "success",
+        title: "Export ready",
+        message: `Customer ${format.toUpperCase()} export downloaded successfully.`,
+      });
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        title: "Export failed",
+        message: error instanceof Error ? error.message : "Customer export failed.",
+      });
+    } finally {
+      setExportingFormat(null);
+    }
+  };
+
   return (
     <>
       <PageHeader
         title="Customer / Companies"
         description="Central customer records, contacts, industries, assignment, and communication history."
-        actions={pageActions([
-          { label: "Add Customer", icon: Plus, variant: "default", onClick: () => setOpen(true) },
-          { label: "Import CSV", icon: Upload, href: rolePath(role, "import-export") },
-          { label: "Export", icon: Download, href: rolePath(role, "reports") },
-        ])}
+        actions={(
+          <>
+            <Button type="button" size="sm" onClick={() => setOpen(true)}>
+              <Plus className="h-4 w-4" />
+              Add Customer
+            </Button>
+            {canTransfer ? (
+              <>
+                <Button type="button" size="sm" variant="outline" onClick={handleImportClick} disabled={importing}>
+                  <Upload className="h-4 w-4" />
+                  {importing ? "Importing..." : "Import Excel/CSV"}
+                </Button>
+                <div ref={exportMenuRef} className="relative">
+                  <Button type="button" size="sm" variant="outline" disabled={Boolean(exportingFormat)} onClick={() => setExportMenuOpen((open) => !open)}>
+                    <Download className="h-4 w-4" />
+                    {exportingFormat ? `Exporting ${exportingFormat.toUpperCase()}...` : "Export"}
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                  {exportMenuOpen ? (
+                    <div className="absolute right-0 z-20 mt-2 w-40 rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
+                      <button type="button" className="flex w-full items-center rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900" onClick={() => handleExport("xlsx")}>
+                        Excel (.xlsx)
+                      </button>
+                      <button type="button" className="flex w-full items-center rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900" onClick={() => handleExport("csv")}>
+                        CSV
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+          </>
+        )}
       />
+      <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleImportFile} />
+      <AnimatePresence>
+        {feedback ? (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className={cn(
+              "fixed right-6 top-24 z-40 max-w-sm rounded-2xl border px-4 py-3 shadow-xl",
+              feedback.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-900",
+            )}
+          >
+            <p className="text-sm font-black">{feedback.title}</p>
+            <p className="mt-1 text-xs font-semibold">{feedback.message}</p>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
       <DataTable data={workspace.companies} columns={columns} searchPlaceholder="Search customer..." />
       <FormModal open={open} title="Create Customer / Company" onClose={() => setOpen(false)}>
         <CustomerForm workspace={workspace} onDone={() => setOpen(false)} />
@@ -584,7 +805,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   );
 }
 
-export function CustomerProfilePage({ role, workspace, customer }: { role: Role; workspace: CrmWorkspace; customer?: CompanyRow }) {
+export function CustomerProfilePage({ role, workspace, customer, history }: { role: Role; workspace: CrmWorkspace; customer?: CompanyRow; history: CustomerHistory }) {
   const active = customer;
   const [communicationOpen, setCommunicationOpen] = React.useState(false);
   const [followUpOpen, setFollowUpOpen] = React.useState(false);
@@ -634,7 +855,7 @@ export function CustomerProfilePage({ role, workspace, customer }: { role: Role;
 
       <div className="grid gap-4 md:grid-cols-4">
         <StatCard title="Total Leads" value={String(active.totalLeads)} helper="Customer profile" icon={Target} tone="bg-blue-100 text-blue-700" />
-        <StatCard title="Communication" value={String(workspace.activities.length)} helper="Timeline activity" icon={MessageSquare} tone="bg-indigo-100 text-indigo-700" />
+        <StatCard title="Communication" value={String(history.communications.length)} helper="Company activity log" icon={MessageSquare} tone="bg-indigo-100 text-indigo-700" />
         <StatCard title="Quotations" value={String(workspace.quotations.filter((item) => item.customer === active.name).length)} helper="Customer quotes" icon={FileText} tone="bg-amber-100 text-amber-700" />
         <StatCard title="Current Progress" value="Active" helper="Sales progress" icon={Check} tone="bg-emerald-100 text-emerald-700" />
       </div>
@@ -655,7 +876,40 @@ export function CustomerProfilePage({ role, workspace, customer }: { role: Role;
             { label: "Sales Progress", value: "progress" },
           ]}
         >
-          {(value) => (value === "overview" ? <LeadStatusDonut total={active.totalLeads} data={workspace.pipeline.map((item, index) => ({ name: item.label, value: item.value, color: ["#2563EB", "#06B6D4", "#16A34A", "#F59E0B", "#4F46E5"][index % 5] }))} /> : <Timeline rows={workspace.activities} />)}
+          {(value) => {
+            if (value === "overview") {
+              return (
+                <div className="grid gap-4">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <InfoLine label="Total Leads" value={active.totalLeads} />
+                    <InfoLine label="Task History" value={history.tasks.length} />
+                    <InfoLine label="Follow-up Records" value={history.followUps.length} />
+                    <InfoLine label="Timeline Activity" value={history.activities.length} />
+                  </div>
+                  <DashboardCard title="Task History">
+                    <TaskHistoryList rows={history.tasks} />
+                  </DashboardCard>
+                  <DashboardCard title="Follow-up History">
+                    <FollowUpHistoryList rows={history.followUps} />
+                  </DashboardCard>
+                </div>
+              );
+            }
+
+            if (value === "timeline") {
+              return <Timeline rows={history.activities} />;
+            }
+
+            if (value === "communication") {
+              return <CommunicationHistoryList rows={history.communications} />;
+            }
+
+            if (value === "followups") {
+              return <FollowUpHistoryList rows={history.followUps} />;
+            }
+
+            return <Timeline rows={history.activities} />;
+          }}
         </Tabs>
       </Card>
       <FormModal open={communicationOpen} title="Add Communication / Activity Log" onClose={() => setCommunicationOpen(false)}>
@@ -668,206 +922,202 @@ export function CustomerProfilePage({ role, workspace, customer }: { role: Role;
   );
 }
 
-function WorkSourceBadge({ item }: { item: TodayWorkItem }) {
-  const variant = item.source === "Follow-up" ? "warning" : item.source === "Task" ? "default" : "neutral";
-  return <Badge variant={variant}>{item.source}</Badge>;
+export function TodaysPlanPage({ workspace }: { workspace: CrmWorkspace }) {
+  return <TodayTasksExecutionView role="MARKETER" workspace={workspace} />;
 }
 
-function TodayWorkAction({
-  item,
-  onTaskComplete,
-  completingTaskId,
-}: {
-  item: TodayWorkItem;
-  onTaskComplete?: (item: TodayWorkItem) => void;
-  completingTaskId?: string | null;
-}) {
-  if (item.source === "Follow-up") {
-    return (
-      <form action={updateFollowUpStatusAction}>
-        <input type="hidden" name="id" value={item.sourceId} />
-        <input type="hidden" name="status" value="COMPLETED" />
-        <Button type="submit" variant="outline" size="sm" className="h-8 gap-1.5">
-          <Check className="h-3.5 w-3.5" />
-          Complete
-        </Button>
-      </form>
-    );
-  }
+type TodayTaskPriorityFilter = "ALL" | "IMPORTANT" | "HIGH" | "MEDIUM" | "LOW";
 
-  if (item.source === "Task") {
-    return (
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="h-8 gap-1.5"
-        onClick={() => onTaskComplete?.(item)}
-        disabled={completingTaskId === item.sourceId}
-      >
-        <Check className="h-3.5 w-3.5" />
-        {completingTaskId === item.sourceId ? "Saving..." : "Complete"}
-      </Button>
-    );
-  }
+type TodayTaskApiRow = {
+  id: string;
+  title: string;
+  companyName: string;
+  companyId?: string | null;
+  companyHref?: string | null;
+  description: string;
+  assignedToId: string;
+  assignedTo: string;
+  assignedById: string;
+  assignedBy: string;
+  assignedByRole: string;
+  assignedAtIso: string;
+  assignedAtLabel: string;
+  priority: "Important" | "High" | "Medium" | "Low";
+  priorityKey: "IMPORTANT" | "HIGH" | "MEDIUM" | "LOW";
+  status: "Pending" | "Completed";
+  statusKey: "PENDING" | "COMPLETED";
+  taskDateIso: string;
+  taskDateLabel: string;
+  timeLabel: string;
+  isPrevious: boolean;
+  completedAtIso?: string | null;
+  completedAtLabel: string;
+  completedBy: string;
+};
 
-  return (
-    <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5">
-      <Edit className="h-3.5 w-3.5" />
-      Plan
-    </Button>
-  );
+function todayDateValue() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
-function TaskCompletionFollowUpModal({
-  draft,
+function dateTimeLocalValue(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function taskPriorityTone(priority: TodayTaskApiRow["priorityKey"]) {
+  if (priority === "IMPORTANT") return "border-orange-200 bg-orange-50 text-orange-700";
+  if (priority === "HIGH") return "border-red-200 bg-red-50 text-red-700";
+  if (priority === "LOW") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  return "border-orange-200 bg-orange-50 text-orange-700";
+}
+
+function sortActiveTasks(rows: TodayTaskApiRow[]) {
+  return [...rows].sort((left, right) => {
+    if (left.isPrevious !== right.isPrevious) return left.isPrevious ? -1 : 1;
+    return new Date(left.taskDateIso).getTime() - new Date(right.taskDateIso).getTime();
+  });
+}
+
+function sortCompletedTasks(rows: TodayTaskApiRow[]) {
+  return [...rows].sort((left, right) => {
+    const leftTime = left.completedAtIso ? new Date(left.completedAtIso).getTime() : 0;
+    const rightTime = right.completedAtIso ? new Date(right.completedAtIso).getTime() : 0;
+    return rightTime - leftTime;
+  });
+}
+
+function TaskPriorityBadge({ priority }: { priority: TodayTaskApiRow["priorityKey"] }) {
+  const label = priority === "IMPORTANT" ? "Important" : priority === "HIGH" ? "High" : priority === "LOW" ? "Low" : "Medium";
+  return <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-[11px] font-black", taskPriorityTone(priority))}>{label}</span>;
+}
+
+function TaskCreateModal({
+  open,
   onClose,
-  onDone,
+  onCreated,
+  role,
+  workspace,
 }: {
-  draft: FollowUpFromTaskDraft | null;
+  open: boolean;
   onClose: () => void;
-  onDone: () => void;
+  onCreated: (row: TodayTaskApiRow) => void;
+  role: Role;
+  workspace: CrmWorkspace;
 }) {
-  const [followUpDate, setFollowUpDate] = React.useState(formatDateTimeForInput());
-  const [note, setNote] = React.useState("");
-  const [nextAction, setNextAction] = React.useState("");
-  const [priority, setPriority] = React.useState("MEDIUM");
-  const [rating, setRating] = React.useState(0);
+  const [title, setTitle] = React.useState("");
+  const [companyName, setCompanyName] = React.useState("");
+  const [description, setDescription] = React.useState("");
+  const [assignedToId, setAssignedToId] = React.useState("");
+  const [priority, setPriority] = React.useState<TodayTaskPriorityFilter>("MEDIUM");
+  const [taskDate, setTaskDate] = React.useState(todayDateValue());
   const [pending, setPending] = React.useState(false);
   const [message, setMessage] = React.useState("");
+  const canAssign = role === "ADMIN" || role === "SUPERVISOR";
+  const marketerOptions = React.useMemo(() => workspace.employees.filter((item) => item.role === "Marketer"), [workspace.employees]);
 
   React.useEffect(() => {
-    if (draft) {
-      setFollowUpDate(formatDateTimeForInput());
-      setNote("");
-      setNextAction("");
-      setPriority("MEDIUM");
-      setRating(0);
-      setMessage("");
-    }
-  }, [draft]);
-
-  if (!draft) return null;
+    if (!open) return;
+    setTitle("");
+    setCompanyName("");
+    setDescription("");
+    setAssignedToId("");
+    setPriority("MEDIUM");
+    setTaskDate(todayDateValue());
+    setMessage("");
+  }, [open]);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const form = event.currentTarget;
-    const formData = new FormData(form);
     setPending(true);
     setMessage("");
 
     try {
-      const result = await createFollowUpAction(formData);
-      if (typeof result === "object" && result && "ok" in result && result.ok === false) {
-        setMessage(typeof result.message === "string" ? result.message : "Failed to save follow-up.");
-        return;
+      const response = await fetch("/api/tasks/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, companyName, description, assignedToId: canAssign ? assignedToId : undefined, priority, taskDate }),
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(typeof result.message === "string" ? result.message : "Task creation failed.");
       }
 
-      onDone();
+      onCreated(result.row as TodayTaskApiRow);
+      onClose();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Failed to save follow-up.");
+      setMessage(error instanceof Error ? error.message : "Task creation failed.");
     } finally {
       setPending(false);
     }
   };
 
   return (
-    <FormModal open title="Follow-up from completed task" onClose={onClose}>
+    <FormModal open={open} title="Add Task" onClose={onClose} panelClassName="max-w-xl">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <p className="text-sm text-slate-600">Customer / Lead reference:</p>
-          <p className="mt-1 text-sm font-bold text-slate-900">{draft.title}</p>
-          {draft.relatedTo !== "-" ? <p className="text-xs text-slate-500">{draft.relatedTo}</p> : null}
-        </div>
-        <input type="hidden" name="taskId" value={draft.taskId} />
-        <input type="hidden" name="companyId" value={draft.companyId ?? ""} />
-        <input type="hidden" name="leadId" value={draft.leadId ?? ""} />
-        {draft.assignedToId ? <input type="hidden" name="assignedToId" value={draft.assignedToId} /> : null}
-        <label className="space-y-1.5">
-          <span className="text-sm font-semibold text-slate-700">Follow-up Date</span>
-          <Input
-            name="followUpDate"
-            type="datetime-local"
-            required
-            value={followUpDate}
-            onChange={(event) => setFollowUpDate(event.target.value)}
-            className="h-10"
-          />
+        <label className="block space-y-1.5">
+          <span className="text-sm font-semibold text-slate-700">Task Title</span>
+          <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Call Prime Academy" required />
         </label>
-        <label className="space-y-1.5">
-          <span className="text-sm font-semibold text-slate-700">Follow-up Note</span>
+        <label className="block space-y-1.5">
+          <span className="text-sm font-semibold text-slate-700">Company Name</span>
+          <Input value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Prime Academy" required />
+        </label>
+        <label className="block space-y-1.5">
+          <span className="text-sm font-semibold text-slate-700">Task Details</span>
           <textarea
-            name="note"
-            required
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder="What was discussed and what changed?"
-            className="min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            placeholder="What should the marketer do?"
+            className="min-h-20 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
           />
         </label>
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="space-y-1.5">
-            <span className="text-sm font-semibold text-slate-700">Method</span>
-            <select
-              name="method"
-              defaultValue="Phone Call"
-              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-            >
-              <option>Phone Call</option>
-              <option>WhatsApp</option>
-              <option>Email</option>
-              <option>Physical Visit</option>
-              <option>Meeting</option>
-            </select>
-          </label>
-          <label className="space-y-1.5">
-            <span className="text-sm font-semibold text-slate-700">Next Action</span>
-            <textarea
-              name="nextDiscussionPlan"
-              value={nextAction}
-              onChange={(event) => setNextAction(event.target.value)}
-              className="min-h-20 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-            />
-          </label>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2">
+          {canAssign ? (
+            <label className="space-y-1.5">
+              <span className="text-sm font-semibold text-slate-700">Assign To Marketer</span>
+              <select
+                value={assignedToId}
+                onChange={(event) => setAssignedToId(event.target.value)}
+                required
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+              >
+                <option value="">Select marketer</option>
+                {marketerOptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </label>
+          ) : null}
           <label className="space-y-1.5">
             <span className="text-sm font-semibold text-slate-700">Priority</span>
             <select
-              name="priority"
               value={priority}
-              onChange={(event) => setPriority(event.target.value)}
+              onChange={(event) => setPriority(event.target.value as TodayTaskPriorityFilter)}
               className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
             >
-              <option value="LOW">Low</option>
-              <option value="MEDIUM">Medium</option>
               <option value="HIGH">High</option>
+              <option value="MEDIUM">Medium</option>
+              <option value="LOW">Low</option>
             </select>
           </label>
           <label className="space-y-1.5">
-            <span className="text-sm font-semibold text-slate-700">Customer Engagement Rating (0-10)</span>
-            <div className="flex items-center gap-3 pt-2">
-              <input
-                type="range"
-                min={0}
-                max={10}
-                step={1}
-                name="rating"
-                value={rating}
-                onChange={(event) => setRating(Number(event.target.value))}
-                className="h-2 w-full accent-blue-600"
-              />
-              <span className="w-10 text-right text-xs font-black text-slate-900">{rating}</span>
-            </div>
-            <p className="text-xs font-semibold text-slate-500">Classification: {ratingBand(rating)}</p>
+            <span className="text-sm font-semibold text-slate-700">Date</span>
+            <Input type="date" value={taskDate} onChange={(event) => setTaskDate(event.target.value)} required />
           </label>
         </div>
         {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
         <div className="flex flex-wrap gap-2">
-          <Button type="submit" className="w-full sm:w-auto" disabled={pending}>
-            {pending ? "Saving..." : "Save Follow-up"}
+          <Button type="submit" disabled={pending}>
+            {pending ? "Saving..." : "Save Task"}
           </Button>
-          <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={onClose} disabled={pending}>
+          <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
             Cancel
           </Button>
         </div>
@@ -876,220 +1126,344 @@ function TaskCompletionFollowUpModal({
   );
 }
 
-export function TodaysPlanPage({ workspace }: { workspace: CrmWorkspace }) {
-  const router = useRouter();
+function TaskCompleteConfirmModal({
+  task,
+  pending,
+  message,
+  onClose,
+  onConfirm,
+}: {
+  task: TodayTaskApiRow | null;
+  pending: boolean;
+  message: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <FormModal open={Boolean(task)} title="Complete Task" onClose={onClose} panelClassName="max-w-md">
+      {task ? (
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+            <p className="text-sm font-black text-slate-900">{task.title}</p>
+            <p className="mt-1 text-xs font-semibold text-slate-500">{task.companyName}</p>
+          </div>
+          <p className="text-sm text-slate-600">Are you sure to complete this task?</p>
+          {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" onClick={onConfirm} disabled={pending}>
+              {pending ? <span className="inline-flex items-center gap-2"><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" /> Completing...</span> : "Complete Task"}
+            </Button>
+            <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </FormModal>
+  );
+}
+
+function TaskFollowUpModal({
+  task,
+  workspace,
+  onClose,
+  onSaved,
+}: {
+  task: TodayTaskApiRow | null;
+  workspace: CrmWorkspace;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  return (
+    <FormModal open={Boolean(task)} title="Add Follow-up" onClose={onClose} panelClassName="max-w-xl">
+      {task ? (
+        <ActionForm action={createFollowUpAction} onDone={onSaved} submitLabel="Save Follow-up">
+          <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+            <p className="text-sm font-black text-slate-900">{task.title}</p>
+            <p className="mt-1 text-xs font-semibold text-slate-500">{task.companyName}</p>
+          </div>
+          <input type="hidden" name="taskId" value={task.id} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SelectBox label="Customer / Company" name="companyId" defaultValue={task.companyId ?? ""}>
+              <EntityOptions workspace={workspace} type="companies" />
+            </SelectBox>
+            <SelectBox label="Lead" name="leadId">
+              <EntityOptions workspace={workspace} type="leads" />
+            </SelectBox>
+            <SelectBox label="Assigned To" name="assignedToId">
+              <EntityOptions workspace={workspace} type="users" />
+            </SelectBox>
+            <SelectBox label="Method" name="method">
+              <option>Phone Call</option>
+              <option>WhatsApp</option>
+              <option>Email</option>
+              <option>Physical Visit</option>
+              <option>Meeting</option>
+            </SelectBox>
+          </div>
+          <TextField label="Follow-up Date" name="followUpDate" type="datetime-local" defaultValue={dateTimeLocalValue()} />
+          <TextAreaField label="Follow-up Note" name="note" required />
+          <TextAreaField label="Next Discussion Plan" name="nextDiscussionPlan" />
+        </ActionForm>
+      ) : null}
+    </FormModal>
+  );
+}
+
+function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
   const [open, setOpen] = React.useState(false);
-  const [workItems, setWorkItems] = React.useState<TodayWorkItem[]>(workspace.todayWorkItems);
-  const [completedTasks, setCompletedTasks] = React.useState<TodayWorkItem[]>([]);
-  const [completingTaskId, setCompletingTaskId] = React.useState<string | null>(null);
-  const [taskMessage, setTaskMessage] = React.useState("");
-  const [draftFollowUp, setDraftFollowUp] = React.useState<FollowUpFromTaskDraft | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState("");
+  const [actionError, setActionError] = React.useState("");
+  const [pendingComplete, setPendingComplete] = React.useState(false);
+  const [activeTasks, setActiveTasks] = React.useState<TodayTaskApiRow[]>([]);
+  const [completedTasks, setCompletedTasks] = React.useState<TodayTaskApiRow[]>([]);
+  const [confirmTask, setConfirmTask] = React.useState<TodayTaskApiRow | null>(null);
+  const [followUpTask, setFollowUpTask] = React.useState<TodayTaskApiRow | null>(null);
 
-  React.useEffect(() => {
-    setWorkItems(() => {
-      const completedTaskIds = new Set(completedTasks.map((task) => task.sourceId));
-      return workspace.todayWorkItems.filter((item) => !(item.source === "Task" && completedTaskIds.has(item.sourceId)));
-    });
-  }, [workspace.todayWorkItems, completedTasks]);
-  const groups = [
-    ["Today's Plan", workspace.todayPlans.filter((item) => item.section === "today")],
-    ["Pending from Previous Day", workspace.todayPlans.filter((item) => item.section === "previous")],
-    ["Completed Plan", workspace.todayPlans.filter((item) => item.section === "completed")],
-  ] as const;
-
-  const completeTask = async (item: TodayWorkItem) => {
-    if (item.source !== "Task") return;
-    setTaskMessage("");
-    setCompletingTaskId(item.sourceId);
-
-    const formData = new FormData();
-    formData.set("id", item.sourceId);
-    formData.set("status", "COMPLETED");
+  const loadTasks = React.useCallback(async () => {
+    setLoading(true);
+    setError("");
 
     try {
-      const result = await completeTaskFromTodayAction(formData);
-      if (typeof result === "object" && result && "ok" in result && result.ok === false) {
-        setTaskMessage(typeof result.message === "string" ? result.message : "Unable to mark this task complete.");
-        return;
+      const [todayResponse, completedResponse] = await Promise.all([
+        fetch("/api/tasks/today", { cache: "no-store" }),
+        fetch("/api/tasks/completed", { cache: "no-store" }),
+      ]);
+
+      const [todayResult, completedResult] = await Promise.all([
+        todayResponse.json(),
+        completedResponse.json(),
+      ]);
+
+      if (!todayResponse.ok) {
+        throw new Error(typeof todayResult.message === "string" ? todayResult.message : "Failed to load today tasks.");
       }
 
-      setWorkItems((prev) => prev.filter((next) => !(next.source === "Task" && next.sourceId === item.sourceId)));
-      setCompletedTasks((prev) => {
-        if (prev.some((next) => next.sourceId === item.sourceId)) return prev;
-        return [{ ...item, id: `completed-${item.id}`, status: "Completed", overdue: false }, ...prev];
-      });
-      setDraftFollowUp({
-        taskId: item.sourceId,
-        companyId: item.companyId ?? undefined,
-        leadId: item.leadId ?? undefined,
-        assignedToId: item.assignedToId ?? undefined,
-        title: item.title,
-        relatedTo: item.relatedTo,
-      });
-      router.refresh();
-    } catch {
-      setTaskMessage("Unable to mark this task complete.");
+      if (!completedResponse.ok) {
+        throw new Error(typeof completedResult.message === "string" ? completedResult.message : "Failed to load completed tasks.");
+      }
+
+      setActiveTasks(sortActiveTasks(todayResult.rows as TodayTaskApiRow[]));
+      setCompletedTasks(sortCompletedTasks(completedResult.rows as TodayTaskApiRow[]));
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Failed to load tasks.");
     } finally {
-      setCompletingTaskId(null);
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void loadTasks();
+  }, [loadTasks]);
+
+  const handleCreated = (row: TodayTaskApiRow) => {
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+    const visibleToday = new Date(row.taskDateIso) <= endOfToday;
+
+    if (visibleToday) {
+      setActiveTasks((prev) => sortActiveTasks([row, ...prev.filter((item) => item.id !== row.id)]));
+    }
+
+    void loadTasks();
+  };
+
+  const handleConfirmComplete = async () => {
+    if (!confirmTask) return;
+
+    const task = confirmTask;
+    const optimisticCompleted: TodayTaskApiRow = {
+      ...task,
+      status: "Completed",
+      statusKey: "COMPLETED",
+      isPrevious: false,
+      completedAtIso: new Date().toISOString(),
+      completedAtLabel: new Date().toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+      completedBy: "You",
+    };
+
+    const previousActive = activeTasks;
+    const previousCompleted = completedTasks;
+
+    setPendingComplete(true);
+    setActionError("");
+    setActiveTasks((prev) => prev.filter((item) => item.id !== task.id));
+    setCompletedTasks((prev) => sortCompletedTasks([optimisticCompleted, ...prev.filter((item) => item.id !== task.id)]));
+
+    try {
+      const response = await fetch(`/api/tasks/complete/${task.id}`, {
+        method: "PATCH",
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(typeof result.message === "string" ? result.message : "Task completion failed.");
+      }
+
+      const completedRow = result.row as TodayTaskApiRow;
+      setCompletedTasks((prev) => sortCompletedTasks([completedRow, ...prev.filter((item) => item.id !== completedRow.id)]));
+      setConfirmTask(null);
+      setFollowUpTask(completedRow);
+    } catch (error) {
+      setActiveTasks(previousActive);
+      setCompletedTasks(previousCompleted);
+      setActionError(error instanceof Error ? error.message : "Task completion failed.");
+    } finally {
+      setPendingComplete(false);
     }
   };
 
+  const pendingCount = activeTasks.length;
+  const completedCount = completedTasks.length;
+
   return (
     <>
-      <PageHeader title="Today's Tasks" description="Plans, assigned tasks, due follow-ups, and overdue work in one action queue." actions={pageActions([{ label: "Add Plan", icon: Plus, variant: "default", onClick: () => setOpen(true) }])} />
-      <FilterBar>
-        <SelectBox label="Date"><option>Today</option></SelectBox>
-      </FilterBar>
-      <div className="grid gap-5">
-        <DashboardCard
-          title="Active Today's Tasks"
-          action={<Badge variant={workItems.some((item) => item.overdue) ? "danger" : "neutral"}>{workItems.length} Active</Badge>}
-        >
-          <div className="space-y-3">
-            {workItems.length ? workItems.map((item) => (
-              <div key={item.id} className={cn("grid gap-3 rounded-xl border px-3 py-3 lg:grid-cols-[auto_1fr_auto] lg:items-center", item.overdue ? "border-red-100 bg-red-50/70" : "border-slate-100 bg-slate-50")}>
-                <span className={cn("mt-1 hidden h-4 w-4 items-center justify-center rounded border lg:flex", item.overdue ? "border-red-300 bg-white text-red-600" : "border-slate-300 bg-white text-blue-600")}>
-                  <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                </span>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <EntityLink href={item.href} className="text-sm font-black text-slate-900">{item.title}</EntityLink>
-                    <WorkSourceBadge item={item} />
-                    {item.overdue ? <Badge variant="danger">Overdue</Badge> : null}
-                    <StatusBadge value={item.priority} />
-                    <StatusBadge value={item.status} />
+      <PageHeader
+        title="Today's Tasks"
+        description="All assigned tasks, follow-ups and overdue work in one view."
+        actions={pageActions([{ label: "Add Task", icon: Plus, variant: "default", onClick: () => setOpen(true) }])}
+      />
+
+      {error ? <p className="rounded-lg bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p> : null}
+      {actionError ? <p className="rounded-lg bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{actionError}</p> : null}
+
+      <DashboardCard
+        title="Today's Tasks"
+        action={<Badge variant={activeTasks.some((task) => task.isPrevious) ? "warning" : "neutral"}>{pendingCount} Pending</Badge>}
+      >
+        <div className="space-y-3">
+          {loading ? (
+            <p className="flex items-center gap-2 rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
+              Loading tasks...
+            </p>
+          ) : activeTasks.length ? (
+            <AnimatePresence initial={false}>
+              {activeTasks.map((task) => (
+                <motion.div
+                  key={task.id}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, x: 16 }}
+                  transition={{ duration: 0.18 }}
+                  className={cn(
+                    "grid gap-3 rounded-xl border px-4 py-3 lg:grid-cols-[minmax(0,1fr)_140px_260px] lg:items-center",
+                    task.isPrevious ? "border-red-200 bg-red-50/40" : "border-slate-200 bg-white",
+                  )}
+                >
+                  <div className="flex min-w-0 items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={false}
+                      onChange={() => {
+                        setActionError("");
+                        setConfirmTask(task);
+                      }}
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      aria-label={`Complete ${task.title}`}
+                    />
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-black text-slate-900">{task.title}</p>
+                        {task.isPrevious ? (
+                          <>
+                            <Badge variant="danger">Overdue</Badge>
+                            <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-black text-red-700 ring-1 ring-red-100">
+                              Previous Task
+                            </span>
+                          </>
+                        ) : null}
+                      </div>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        <EntityLink href={task.companyHref} className="text-xs font-semibold">{task.companyName}</EntityLink>
+                      </p>
+                      <p className="mt-1 text-[11px] font-semibold text-slate-500">
+                        Assigned by {task.assignedBy} ({task.assignedByRole}) - {task.assignedAtLabel}
+                      </p>
+                      {task.description !== "-" ? <p className="mt-1 line-clamp-2 text-xs text-slate-500">{task.description}</p> : null}
+                    </div>
                   </div>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">
-                    {item.date} {item.time}
-                    {item.relatedTo !== "-" ? (
-                      <>
-                        {" - "}
-                        <EntityLink href={item.href} className="text-xs font-semibold">{item.relatedTo}</EntityLink>
-                      </>
-                    ) : null}
-                    {item.assignedTo !== "-" ? ` - ${item.assignedTo}` : ""}
-                  </p>
-                  {item.note !== "-" ? <p className="mt-1 line-clamp-1 text-xs text-slate-500">{item.note}</p> : null}
-                </div>
-                <TodayWorkAction item={item} onTaskComplete={completeTask} completingTaskId={completingTaskId} />
+                  <div className="lg:justify-self-start">
+                    <TaskPriorityBadge priority={task.priorityKey} />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-3 lg:justify-end">
+                    <p className="text-sm font-bold text-slate-700">
+                      {task.taskDateLabel}
+                      <span className="ml-2 text-xs font-black text-slate-500">{task.timeLabel}</span>
+                    </p>
+                    <Button type="button" size="sm" disabled={pendingComplete && confirmTask?.id === task.id} onClick={() => { setActionError(""); setConfirmTask(task); }}>
+                      Complete
+                    </Button>
+                  </div>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          ) : (
+            <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No pending tasks match this view.</p>
+          )}
+        </div>
+      </DashboardCard>
+
+      <DashboardCard title="Completed Tasks" action={<Badge variant="neutral">{completedCount} Completed</Badge>}>
+        <div className="space-y-3">
+          {loading ? (
+            <p className="flex items-center gap-2 rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
+              Loading completed tasks...
+            </p>
+          ) : completedTasks.length ? completedTasks.map((task) => (
+            <div key={task.id} className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 md:grid-cols-[1fr_auto_auto_auto] md:items-center">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-black text-slate-900">{task.title}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  <EntityLink href={task.companyHref} className="text-xs font-semibold">{task.companyName}</EntityLink>
+                </p>
+                <p className="mt-1 text-[11px] font-semibold text-slate-500">
+                  Assigned by {task.assignedBy} ({task.assignedByRole}) - {task.assignedAtLabel}
+                </p>
+                {task.description !== "-" ? <p className="mt-1 line-clamp-2 text-xs text-slate-500">{task.description}</p> : null}
               </div>
-            )) : <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No active tasks for today.</p>}
-            {taskMessage ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{taskMessage}</p> : null}
-          </div>
-        </DashboardCard>
-        <DashboardCard title="Completed Tasks">
-          <div className="space-y-3">
-            {completedTasks.length ? completedTasks.map((item) => (
-              <div key={item.id} className="grid gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <EntityLink href={item.href} className="text-sm font-black text-slate-900">{item.title}</EntityLink>
-                  <WorkSourceBadge item={item} />
-                  <StatusBadge value={item.status} />
-                </div>
-                <p className="text-xs font-semibold text-slate-500">{item.date} {item.time}</p>
-                {item.note !== "-" ? <p className="text-xs text-slate-500">{item.note}</p> : null}
-              </div>
-            )) : <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No completed tasks for now.</p>}
-          </div>
-        </DashboardCard>
-        {groups.map(([title, rows]) => (
-          <DashboardCard key={title} title={title}>
-            <div className="space-y-2">
-              {rows.length ? rows.map((item: TodayPlanRow) => (
-                <div key={item.id} className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-                  <input type="checkbox" className="h-4 w-4" defaultChecked={item.status === "COMPLETED"} />
-                  <span className="min-w-0 text-sm font-semibold text-slate-800">
-                    <EntityLink href={item.href} className="font-semibold">{item.title}</EntityLink>
-                    {item.relatedTo !== "-" ? (
-                      <span className="ml-2 text-xs font-bold text-slate-500">
-                        (<EntityLink href={item.href} className="text-xs font-bold">{item.relatedTo}</EntityLink>)
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="text-xs font-bold text-slate-500">{item.time}</span>
-                  <StatusBadge value={item.status} />
-                </div>
-              )) : <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No items.</p>}
+              <p className="text-xs font-bold text-slate-500 md:text-right">{task.completedAtLabel}</p>
+              <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={() => setFollowUpTask(task)}>
+                <Plus className="h-3.5 w-3.5" />
+                Add Follow-up
+              </Button>
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                <Check className="h-4 w-4" />
+              </span>
             </div>
-          </DashboardCard>
-        ))}
-      </div>
-      <FormModal open={open} title="Add Today's Plan" onClose={() => setOpen(false)}>
-        <ActionForm action={createTodayPlanAction} onDone={() => setOpen(false)} submitLabel="Save Plan">
-          <TextField label="Plan Title" name="title" />
-          <TextField label="Planned Time" name="plannedAt" type="datetime-local" />
-          <SelectBox label="Related Company" name="companyId"><EntityOptions workspace={workspace} type="companies" /></SelectBox>
-          <SelectBox label="Related Lead" name="leadId"><EntityOptions workspace={workspace} type="leads" /></SelectBox>
-          <SelectBox label="Product / Service" name="productId"><EntityOptions workspace={workspace} type="products" /></SelectBox>
-          <SelectBox label="Priority" name="priority"><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option><option value="URGENT">Urgent</option></SelectBox>
-          <TextAreaField label="Note" name="note" />
-        </ActionForm>
-      </FormModal>
-      <TaskCompletionFollowUpModal
-        draft={draftFollowUp}
-        onClose={() => setDraftFollowUp(null)}
-        onDone={() => {
-          setDraftFollowUp(null);
-          router.refresh();
+          )) : (
+            <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No completed tasks yet.</p>
+          )}
+        </div>
+      </DashboardCard>
+
+      <TaskCreateModal open={open} onClose={() => setOpen(false)} onCreated={handleCreated} role={role} workspace={workspace} />
+      <TaskCompleteConfirmModal
+        task={confirmTask}
+        pending={pendingComplete}
+        message={actionError}
+        onClose={() => {
+          if (pendingComplete) return;
+          setConfirmTask(null);
+          setActionError("");
         }}
+        onConfirm={handleConfirmComplete}
+      />
+      <TaskFollowUpModal
+        task={followUpTask}
+        workspace={workspace}
+        onClose={() => setFollowUpTask(null)}
+        onSaved={() => setFollowUpTask(null)}
       />
     </>
   );
 }
 
 export function TasksPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
-  const [open, setOpen] = React.useState(false);
-  const groups = [
-    { label: "To Do", status: "TODO" },
-    { label: "In Progress", status: "IN_PROGRESS" },
-    { label: "Pending", status: "PENDING" },
-    { label: "Completed", status: "COMPLETED" },
-    { label: "Overdue", status: "OVERDUE" },
-  ];
-
-  return (
-    <>
-      <PageHeader title="Task Management" description="Create, assign, and monitor sales execution tasks." actions={pageActions([{ label: "New Task", icon: Plus, variant: "default", onClick: () => setOpen(true) }])} />
-      <div className="grid gap-4 xl:grid-cols-5">
-        {groups.map((group) => (
-          <Card key={group.status} className="min-h-72 p-4">
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="font-black text-slate-950">{group.label}</h3>
-              <Badge variant="neutral">{workspace.tasks.filter((task) => task.status === group.status).length}</Badge>
-            </div>
-            <div className="space-y-3">
-              {workspace.tasks.filter((task) => task.status === group.status).slice(0, 8).map((task) => (
-                <TaskMiniCard key={task.id} task={task} />
-              ))}
-            </div>
-          </Card>
-        ))}
-      </div>
-      <FormModal open={open} title={role === "MARKETER" ? "Create Task" : "Create Task / Assign to Marketer"} onClose={() => setOpen(false)}>
-        <TaskForm workspace={workspace} onDone={() => setOpen(false)} />
-      </FormModal>
-    </>
-  );
-}
-
-function TaskMiniCard({ task }: { task: TaskRow }) {
-  return (
-    <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-      <p className="text-sm font-black text-slate-900">{task.title}</p>
-      <p className="mt-1 text-xs text-slate-500">
-        <EntityLink href={task.href} className="font-semibold">{task.relatedTo}</EntityLink>
-      </p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <StatusBadge value={task.priority} />
-        <StatusBadge value={task.status} />
-      </div>
-      <form action={updateTaskStatusAction} className="mt-3">
-        <input type="hidden" name="id" value={task.id} />
-        <input type="hidden" name="status" value="COMPLETED" />
-        <Button type="submit" variant="outline" size="sm" className="w-full">Mark Completed</Button>
-      </form>
-    </div>
-  );
+  return <TodayTasksExecutionView role={role} workspace={workspace} />;
 }
 
 export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorkspace; followUpPage: FollowUpPageData }) {
