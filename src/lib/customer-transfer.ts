@@ -43,6 +43,7 @@ type ParsedCustomerRow = {
     email?: string;
     phone?: string;
   };
+  rawData: Record<string, unknown>;
   assignedTo?: string;
   totalLeads: number;
   lastCommunication?: Date;
@@ -77,6 +78,40 @@ function normalizeCompanyKey(value: string) {
 
 function normalizeHeader(value: string) {
   return value.replace(/^\uFEFF/, "").trim();
+}
+
+function normalizeJsonValue(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+  if (Array.isArray(value)) return value.map((item) => normalizeJsonValue(item));
+  if (typeof value === "object") {
+    const output: Record<string, unknown> = {};
+    for (const [key, nestedValue] of Object.entries(value)) {
+      const normalizedKey = normalizeHeader(key);
+      if (!normalizedKey) continue;
+      output[normalizedKey] = normalizeJsonValue(nestedValue);
+    }
+    return output;
+  }
+
+  return String(value);
+}
+
+function normalizeRawJson(value: Prisma.JsonValue | undefined | null): Record<string, unknown> {
+  if (value === null || value === undefined) return {};
+  if (typeof value === "object" && !Array.isArray(value) && value !== null) return value as Record<string, unknown>;
+  return {};
+}
+
+function normalizeRawRow(rawRow: Record<string, unknown>) {
+  const output: Record<string, unknown> = {};
+  for (const [rawKey, rawValue] of Object.entries(rawRow)) {
+    const key = normalizeHeader(rawKey);
+    if (!key) continue;
+    output[key] = normalizeJsonValue(rawValue);
+  }
+  return output;
 }
 
 function getCell(row: Record<string, unknown>, header: string) {
@@ -160,37 +195,57 @@ function toDate(value: unknown) {
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
-function companyScopeWhere(actor: CustomerTransferActor): Prisma.CustomerCompanyWhereInput {
-  if (actor.role === "ADMIN") return {};
-
-  return {
-    OR: [
-      { assignedToId: actor.id },
-      { leads: { some: { OR: [{ assignedToId: actor.id }, { createdById: actor.id }] } } },
-      { followUps: { some: { assignedToId: actor.id } } },
-      { communications: { some: { userId: actor.id } } },
-    ],
-  };
-}
-
 function exportDate(value?: Date | null) {
   if (!value) return "";
   return value.toISOString();
 }
 
 function mapExportRow(company: ExistingCustomerRecord) {
+  const rawDataValue = (company as { rawData?: Prisma.JsonValue }).rawData;
+  const rawData = (typeof rawDataValue === "object" && rawDataValue !== null && !Array.isArray(rawDataValue))
+    ? rawDataValue as Record<string, unknown>
+    : {};
   const primaryContact = company.contacts.find((contact) => contact.isPrimary) ?? company.contacts[0];
   const primaryPhone = company.phoneNumbers[0];
+  const exportRow: Record<string, unknown> = { ...rawData };
 
-  return {
-    "Company Name": company.name,
-    "Contact Person": company.contactPerson ?? primaryContact?.name ?? "",
-    Phone: company.phone || primaryPhone?.number || primaryContact?.mobile || "",
-    Industry: company.industry ?? "",
-    Assigned: company.assignedTo?.name ?? "",
-    "Total Leads": Math.max(company.totalLeads, company.leads.length),
-    "Last Communication": exportDate(company.lastCommunication ?? company.communications[0]?.communicationAt),
-  };
+  if (!("Company Name" in exportRow) && !("companyName" in exportRow) && !("customer" in exportRow)) {
+    exportRow["Company Name"] = company.name;
+  }
+
+  if (!("Contact Person" in exportRow) && !("contactPerson" in exportRow) && !("Contact Person 1 Name" in exportRow)) {
+    exportRow["Contact Person"] = company.contactPerson ?? primaryContact?.name ?? "";
+  }
+
+  if (!("Phone" in exportRow) && !("Primary Phone" in exportRow) && !("phone" in exportRow)) {
+    exportRow["Phone"] = company.phone || primaryPhone?.number || primaryContact?.mobile || "";
+  }
+
+  if (!("Industry" in exportRow) && !("industry" in exportRow)) {
+    exportRow["Industry"] = company.industry ?? "";
+  }
+
+  if (!("Address" in exportRow) && !("address" in exportRow)) {
+    exportRow["Address"] = company.address ?? "";
+  }
+
+  if (!("Website" in exportRow) && !("website" in exportRow)) {
+    exportRow["Website"] = company.website ?? "";
+  }
+
+  if (!("Assigned" in exportRow) && !("Assigned To" in exportRow) && !("assignedTo" in exportRow)) {
+    exportRow["Assigned"] = company.assignedTo?.name ?? "";
+  }
+
+  if (!("Total Leads" in exportRow) && !("totalLeads" in exportRow)) {
+    exportRow["Total Leads"] = Math.max(company.totalLeads, company.leads.length);
+  }
+
+  if (!("Last Communication" in exportRow) && !("Last Communication Date" in exportRow) && !("lastCommunication" in exportRow)) {
+    exportRow["Last Communication"] = exportDate(company.lastCommunication ?? company.communications[0]?.communicationAt);
+  }
+
+  return exportRow;
 }
 
 function buildContactCreates(row: ParsedCustomerRow): Prisma.ContactPersonCreateWithoutCompanyInput[] | undefined {
@@ -377,6 +432,7 @@ function parseWorkbookRows(buffer: Buffer, fileName: string) {
   const rows: ParsedCustomerRow[] = [];
 
   jsonRows.forEach((rawRow, index) => {
+    const rawData = normalizeRawRow(rawRow);
     const rowNumber = index + 2;
     const companyName = getFirstText(rawRow, ["Company Name", "Customer Name", "Customer/Company Name"]);
     const primaryPhone = getFirstPhone(rawRow, ["Phone", "Primary Phone", "Phone 1"]);
@@ -415,6 +471,7 @@ function parseWorkbookRows(buffer: Buffer, fileName: string) {
     rows.push({
       row: rowNumber,
       companyName,
+      rawData,
       contactPerson: getFirstText(rawRow, ["Contact Person", "Contact Person 1 Name"]),
       phone: primaryPhone,
       extraPhones: allPhones.filter((phone) => phone !== primaryPhone),
@@ -503,6 +560,13 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
   const operations: Prisma.PrismaPromise<unknown>[] = [];
   let inserted = 0;
   let updated = 0;
+  const mergeRawData = (existing: Prisma.JsonValue | null | undefined, incoming: Record<string, unknown>) => {
+    const base = normalizeRawJson(existing ?? {});
+    return {
+      ...base,
+      ...incoming,
+    };
+  };
 
   for (const row of rows) {
     const rowKey = normalizeCompanyKey(row.companyName);
@@ -525,7 +589,11 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
         ? { assignedTo: { connect: { id: assignedToId } } }
         : { assignedTo: { disconnect: true } };
 
-    const data: Prisma.CustomerCompanyUpdateInput = {
+    const mergedRawData = existing
+      ? mergeRawData((existing as { rawData?: Prisma.JsonValue }).rawData, row.rawData)
+      : row.rawData;
+
+    const data = {
       name: row.companyName,
       contactPerson: row.contactPerson ?? null,
       phone: row.phone,
@@ -535,8 +603,9 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
       notes: row.notes ?? null,
       totalLeads: row.totalLeads,
       lastCommunication: row.lastCommunication ?? null,
+      rawData: mergedRawData,
       ...assignedRelation,
-    };
+    } as Prisma.CustomerCompanyUpdateInput & { rawData?: Prisma.JsonValue };
 
     if (existing) {
       updated += 1;
@@ -552,22 +621,23 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
     }
 
     inserted += 1;
-      operations.push(prisma.customerCompany.create({
-        data: {
-          name: row.companyName,
-          contactPerson: row.contactPerson,
-          phone: row.phone,
-          industry: row.industry ?? "General",
-          address: row.address,
-          website: row.website,
-          notes: row.notes,
-          totalLeads: row.totalLeads,
-          lastCommunication: row.lastCommunication,
-          ...(assignedToId ? { assignedTo: { connect: { id: assignedToId } } } : actor.role === "MARKETER" ? { assignedTo: { connect: { id: actor.id } } } : {}),
-          contacts: buildContactCreateMutation(row),
-          phoneNumbers: buildPhoneCreateMutation(row),
-        },
-      }));
+    operations.push(prisma.customerCompany.create({
+      data: {
+        name: row.companyName,
+        contactPerson: row.contactPerson,
+        phone: row.phone,
+        industry: row.industry ?? "General",
+        address: row.address,
+        website: row.website,
+        notes: row.notes,
+        totalLeads: row.totalLeads,
+        lastCommunication: row.lastCommunication,
+        rawData: row.rawData,
+        ...(assignedToId ? { assignedTo: { connect: { id: assignedToId } } } : actor.role === "MARKETER" ? { assignedTo: { connect: { id: actor.id } } } : {}),
+        contacts: buildContactCreateMutation(row),
+        phoneNumbers: buildPhoneCreateMutation(row),
+      } as Prisma.CustomerCompanyCreateInput & { rawData?: Prisma.JsonValue },
+    }));
   }
 
   if (operations.length) {
@@ -600,7 +670,7 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
 export async function exportCustomers(actor: CustomerTransferActor, format: CustomerExportFormat) {
   const prisma = getPrisma();
   const companies = await prisma.customerCompany.findMany({
-    where: companyScopeWhere(actor),
+    where: {},
     include: {
       assignedTo: true,
       contacts: { orderBy: { createdAt: "asc" } },
@@ -612,7 +682,21 @@ export async function exportCustomers(actor: CustomerTransferActor, format: Cust
   });
 
   const rows = companies.map(mapExportRow);
-  const worksheet = XLSX.utils.json_to_sheet(rows);
+  const headerOrder = new Set<string>();
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      headerOrder.add(key);
+    }
+  }
+  const headers = Array.from(headerOrder);
+  const normalizedRows = rows.map((row) => {
+    const output: Record<string, unknown> = {};
+    for (const header of headers) {
+      output[header] = row[header] ?? "";
+    }
+    return output;
+  });
+  const worksheet = XLSX.utils.json_to_sheet(normalizedRows, { header: headers });
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Customers");
 

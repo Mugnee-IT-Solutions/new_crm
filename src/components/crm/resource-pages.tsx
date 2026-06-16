@@ -534,6 +534,29 @@ function InfoLine({ label, value, progress }: { label: string; value: React.Reac
   );
 }
 
+function readRawValue(raw: Record<string, unknown>, candidates: string[]) {
+  for (const key of candidates) {
+    const value = raw[key];
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+
+  const normalized = new Map<string, unknown>();
+  for (const [rawKey, rawValue] of Object.entries(raw)) {
+    normalized.set(rawKey.toLowerCase(), rawValue);
+  }
+
+  for (const key of candidates) {
+    const found = normalized.get(key.toLowerCase());
+    if (found === undefined || found === null) continue;
+    const text = String(found).trim();
+    if (text) return text;
+  }
+
+  return undefined;
+}
+
 function Timeline({ rows }: { rows: CrmWorkspace["activities"] }) {
   return (
     <div className="space-y-4">
@@ -1157,7 +1180,8 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
     () => [
       { accessorKey: "name", header: "Company Name", cell: ({ row }) => <EntityLink href={`/customers/${row.original.id}`} className="font-bold">{row.original.name}</EntityLink> },
       { accessorKey: "contactPerson", header: "Contact Person" },
-      { accessorKey: "phone", header: "Phone" },
+      { accessorKey: "phone", header: "Primary Phone" },
+      { accessorKey: "email", header: "Primary Email" },
       { accessorKey: "industry", header: "Industry" },
       { accessorKey: "assignedTo", header: "Assigned" },
       { accessorKey: "totalLeads", header: "Total Leads" },
@@ -1262,17 +1286,21 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
     setFeedback(null);
 
     try {
-      const response = await fetch(`/api/customers/export${format === "csv" ? "?format=csv" : ""}`);
+      const response = await fetch(`/api/export/all${format === "csv" ? "?format=csv" : ""}`);
       if (!response.ok) {
         const result = await response.json().catch(() => null);
-        throw new Error(result?.message ?? "Customer export failed.");
+        throw new Error(result?.message ?? "Full export failed.");
       }
 
       const blob = await response.blob();
+      const contentDisposition = response.headers.get("Content-Disposition") ?? "";
+      const fallbackFileName = `crm_full_export_${new Date().toISOString().slice(0, 10)}.${format === "csv" ? "csv" : "xlsx"}`;
+      const match = /filename="?([^";]+)"?/i.exec(contentDisposition);
+      const fileName = match?.[1] || fallbackFileName;
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = format === "csv" ? "customers-export.csv" : "customers-export.xlsx";
+      anchor.download = fileName;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -1281,7 +1309,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
       setFeedback({
         type: "success",
         title: "Export ready",
-        message: `Customer ${format.toUpperCase()} export downloaded successfully.`,
+        message: `Full ${format.toUpperCase()} export downloaded successfully.`,
       });
     } catch (error) {
       setFeedback({
@@ -1422,6 +1450,13 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
 
 export function CustomerProfilePage({ role, workspace, customer, history }: { role: Role; workspace: CrmWorkspace; customer?: CompanyRow; history: CustomerHistory }) {
   const active = customer;
+  const rawData = React.useMemo<Record<string, unknown>>(() => {
+    if (active?.rawData && typeof active.rawData === "object" && !Array.isArray(active.rawData)) {
+      return active.rawData as Record<string, unknown>;
+    }
+
+    return {};
+  }, [active?.rawData]);
   const [communicationOpen, setCommunicationOpen] = React.useState(false);
   const [followUpOpen, setFollowUpOpen] = React.useState(false);
 
@@ -1445,13 +1480,13 @@ export function CustomerProfilePage({ role, workspace, customer, history }: { ro
               <InfoLine label="Email" value={active.email} />
               <InfoLine label="Phone" value={`${active.phone}, ${active.whatsapp}`} />
               <InfoLine label="Website" value={active.website} />
-              <InfoLine label="Industry" value={active.industry} />
-              <InfoLine label="Address" value={active.address} />
-              <InfoLine label="Assigned Marketer" value={active.assignedTo} />
-              <InfoLine label="Notes" value={active.notes} />
-            </div>
+            <InfoLine label="Industry" value={active.industry} />
+            <InfoLine label="Address" value={active.address} />
+            <InfoLine label="Assigned Marketer" value={active.assignedTo} />
+            <InfoLine label="Notes" value={active.notes} />
           </div>
-          <div className="flex flex-wrap gap-2">
+        </div>
+        <div className="flex flex-wrap gap-2">
             {([
               ["Call", Phone],
               ["WhatsApp", MessageSquare],
@@ -1495,6 +1530,54 @@ export function CustomerProfilePage({ role, workspace, customer, history }: { ro
             if (value === "overview") {
               return (
                 <div className="grid gap-4">
+                  <Card className="rounded-2xl border border-slate-200 p-4">
+                    <h3 className="text-sm font-black uppercase tracking-wide text-slate-700">Company Information</h3>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <InfoLine label="SL" value={readRawValue(rawData, ["SL", "Serial", "Serial Number"]) || "-"} />
+                      <InfoLine label="Company Name" value={active.name} />
+                      <InfoLine label="Industry" value={readRawValue(rawData, ["Industry"]) || active.industry || "-"} />
+                      <InfoLine label="City/Zilla" value={readRawValue(rawData, ["City/Zilla", "City", "Zilla"]) || "-"} />
+                      <InfoLine label="Address" value={readRawValue(rawData, ["Address"]) || active.address || "-"} />
+                      <InfoLine label="Website" value={readRawValue(rawData, ["Website"]) || active.website || "-"} />
+                      <InfoLine label="Note" value={readRawValue(rawData, ["Note", "Notes"]) || active.notes || "-"} />
+                    </div>
+                  </Card>
+                  <Card className="rounded-2xl border border-slate-200 p-4">
+                    <h3 className="text-sm font-black uppercase tracking-wide text-slate-700">Primary Contacts</h3>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <InfoLine label="Primary Phone" value={active.phone || readRawValue(rawData, ["Primary Phone", "Phone", "Phone 1"]) || "-"} />
+                      <InfoLine label="Phone 2" value={readRawValue(rawData, ["Phone 2"]) || "-"} />
+                      <InfoLine label="Phone 3" value={readRawValue(rawData, ["Phone 3"]) || "-"} />
+                      <InfoLine label="Primary Email" value={active.email || readRawValue(rawData, ["Primary Email", "Email 1", "Email"]) || "-"} />
+                      <InfoLine label="Email 2" value={readRawValue(rawData, ["Email 2"]) || "-"} />
+                    </div>
+                  </Card>
+                  <Card className="rounded-2xl border border-slate-200 p-4">
+                    <h3 className="text-sm font-black uppercase tracking-wide text-slate-700">Contact Person 1</h3>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <InfoLine label="Name" value={readRawValue(rawData, ["Contact Person 1 Name"]) || active.contactPerson || "-"} />
+                      <InfoLine label="Designation" value={readRawValue(rawData, ["Contact Person 1 Designation", "Designation"]) || "-"} />
+                      <InfoLine label="Department" value={readRawValue(rawData, ["Contact Person 1 Department", "Department"]) || "-"} />
+                      <InfoLine label="Phones" value={readRawValue(rawData, ["Contact Person 1 Phone", "Contact Person 1 Mobile", "Contact Person 1 Phone No"]) || "-"} />
+                      <InfoLine label="Emails" value={readRawValue(rawData, ["Contact Person 1 Email", "Contact Person 1 Mail"]) || "-"} />
+                    </div>
+                  </Card>
+                  <Card className="rounded-2xl border border-slate-200 p-4">
+                    <h3 className="text-sm font-black uppercase tracking-wide text-slate-700">Contact Person 2</h3>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <InfoLine label="Name" value={readRawValue(rawData, ["Contact Person 2 Name"]) || "-"} />
+                      <InfoLine label="Designation" value={readRawValue(rawData, ["Contact Person 2 Designation"]) || "-"} />
+                      <InfoLine label="Department" value={readRawValue(rawData, ["Contact Person 2 Department"]) || "-"} />
+                      <InfoLine label="Phones" value={readRawValue(rawData, ["Contact Person 2 Phone", "Contact Person 2 Mobile"]) || "-"} />
+                      <InfoLine label="Emails" value={readRawValue(rawData, ["Contact Person 2 Email", "Contact Person 2 Mail"]) || "-"} />
+                    </div>
+                  </Card>
+                  <Card className="rounded-2xl border border-slate-200 p-4">
+                    <h3 className="text-sm font-black uppercase tracking-wide text-slate-700">Lead Information</h3>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <InfoLine label="Lead Source" value={readRawValue(rawData, ["Lead Source"]) || "-"} />
+                    </div>
+                  </Card>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <InfoLine label="Total Leads" value={active.totalLeads} />
                     <InfoLine label="Task History" value={history.tasks.length} />

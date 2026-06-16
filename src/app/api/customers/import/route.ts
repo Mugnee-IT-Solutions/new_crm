@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
-    const auth = await requireRequestUser(["ADMIN", "MARKETER"]);
+    const auth = await requireRequestUser(["ADMIN", "SUPERVISOR", "MARKETER"]);
     if (!auth.ok) {
       return NextResponse.json({ success: false, message: auth.message }, { status: auth.status });
     }

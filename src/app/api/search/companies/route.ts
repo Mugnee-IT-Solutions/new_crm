@@ -12,19 +12,6 @@ function normalizeLimit(value: string | null) {
   return Math.min(parsed, 100);
 }
 
-async function resolveScopedUserIds(role: string, userId: string) {
-  if (role === "ADMIN") return undefined;
-  if (role === "MARKETER") return [userId];
-
-  const prisma = getPrisma();
-  const team = await prisma.user.findMany({
-    where: { supervisorId: userId, status: "ACTIVE" },
-    select: { id: true },
-  });
-
-  return [userId, ...team.map((item) => item.id)];
-}
-
 export async function GET(request: Request) {
   try {
     const auth = await requireRequestUser(["ADMIN", "SUPERVISOR", "MARKETER"]);
@@ -33,7 +20,6 @@ export async function GET(request: Request) {
     }
 
     const prisma = getPrisma();
-    const scopedUserIds = await resolveScopedUserIds(auth.user.role, auth.user.id);
     const { searchParams } = new URL(request.url);
     const query = searchParams.get("q")?.trim() ?? "";
     const limit = normalizeLimit(searchParams.get("limit"));
@@ -45,22 +31,6 @@ export async function GET(request: Request) {
               contains: query,
               mode: "insensitive",
             },
-          }
-        : {}),
-      ...(scopedUserIds
-        ? {
-            OR: [
-              { assignedToId: { in: scopedUserIds } },
-              {
-                leads: {
-                  some: {
-                    OR: [{ assignedToId: { in: scopedUserIds } }, { createdById: { in: scopedUserIds } }],
-                  },
-                },
-              },
-              { followUps: { some: { assignedToId: { in: scopedUserIds } } },
-              },
-            ],
           }
         : {}),
     };

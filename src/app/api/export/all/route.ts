@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { exportCustomers, type CustomerExportFormat } from "@/lib/customer-transfer";
+import { exportAllCrmData, type FullExportFormat } from "@/lib/full-export";
 import { requireRequestUser } from "@/lib/request-user";
 
 export const runtime = "nodejs";
@@ -14,9 +14,9 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const requestedFormat = searchParams.get("format");
-    const format: CustomerExportFormat = requestedFormat === "csv" ? "csv" : "xlsx";
+    const format: FullExportFormat = requestedFormat === "csv" ? "csv" : "xlsx";
 
-    const result = await exportCustomers(
+    const result = await exportAllCrmData(
       {
         id: auth.user.id,
         role: auth.user.role,
@@ -24,11 +24,11 @@ export async function GET(request: Request) {
       format,
     );
 
-    return new NextResponse(result.buffer, {
+    return new NextResponse(Buffer.from(result.buffer), {
       status: 200,
       headers: {
         "Content-Type": result.contentType,
-        "Content-Disposition": `attachment; filename="${result.fileName}"`,
+        "Content-Disposition": `attachment; filename=\"${result.fileName}\"`,
         "Cache-Control": "no-store",
       },
     });
@@ -36,7 +36,7 @@ export async function GET(request: Request) {
     return NextResponse.json(
       {
         success: false,
-        message: error instanceof Error ? error.message : "Customer export failed.",
+        message: error instanceof Error ? error.message : "Full export failed.",
       },
       { status: 500 },
     );

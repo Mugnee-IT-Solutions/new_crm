@@ -44,6 +44,7 @@ export type CompanyRow = {
   totalLeads: number;
   lastCommunication: string;
   notes: string;
+  rawData: Prisma.JsonValue;
 };
 
 export type TaskRow = {
@@ -458,6 +459,16 @@ const communicationHistoryInclude = {
 
 type CommunicationHistoryRecord = Prisma.CommunicationLogGetPayload<{ include: typeof communicationHistoryInclude }>;
 
+type ExistingCustomerRecord = Prisma.CustomerCompanyGetPayload<{
+  include: {
+    assignedTo: true;
+    contacts: true;
+    phoneNumbers: true;
+    leads: true;
+    communications: true;
+  };
+}>;
+
 const productInclude = {
   interests: {
     include: {
@@ -609,6 +620,57 @@ function mapCommunicationHistoryRow(log: CommunicationHistoryRecord): Communicat
     notes: log.followUpNote ?? "-",
     createdBy: log.user?.name ?? "-",
     time: dateLabel(log.communicationAt, "dd/MM/yyyy hh:mm a"),
+  };
+}
+
+function normalizeRawJson(value: Prisma.JsonValue): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function readRawField(raw: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const found = raw[key];
+    if (typeof found === "string" && found.trim()) return found.trim();
+    if (typeof found === "number" || typeof found === "boolean") return String(found);
+    if (found instanceof Date && !Number.isNaN(found.getTime())) return found.toISOString();
+  }
+
+  return undefined;
+}
+
+function readRawCsvField(raw: Record<string, unknown>, keys: string[]) {
+  const value = readRawField(raw, keys);
+  return value === undefined ? "-" : value;
+}
+
+function mapCompanyRow(company: ExistingCustomerRecord | Prisma.CustomerCompanyGetPayload<{ include: { assignedTo: true; contacts: true; phoneNumbers: true; leads: true; communications: true; } }>): CompanyRow {
+  const primaryContact = company.contacts.find((contact) => contact.isPrimary) ?? company.contacts[0];
+  const whatsapp = company.phoneNumbers.find((phone) => phone.whatsapp);
+  const regular = company.phoneNumbers[0];
+  const raw = normalizeRawJson((company as { rawData?: Prisma.JsonValue }).rawData ?? {});
+  const rawPrimaryEmail = readRawField(raw, ["Primary Email", "Email 1", "Email"]);
+  const rawIndustry = readRawField(raw, ["Industry"]);
+
+  return {
+    id: company.id,
+    name: company.name,
+    contactPerson: company.contactPerson ?? primaryContact?.name ?? "-",
+    email: primaryContact?.email ?? rawPrimaryEmail ?? "-",
+    phone: company.phone || primaryContact?.mobile || regular?.number || "-",
+    whatsapp: primaryContact?.whatsapp ?? whatsapp?.number ?? "-",
+    industry: company.industry || rawIndustry || "General",
+    address: company.address ?? "-",
+    website: company.website ?? "-",
+    assignedTo: company.assignedTo?.name ?? "-",
+    status: labelize(company.status),
+    totalLeads: Math.max(company.totalLeads, company.leads.length),
+    lastCommunication: dateLabel(company.lastCommunication ?? company.communications[0]?.createdAt),
+    notes: company.notes ?? "-",
+    rawData: (company as { rawData?: Prisma.JsonValue }).rawData ?? {},
   };
 }
 
@@ -1020,16 +1082,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
       }
     : {};
 
-  const companyWhere = scopedUserIds
-    ? {
-        OR: [
-          { assignedToId: { in: scopedUserIds } },
-          { leads: { some: { OR: [{ assignedToId: { in: scopedUserIds } }, { createdById: { in: scopedUserIds } }] } } },
-          { followUps: { some: { assignedToId: { in: scopedUserIds } } } },
-          ...(role === "SUPERVISOR" ? [{ communications: { some: { userId: { in: scopedUserIds } } } }] : []),
-        ],
-      }
-    : {};
+  const companyWhere: Prisma.CustomerCompanyWhereInput = {};
 
   const taskWhere: Prisma.TaskWhereInput = scopedUserIds
     ? {
@@ -1229,28 +1282,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     salesProgress: progressFromLead(lead.status),
   }));
 
-  const companyRows: CompanyRow[] = companies.map((company) => {
-    const primary = company.contacts.find((contact) => contact.isPrimary) ?? company.contacts[0];
-    const whatsapp = company.phoneNumbers.find((phone) => phone.whatsapp);
-    const regular = company.phoneNumbers[0];
-
-    return {
-      id: company.id,
-      name: company.name,
-      contactPerson: company.contactPerson ?? primary?.name ?? "-",
-      email: primary?.email ?? "-",
-      phone: company.phone || primary?.mobile || regular?.number || "-",
-      whatsapp: primary?.whatsapp ?? whatsapp?.number ?? "-",
-      industry: company.industry,
-      address: company.address ?? "-",
-      website: company.website ?? "-",
-      assignedTo: company.assignedTo?.name ?? "-",
-      status: labelize(company.status),
-      totalLeads: Math.max(company.totalLeads, company.leads.length),
-      lastCommunication: dateLabel(company.lastCommunication ?? company.communications[0]?.createdAt),
-      notes: company.notes ?? "-",
-    };
-  });
+  const companyRows: CompanyRow[] = companies.map(mapCompanyRow);
 
   const taskRows: TaskRow[] = tasks.map(mapTaskRow);
 
@@ -1736,9 +1768,39 @@ export async function getCustomerDetail(id: string, role: Role, user: ShellUser)
   const workspace = await getCrmWorkspace(role, user);
   const lookup = decodeURIComponent(id);
   const lookupSlug = slugify(lookup);
-  const customer = workspace.companies.find((item) => item.id === lookup || slugify(item.name) === lookupSlug);
+  const scopeCustomer = workspace.companies.find((item) => item.id === lookup || slugify(item.name) === lookupSlug);
+  const allowedCustomerIds = new Set(workspace.companies.map((item) => item.id));
 
-  if (!customer) {
+  const record = scopeCustomer
+    ? await prisma.customerCompany.findUnique({
+      where: { id: scopeCustomer.id },
+      include: {
+        assignedTo: true,
+        contacts: { orderBy: { createdAt: "asc" } },
+        phoneNumbers: { orderBy: { createdAt: "asc" } },
+        leads: true,
+        communications: { orderBy: { communicationAt: "desc" }, take: 1 },
+      },
+    })
+    : await prisma.customerCompany.findFirst({
+      where: {
+        OR: [
+          { id: lookup },
+          { name: { equals: lookup, mode: "insensitive" } },
+        ],
+      },
+      include: {
+        assignedTo: true,
+        contacts: { orderBy: { createdAt: "asc" } },
+        phoneNumbers: { orderBy: { createdAt: "asc" } },
+        leads: true,
+        communications: { orderBy: { communicationAt: "desc" }, take: 1 },
+      },
+    });
+
+  const scopedCustomer = record && allowedCustomerIds.has(record.id) ? mapCompanyRow(record) : undefined;
+
+  if (!scopedCustomer) {
     return {
       workspace,
       customer: undefined,
@@ -1751,79 +1813,29 @@ export async function getCustomerDetail(id: string, role: Role, user: ShellUser)
     };
   }
 
-  const scopedUserIds = await getScopedUserIds(role, user);
-  const taskScope = scopedUserIds
-    ? {
-        OR: [
-          { assignedToId: { in: scopedUserIds } },
-          { assignedById: { in: scopedUserIds } },
-        ],
-      }
-    : {};
-  const leadScope = scopedUserIds
-    ? {
-        OR: [
-          { assignedToId: { in: scopedUserIds } },
-          { createdById: { in: scopedUserIds } },
-        ],
-      }
-    : {};
-  const followUpScope = followUpScopeWhere(scopedUserIds);
-  const communicationScope = scopedUserIds
-    ? {
-        OR: [
-          { userId: { in: scopedUserIds } },
-          { task: { is: taskScope } },
-          { lead: { is: leadScope } },
-        ],
-      }
-    : {};
-  const timelineScope = scopedUserIds
-    ? {
-        OR: [
-          { userId: { in: scopedUserIds } },
-          { task: { is: taskScope } },
-          { followUp: { is: followUpScope } },
-          { lead: { is: leadScope } },
-          { communicationLog: { is: communicationScope } },
-        ],
-      }
-    : {};
-
   const [tasks, followUps, communications, timeline] = await Promise.all([
     prisma.task.findMany({
       where: {
-        AND: [
-          {
-            OR: [
-              { companyId: customer.id },
-              { companyName: { equals: customer.name, mode: "insensitive" } },
-            ],
-          },
-          ...(taskScope.OR ? [{ OR: taskScope.OR }] : []),
+        OR: [
+          { companyId: scopedCustomer.id },
+          { companyName: { equals: scopedCustomer.name, mode: "insensitive" } },
         ],
       },
       include: taskInclude,
       orderBy: { updatedAt: "desc" },
     }),
     prisma.followUp.findMany({
-      where: combineWhere({ companyId: customer.id }, followUpScope),
+      where: { companyId: scopedCustomer.id },
       include: followUpInclude,
       orderBy: { updatedAt: "desc" },
     }),
     prisma.communicationLog.findMany({
-      where: {
-        companyId: customer.id,
-        ...(communicationScope.OR ? communicationScope : {}),
-      },
+      where: { companyId: scopedCustomer.id },
       include: communicationHistoryInclude,
       orderBy: { communicationAt: "desc" },
     }),
     prisma.activityTimeline.findMany({
-      where: {
-        companyId: customer.id,
-        ...(timelineScope.OR ? timelineScope : {}),
-      },
+      where: { companyId: scopedCustomer.id },
       include: { user: true },
       orderBy: { createdAt: "desc" },
     }),
@@ -1831,7 +1843,7 @@ export async function getCustomerDetail(id: string, role: Role, user: ShellUser)
 
   return {
     workspace,
-    customer,
+    customer: scopedCustomer,
     history: {
       tasks: tasks.map(mapTaskRow),
       followUps: followUps.map(mapFollowUpRow),

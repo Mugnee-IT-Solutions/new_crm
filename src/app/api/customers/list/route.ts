@@ -12,19 +12,6 @@ function parseLimit(value: string | null) {
   return Math.min(parsed, 100);
 }
 
-async function resolveScopedUserIds(role: string, userId: string) {
-  if (role === "ADMIN") return undefined;
-  if (role === "MARKETER") return [userId];
-
-  const prisma = getPrisma();
-  const team = await prisma.user.findMany({
-    where: { supervisorId: userId, status: "ACTIVE" },
-    select: { id: true },
-  });
-
-  return [userId, ...team.map((item) => item.id)];
-}
-
 export async function GET(request: Request) {
   try {
     const auth = await requireRequestUser(["ADMIN", "SUPERVISOR", "MARKETER"]);
@@ -36,7 +23,6 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const search = (searchParams.get("search") || searchParams.get("q") || "").trim();
     const limit = parseLimit(searchParams.get("limit"));
-    const scopedUserIds = await resolveScopedUserIds(auth.user.role, auth.user.id);
 
     const where: Prisma.CustomerCompanyWhereInput = {
       ...(search
@@ -45,22 +31,6 @@ export async function GET(request: Request) {
               { name: { contains: search, mode: "insensitive" } },
               { contactPerson: { contains: search, mode: "insensitive" } },
               { phone: { contains: search, mode: "insensitive" } },
-            ],
-          }
-        : {}),
-      ...(scopedUserIds
-        ? {
-            OR: [
-              { assignedToId: { in: scopedUserIds } },
-              {
-                leads: {
-                  some: {
-                    OR: [{ assignedToId: { in: scopedUserIds } }, { createdById: { in: scopedUserIds } }],
-                  },
-                },
-              },
-              { followUps: { some: { assignedToId: { in: scopedUserIds } } },
-              },
             ],
           }
         : {}),

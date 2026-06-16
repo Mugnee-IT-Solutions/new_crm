@@ -196,6 +196,7 @@ model CustomerCompany {
   address        String?
   website        String?
   notes          String?
+  rawData        Json              @default("{}")
   assignedToId   String?
   assignedTo     User?              @relation("CompanyAssignedTo", fields: [assignedToId], references: [id])
   status         UserStatus         @default(ACTIVE)
