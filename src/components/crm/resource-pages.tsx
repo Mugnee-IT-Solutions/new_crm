@@ -28,6 +28,7 @@ import {
   Upload,
   UserPlus,
   WalletCards,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -734,6 +735,233 @@ function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
   );
 }
 
+function CustomerRowActions({
+  customer,
+  onView,
+  onEdit,
+  onDelete,
+}: {
+  customer: CompanyRow;
+  onView: (customer: CompanyRow) => void;
+  onEdit: (customer: CompanyRow) => void;
+  onDelete: (customer: CompanyRow) => void;
+}) {
+  return (
+    <div className="flex items-center justify-end gap-1">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={() => onView(customer)}
+        title="View"
+        aria-label="View"
+        className="h-8 w-8 text-slate-500 transition duration-150 hover:scale-110 hover:bg-blue-50 hover:text-blue-700"
+      >
+        <Eye className="h-4 w-4" />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={() => onEdit(customer)}
+        title="Edit"
+        aria-label="Edit"
+        className="h-8 w-8 text-slate-500 transition duration-150 hover:scale-110 hover:bg-slate-100 hover:text-slate-900"
+      >
+        <Edit className="h-4 w-4" />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={() => onDelete(customer)}
+        title="Delete"
+        aria-label="Delete"
+        className="h-8 w-8 text-red-600 transition duration-150 hover:scale-110 hover:bg-red-50 hover:text-red-700"
+      >
+        <Trash2 className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
+
+function CustomerViewModal({
+  customer,
+  open,
+  onClose,
+}: {
+  customer: CompanyRow | null;
+  open: boolean;
+  onClose: () => void;
+}) {
+  if (!customer) return null;
+
+  return (
+    <FormModal open={open} title="Customer Details" onClose={onClose} panelClassName="max-w-2xl">
+      <div className="grid gap-2.5 sm:grid-cols-2">
+        <InfoLine label="Company Name" value={customer.name} />
+        <InfoLine label="Contact Person" value={customer.contactPerson || "-"} />
+        <InfoLine label="Phone" value={customer.phone || "-"} />
+        <InfoLine label="WhatsApp" value={customer.whatsapp || "-"} />
+        <InfoLine label="Industry" value={customer.industry || "-"} />
+        <InfoLine label="Email" value={customer.email || "-"} />
+        <InfoLine label="Website" value={customer.website || "-"} />
+        <InfoLine label="Address" value={customer.address || "-"} />
+        <InfoLine label="Assigned User" value={customer.assignedTo || "-"} />
+        <InfoLine label="Lead Count" value={customer.totalLeads} />
+        <InfoLine label="Last Communication" value={customer.lastCommunication || "-"} />
+        <InfoLine label="Status" value={customer.status || "-"} />
+        <InfoLine label="Notes" value={customer.notes || "-"} />
+      </div>
+      <div className="pt-2">
+        <Button type="button" variant="outline" onClick={onClose}>Close</Button>
+      </div>
+    </FormModal>
+  );
+}
+
+function CustomerEditModal({
+  customer,
+  open,
+  onDone,
+  onClose,
+}: {
+  customer: CompanyRow | null;
+  open: boolean;
+  onDone: (customer: CompanyRow) => void;
+  onClose: () => void;
+}) {
+  const [companyName, setCompanyName] = React.useState("");
+  const [contactPerson, setContactPerson] = React.useState("");
+  const [phone, setPhone] = React.useState("");
+  const [industry, setIndustry] = React.useState("");
+  const [pending, setPending] = React.useState(false);
+  const [message, setMessage] = React.useState("");
+
+  React.useEffect(() => {
+    setCompanyName(customer?.name ?? "");
+    setContactPerson(customer?.contactPerson ?? "");
+    setPhone(customer?.phone ?? "");
+    setIndustry(customer?.industry ?? "");
+    setMessage("");
+    setPending(false);
+  }, [customer]);
+
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!customer) return;
+
+    const normalizedName = companyName.trim();
+    if (!normalizedName) {
+      setMessage("Company Name is required.");
+      return;
+    }
+
+    setPending(true);
+    setMessage("");
+
+    try {
+      const response = await fetch(`/api/customers/${customer.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          companyName: normalizedName,
+          contactPerson: contactPerson.trim(),
+          phone: phone.trim(),
+          industry: industry.trim(),
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(typeof result.message === "string" ? result.message : "Customer update failed.");
+      }
+
+      const payload = result.customer as Partial<CompanyRow> | undefined;
+      onDone({
+        ...customer,
+        name: typeof payload?.name === "string" && payload.name.trim() ? payload.name : normalizedName,
+        contactPerson: typeof payload?.contactPerson === "string" ? payload.contactPerson : contactPerson.trim(),
+        phone: typeof payload?.phone === "string" ? payload.phone : phone.trim(),
+        industry: typeof payload?.industry === "string" ? payload.industry : industry.trim(),
+        assignedTo: customer.assignedTo,
+        status: customer.status,
+        totalLeads: customer.totalLeads,
+        lastCommunication: customer.lastCommunication,
+        email: customer.email,
+        whatsapp: customer.whatsapp,
+        address: customer.address,
+        website: customer.website,
+        notes: customer.notes,
+      });
+      onClose();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Customer update failed.");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  if (!customer) return null;
+
+  return (
+    <FormModal open={open} title="Edit Customer" onClose={onClose} panelClassName="max-w-xl">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <label className="block space-y-1.5">
+          <span className="text-xs font-semibold text-slate-700">Company Name</span>
+          <Input
+            name="companyName"
+            required
+            value={companyName}
+            onChange={(event) => setCompanyName(event.target.value)}
+            className="h-10 px-3 text-[13px]"
+          />
+        </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Contact Person</span>
+            <Input
+              name="contactPerson"
+              value={contactPerson}
+              onChange={(event) => setContactPerson(event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Phone</span>
+            <Input
+              name="phone"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5 sm:col-span-2">
+            <span className="text-xs font-semibold text-slate-700">Industry</span>
+            <Input
+              name="industry"
+              value={industry}
+              onChange={(event) => setIndustry(event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+        </div>
+        {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={pending}>
+            {pending ? "Saving..." : "Save Changes"}
+          </Button>
+          <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
+            Cancel
+          </Button>
+        </div>
+      </form>
+    </FormModal>
+  );
+}
+
 function ProductForm({ onDone }: { onDone: () => void }) {
   return (
     <ActionForm action={createProductAction} onDone={onDone} submitLabel="Save Product">
@@ -900,13 +1128,31 @@ export function LeadDetailsPage({ role, workspace, lead }: { role: Role; workspa
 export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
+  const [customers, setCustomers] = React.useState<CompanyRow[]>(() => workspace.companies);
+  const [viewCustomer, setViewCustomer] = React.useState<CompanyRow | null>(null);
+  const [editCustomer, setEditCustomer] = React.useState<CompanyRow | null>(null);
+  const [deleteCustomer, setDeleteCustomer] = React.useState<CompanyRow | null>(null);
+  const [deleting, setDeleting] = React.useState(false);
+  const [deleteError, setDeleteError] = React.useState("");
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const exportMenuRef = React.useRef<HTMLDivElement>(null);
   const [importing, setImporting] = React.useState(false);
   const [exportingFormat, setExportingFormat] = React.useState<"xlsx" | "csv" | null>(null);
   const [exportMenuOpen, setExportMenuOpen] = React.useState(false);
   const [feedback, setFeedback] = React.useState<{ type: "success" | "error"; title: string; message: string } | null>(null);
-  const canTransfer = role === "ADMIN" || role === "MARKETER";
+  const handleViewCustomer = React.useCallback((customer: CompanyRow) => {
+    setViewCustomer(customer);
+  }, []);
+
+  const handleEditCustomer = React.useCallback((customer: CompanyRow) => {
+    setEditCustomer(customer);
+  }, []);
+
+  const handleDeleteCustomer = React.useCallback((customer: CompanyRow) => {
+    setDeleteError("");
+    setDeleteCustomer(customer);
+  }, []);
+
   const columns = React.useMemo<ColumnDef<CompanyRow>[]>(
     () => [
       { accessorKey: "name", header: "Company Name", cell: ({ row }) => <EntityLink href={`/customers/${row.original.id}`} className="font-bold">{row.original.name}</EntityLink> },
@@ -916,10 +1162,25 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
       { accessorKey: "assignedTo", header: "Assigned" },
       { accessorKey: "totalLeads", header: "Total Leads" },
       { accessorKey: "lastCommunication", header: "Last Communication" },
-      { id: "Action", header: "Action", cell: ({ row }) => <RowActions detailHref={`/customers/${row.original.id}`} /> },
+      {
+        id: "Action",
+        header: "Action",
+        cell: ({ row }) => (
+          <CustomerRowActions
+            customer={row.original}
+            onView={handleViewCustomer}
+            onEdit={handleEditCustomer}
+            onDelete={handleDeleteCustomer}
+          />
+        ),
+      },
     ],
-    [],
+    [handleViewCustomer, handleDeleteCustomer, handleEditCustomer],
   );
+
+  React.useEffect(() => {
+    setCustomers(workspace.companies);
+  }, [workspace.companies]);
 
   React.useEffect(() => {
     if (!feedback) return undefined;
@@ -940,7 +1201,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   }, []);
 
   const handleImportClick = () => {
-    if (importing || !canTransfer) return;
+    if (importing) return;
     fileInputRef.current?.click();
   };
 
@@ -996,8 +1257,6 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   };
 
   const handleExport = async (format: "xlsx" | "csv") => {
-    if (!canTransfer) return;
-
     setExportMenuOpen(false);
     setExportingFormat(format);
     setFeedback(null);
@@ -1035,6 +1294,51 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
     }
   };
 
+  const handleDeleteConfirm = async () => {
+    if (!deleteCustomer) return;
+
+    setDeleting(true);
+    setDeleteError("");
+
+    try {
+      const response = await fetch(`/api/customers/${deleteCustomer.id}`, {
+        method: "DELETE",
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(typeof result.message === "string" ? result.message : "Customer delete failed.");
+      }
+
+      setCustomers((prev) => prev.filter((customer) => customer.id !== deleteCustomer.id));
+      setDeleteCustomer(null);
+      setFeedback({
+        type: "success",
+        title: "Customer removed",
+        message: "Customer deleted successfully.",
+      });
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Customer delete failed.");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleEditDone = (updatedCustomer: CompanyRow) => {
+    setCustomers((prev) => prev.map((customer) => customer.id === updatedCustomer.id ? updatedCustomer : customer));
+    setEditCustomer(null);
+    setFeedback({
+      type: "success",
+      title: "Customer updated",
+      message: "Customer details updated successfully.",
+    });
+  };
+
+  const handleCreateDone = () => {
+    setOpen(false);
+    router.refresh();
+  };
+
   return (
     <>
       <PageHeader
@@ -1046,31 +1350,27 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
               <Plus className="h-4 w-4" />
               Add Customer
             </Button>
-            {canTransfer ? (
-              <>
-                <Button type="button" size="sm" variant="outline" onClick={handleImportClick} disabled={importing}>
-                  <Upload className="h-4 w-4" />
-                  {importing ? "Importing..." : "Import Excel/CSV"}
-                </Button>
-                <div ref={exportMenuRef} className="relative">
-                  <Button type="button" size="sm" variant="outline" disabled={Boolean(exportingFormat)} onClick={() => setExportMenuOpen((open) => !open)}>
-                    <Download className="h-4 w-4" />
-                    {exportingFormat ? `Exporting ${exportingFormat.toUpperCase()}...` : "Export"}
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                  {exportMenuOpen ? (
-                    <div className="absolute right-0 z-20 mt-2 w-40 rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
-                      <button type="button" className="flex w-full items-center rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900" onClick={() => handleExport("xlsx")}>
-                        Excel (.xlsx)
-                      </button>
-                      <button type="button" className="flex w-full items-center rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900" onClick={() => handleExport("csv")}>
-                        CSV
-                      </button>
-                    </div>
-                  ) : null}
+            <Button type="button" size="sm" variant="outline" onClick={handleImportClick} disabled={importing}>
+              <Upload className="h-4 w-4" />
+              {importing ? "Importing..." : "Import Excel/CSV"}
+            </Button>
+            <div ref={exportMenuRef} className="relative">
+              <Button type="button" size="sm" variant="outline" disabled={Boolean(exportingFormat)} onClick={() => setExportMenuOpen((open) => !open)}>
+                <Download className="h-4 w-4" />
+                {exportingFormat ? `Exporting ${exportingFormat.toUpperCase()}...` : "Export"}
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+              {exportMenuOpen ? (
+                <div className="absolute right-0 z-20 mt-2 w-40 rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
+                  <button type="button" className="flex w-full items-center rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900" onClick={() => handleExport("xlsx")}>
+                    Excel (.xlsx)
+                  </button>
+                  <button type="button" className="flex w-full items-center rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900" onClick={() => handleExport("csv")}>
+                    CSV
+                  </button>
                 </div>
-              </>
-            ) : null}
+              ) : null}
+            </div>
           </>
         )}
       />
@@ -1091,9 +1391,30 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
           </motion.div>
         ) : null}
       </AnimatePresence>
-      <DataTable data={workspace.companies} columns={columns} searchPlaceholder="Search customer..." />
+      <DataTable data={customers} columns={columns} searchPlaceholder="Search customer..." />
       <FormModal open={open} title="Create Customer / Company" onClose={() => setOpen(false)}>
-        <CustomerForm workspace={workspace} onDone={() => setOpen(false)} />
+        <CustomerForm workspace={workspace} onDone={handleCreateDone} />
+      </FormModal>
+      <CustomerViewModal open={Boolean(viewCustomer)} customer={viewCustomer} onClose={() => setViewCustomer(null)} />
+      <CustomerEditModal customer={editCustomer} open={Boolean(editCustomer)} onDone={handleEditDone} onClose={() => setEditCustomer(null)} />
+      <FormModal open={Boolean(deleteCustomer)} title="Delete Customer" onClose={() => !deleting && setDeleteCustomer(null)} panelClassName="max-w-md">
+        {deleteCustomer ? (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-700">
+              Are you sure you want to delete this customer?
+            </p>
+            <p className="text-sm font-black text-slate-900">{deleteCustomer.name}</p>
+            {deleteError ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{deleteError}</p> : null}
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="destructive" onClick={handleDeleteConfirm} disabled={deleting}>
+                {deleting ? "Deleting..." : "Delete"}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setDeleteCustomer(null)} disabled={deleting}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </FormModal>
     </>
   );
