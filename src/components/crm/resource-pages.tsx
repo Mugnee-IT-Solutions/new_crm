@@ -120,6 +120,48 @@ type SearchableOption = {
 
 type SearchableScope = "companies" | "leads";
 
+type SearchableRow = { value?: string; label?: string; id?: string } & Record<string, unknown>;
+
+type CompanyListRow = {
+  id: string;
+  companyName: string;
+  contactPerson?: string | null;
+  phone?: string | null;
+};
+
+type LeadListRow = {
+  id: string;
+  name: string;
+  phone?: string | null;
+  companyName?: string | null;
+};
+
+function buildSearchLabel(scope: SearchableScope, raw: SearchableRow) {
+  const fallbackLabel = "name" in raw && typeof raw.name === "string" ? raw.name.trim() : "";
+  if (scope === "companies") {
+    const name = typeof raw.companyName === "string" && raw.companyName.trim() ? raw.companyName : "";
+    return name || fallbackLabel || "Unnamed company";
+  }
+
+  const base = typeof raw.name === "string" && raw.name.trim() ? raw.name : fallbackLabel || "";
+  const company = typeof raw.companyName === "string" && raw.companyName.trim() ? raw.companyName : "";
+  return base && company ? `${base} (${company})` : base || company || "Unnamed lead";
+}
+
+function mapSearchRows(scope: SearchableScope, rows: unknown[]) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+
+  return safeRows
+    .map((raw) => {
+      const row = raw as SearchableRow & CompanyListRow & LeadListRow;
+      const value = typeof row.value === "string" && row.value.trim() ? row.value : typeof row.id === "string" && row.id.trim() ? row.id : "";
+      if (!value) return null;
+
+      return { value, label: buildSearchLabel(scope, row) };
+    })
+    .filter((item): item is SearchableOption => Boolean(item));
+}
+
 function SearchableEntitySelect({
   label,
   name,
@@ -156,7 +198,7 @@ function SearchableEntitySelect({
 
   const normalizedQuery = query.trim();
   const filteredOptions = React.useMemo(() => {
-    if (searchScope || !normalizedQuery) return sourceOptions;
+    if (searchScope) return sourceOptions;
     const keyword = normalizedQuery.toLowerCase();
     return sourceOptions.filter((item) => item.label.toLowerCase().includes(keyword));
   }, [normalizedQuery, searchScope, sourceOptions]);
@@ -180,15 +222,17 @@ function SearchableEntitySelect({
       return;
     }
 
-    const endpoint = searchScope === "companies" ? "/api/search/companies" : "/api/search/leads";
+    if (!open && !defaultValue) return;
+
+    const endpoint = searchScope === "companies" ? "/api/customers/list" : "/api/leads/list";
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setIsLoading(true);
       const params = new URLSearchParams();
       if (normalizedQuery) {
-        params.set("q", normalizedQuery);
+        params.set("search", normalizedQuery);
       }
-      params.set("limit", "50");
+      params.set("limit", "20");
 
       try {
         const response = await fetch(`${endpoint}?${params.toString()}`, {
@@ -201,7 +245,7 @@ function SearchableEntitySelect({
         }
 
         const payload = await response.json();
-        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        const rows = mapSearchRows(searchScope, Array.isArray(payload?.rows) ? payload.rows : []);
         if (!controller.signal.aborted) {
           setRemoteOptions(rows);
         }
@@ -221,7 +265,7 @@ function SearchableEntitySelect({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [normalizedQuery, searchScope]);
+  }, [open, normalizedQuery, searchScope, defaultValue]);
 
   React.useEffect(() => {
     setActiveIndex(0);
@@ -321,7 +365,7 @@ function SearchableEntitySelect({
                 </button>
               ))
             ) : (
-              <p className="px-3 py-2 text-sm text-slate-500">No match found</p>
+              <p className="px-3 py-2 text-sm text-slate-500">No results found</p>
             )}
           </div>
         ) : null}
