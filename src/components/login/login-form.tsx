@@ -93,7 +93,8 @@ export function LoginForm() {
         return;
       }
 
-      router.push(result.redirectTo);
+      setSubmitting(false);
+      router.push("/dashboard");
     })();
   }
 
@@ -124,7 +125,8 @@ export function LoginForm() {
       return;
     }
 
-    router.push(result.redirectTo);
+    setSubmitting(false);
+    router.push("/dashboard");
   }
 
   return (
