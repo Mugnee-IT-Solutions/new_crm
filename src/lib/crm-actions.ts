@@ -2,7 +2,8 @@
 
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
-import { Prisma } from "@prisma/client";
+import type * as Prisma from "@prisma/client";
+import { PrismaClientKnownRequestError } from "@prisma/client/runtime";
 import { getCurrentSession } from "@/lib/auth";
 import { getPrisma } from "@/lib/prisma";
 import { roleHome, type Role } from "@/lib/utils";
@@ -1346,7 +1347,7 @@ export async function createUserAction(formData: FormData) {
     revalidatePath("/");
     return { ok: true, id: created.id };
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    if (error instanceof PrismaClientKnownRequestError && error.code === "P2002") {
       const target = Array.isArray(error.meta?.target) ? error.meta.target.join(", ") : "mobile or email";
       return { ok: false, message: `A user with this ${target} already exists.` };
     }

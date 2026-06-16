@@ -1,7 +1,8 @@
 import * as XLSX from "xlsx";
 import { getPrisma } from "@/lib/prisma";
 import { type Role } from "@/lib/utils";
-import type { Prisma } from "@prisma/client";
+import type * as Prisma from "@prisma/client";
+import { CUSTOMER_TEMPLATE_RAW_KEYS } from "@/lib/customer-transfer";
 
 export type FullExportActor = {
   id: string;
@@ -15,6 +16,22 @@ type FullExportResult = {
   fileName: string;
   rowCount: number;
   contentType: string;
+};
+
+const CUSTOMER_EXPORT_TEMPLATE_KEYS = CUSTOMER_TEMPLATE_RAW_KEYS.map((column) => column as string);
+
+type FullExportCustomerRecord = Prisma.CustomerCompanyGetPayload<{
+  include: {
+    assignedTo: { select: { name: true } };
+    contacts: true;
+    phoneNumbers: true;
+    leads: true;
+    communications: { orderBy: { communicationAt: "desc" }; take: 1 };
+  };
+}> & {
+  rawData?: Prisma.JsonValue | null;
+  city?: string | null;
+  phone2?: string | null;
 };
 
 function normalizeText(value: string | null | undefined) {
@@ -54,36 +71,49 @@ function toCsvValue(raw: unknown) {
 }
 
 function mapCustomerRows(
-  customers: Array<{
-    name: string;
-    contactPerson: string | null;
-    phone: string;
-    industry: string;
-    address: string | null;
-    website: string | null;
-    notes: string | null;
-    assignedTo: { name: string } | null;
-    totalLeads: number;
-    lastCommunication: Date | null;
-    rawData?: unknown;
-  }>,
+  customers: FullExportCustomerRecord[],
 ) {
   return customers.map((customer) => {
     const raw = normalizeRawJson(customer.rawData);
-    const normalized: Record<string, unknown> = {
-      ...raw,
-      "Company Name": raw["Company Name"] ?? raw["companyName"] ?? raw["customer"] ?? customer.name,
-      "Contact Person": raw["Contact Person"] ?? raw["Contact Person 1 Name"] ?? raw["contactPerson"] ?? customer.contactPerson ?? "",
-      "Primary Phone": raw["Primary Phone"] ?? raw["Phone"] ?? raw["phone"] ?? customer.phone,
-      "Primary Email": raw["Primary Email"] ?? raw["Email"] ?? raw["email"] ?? raw["Email 1"] ?? "",
-      Industry: raw["Industry"] ?? raw["industry"] ?? customer.industry,
-      Address: raw["Address"] ?? raw["address"] ?? customer.address ?? "",
-      Website: raw["Website"] ?? raw["website"] ?? customer.website ?? "",
-      Assigned: raw["Assigned"] ?? raw["Assigned To"] ?? raw["assignedTo"] ?? (customer.assignedTo?.name ?? ""),
-      "Total Leads": raw["Total Leads"] ?? raw["totalLeads"] ?? normalizeNumber(customer.totalLeads),
-      "Last Communication": raw["Last Communication"] ?? raw["Last Communication Date"] ?? raw["lastCommunication"] ?? normalizeDate(customer.lastCommunication),
-      Note: raw["Note"] ?? raw["Notes"] ?? customer.notes ?? "",
-    };
+    const primaryContact = customer.contacts.find((contact) => contact.isPrimary) ?? customer.contacts[0];
+    const secondaryContact = customer.contacts.find((contact) => contact !== primaryContact);
+    const fallbackPrimaryEmail = primaryContact?.email ?? "";
+    const fallbackPrimaryPhone = primaryContact?.mobile ?? customer.phone ?? "";
+    const phoneValues = customer.phoneNumbers.map((item) => normalizeText(item.number)).filter((value): value is string => Boolean(value));
+
+    const normalized: Record<string, unknown> = {};
+    for (const key of CUSTOMER_EXPORT_TEMPLATE_KEYS) {
+      const value = normalizeText(raw[key] as string | null | undefined);
+      normalized[key] = value;
+    }
+
+    normalized["SL"] = normalized["SL"] || "";
+    normalized["Industry"] = normalized["Industry"] || customer.industry || "";
+    normalized["Company Name"] = normalized["Company Name"] || customer.name;
+    normalized["City/Zilla"] = normalized["City/Zilla"] || customer.city || "";
+    normalized["Address"] = normalized["Address"] || customer.address || "";
+    normalized["Primary Phone"] = normalized["Primary Phone"] || fallbackPrimaryPhone || phoneValues[0] || "";
+    normalized["Phone 2"] = normalized["Phone 2"] || phoneValues[1] || customer.phone2 || "";
+    normalized["Phone 3"] = normalized["Phone 3"] || phoneValues[2] || "";
+    normalized["Primary Email"] = normalized["Primary Email"] || fallbackPrimaryEmail || "";
+    normalized["Email 2"] = normalized["Email 2"] || (raw["Email 2"] as string | undefined) || "";
+    normalized["Website"] = normalized["Website"] || customer.website || "";
+    normalized["Note"] = normalized["Note"] || customer.notes || "";
+    normalized["Contact Person 1 Name"] = normalized["Contact Person 1 Name"] || raw["Contact Person"] || customer.contactPerson || "";
+    normalized["Contact Person 1 Designation"] = normalized["Contact Person 1 Designation"] || "";
+    normalized["Contact Person 1 Department"] = normalized["Contact Person 1 Department"] || "";
+    normalized["Contact Person 1 Phone 1"] = normalized["Contact Person 1 Phone 1"] || fallbackPrimaryPhone || "";
+    normalized["Contact Person 1 Phone 2"] = normalized["Contact Person 1 Phone 2"] || "";
+    normalized["Contact Person 1 Email 1"] = normalized["Contact Person 1 Email 1"] || fallbackPrimaryEmail || "";
+    normalized["Contact Person 1 Email 2"] = normalized["Contact Person 1 Email 2"] || "";
+    normalized["Contact Person 2 Name"] = normalized["Contact Person 2 Name"] || secondaryContact?.name || "";
+    normalized["Contact Person 2 Designation"] = normalized["Contact Person 2 Designation"] || secondaryContact?.designation || "";
+    normalized["Contact Person 2 Department"] = normalized["Contact Person 2 Department"] || "";
+    normalized["Contact Person 2 Phone 1"] = normalized["Contact Person 2 Phone 1"] || secondaryContact?.mobile || "";
+    normalized["Contact Person 2 Phone 2"] = normalized["Contact Person 2 Phone 2"] || "";
+    normalized["Contact Person 2 Email 1"] = normalized["Contact Person 2 Email 1"] || secondaryContact?.email || "";
+    normalized["Contact Person 2 Email 2"] = normalized["Contact Person 2 Email 2"] || "";
+    normalized["Lead Source"] = normalized["Lead Source"] || "";
 
     return normalized;
   });
@@ -194,49 +224,14 @@ export async function exportAllCrmData(
     }),
   ]);
 
-  const customers = rawCustomers as Array<{
-    name: string;
-    contactPerson: string | null;
-    phone: string;
-    industry: string;
-    address: string | null;
-    website: string | null;
-    notes: string | null;
-    assignedTo: { name: string } | null;
-    totalLeads: number;
-    lastCommunication: Date | null;
-    rawData?: unknown;
-  }>;
-
-  const customerRows = mapCustomerRows(customers);
+  const customerRows = mapCustomerRows(rawCustomers);
   const leadRows = mapLeadRows(rawLeads);
   const productRows = mapProductRows(rawProducts);
   const followUpRows = mapFollowUpRows(rawFollowUps);
   const totalRows = customerRows.length + leadRows.length + productRows.length + followUpRows.length;
 
   if (format === "csv") {
-    const requiredCustomerHeaders = [
-      "Company Name",
-      "Contact Person",
-      "Primary Phone",
-      "Primary Email",
-      "Industry",
-      "Address",
-      "Website",
-      "Assigned",
-      "Total Leads",
-      "Last Communication",
-      "Note",
-    ];
-    const allCustomerHeaders = new Set<string>(requiredCustomerHeaders);
-    for (const row of customerRows) {
-      for (const key of Object.keys(row)) {
-        allCustomerHeaders.add(key);
-      }
-    }
-
-    const customerHeaders = requiredCustomerHeaders.filter((header) => allCustomerHeaders.has(header))
-      .concat(Array.from(allCustomerHeaders).filter((header) => !requiredCustomerHeaders.includes(header)).sort());
+    const customerHeaders = [...CUSTOMER_EXPORT_TEMPLATE_KEYS];
     const leadHeaders = ["Name", "Phone", "Email", "Company", "Status", "Assigned To"];
     const productHeaders = ["Product Name", "Category", "Price", "Stock"];
     const followUpHeaders = ["Title", "Company / Customer", "Lead", "Assigned To", "Method", "Date", "Notes"];
@@ -270,29 +265,8 @@ export async function exportAllCrmData(
     };
   }
 
-  const allCustomerHeaders = new Set<string>([
-    "Company Name",
-    "Contact Person",
-    "Primary Phone",
-    "Primary Email",
-    "Industry",
-    "Address",
-    "Website",
-    "Assigned",
-    "Total Leads",
-    "Last Communication",
-    "Note",
-  ]);
-
   const workbook = XLSX.utils.book_new();
-  for (const row of customerRows) {
-    for (const key of Object.keys(row)) {
-      allCustomerHeaders.add(key);
-    }
-  }
-  const customerHeaderList = Array.from(allCustomerHeaders)
-    .filter((header) => header.length > 0)
-    .sort();
+  const customerHeaderList = [...CUSTOMER_EXPORT_TEMPLATE_KEYS].filter((header) => header.length > 0);
   const customerSheet = XLSX.utils.json_to_sheet(customerRows, { header: customerHeaderList });
   XLSX.utils.book_append_sheet(workbook, customerSheet, "Customers");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(leadRows), "Leads");

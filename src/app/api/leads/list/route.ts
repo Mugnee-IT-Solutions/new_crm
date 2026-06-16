@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import type * as Prisma from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getPrisma } from "@/lib/prisma";
 import { requireRequestUser } from "@/lib/request-user";

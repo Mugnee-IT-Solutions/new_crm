@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import type * as Prisma from "@prisma/client";
 import { addDays, endOfMonth, endOfWeek, format, isBefore, isSameDay, startOfDay, startOfMonth, startOfWeek } from "date-fns";
 import { getPrisma } from "@/lib/prisma";
 import { type Role, type ShellUser } from "@/lib/utils";

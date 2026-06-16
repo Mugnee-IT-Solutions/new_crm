@@ -1,4 +1,5 @@
-import { Prisma, Priority, TaskStatus } from "@prisma/client";
+import type * as Prisma from "@prisma/client";
+import { Priority, TaskStatus } from "@prisma/client";
 import { format } from "date-fns";
 import { getPrisma } from "@/lib/prisma";
 import type { Role } from "@/lib/utils";
