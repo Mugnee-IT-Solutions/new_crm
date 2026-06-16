@@ -113,6 +113,224 @@ function SelectBox({ label, name, children, defaultValue, compact = false }: { l
   );
 }
 
+type SearchableOption = {
+  value: string;
+  label: string;
+};
+
+type SearchableScope = "companies" | "leads";
+
+function SearchableEntitySelect({
+  label,
+  name,
+  options,
+  defaultValue = "",
+  defaultLabel,
+  searchScope,
+  required = false,
+  placeholder,
+  compact = false,
+}: {
+  label: string;
+  name: string;
+  options: SearchableOption[];
+  defaultValue?: string;
+  defaultLabel?: string;
+  searchScope?: SearchableScope;
+  required?: boolean;
+  placeholder?: string;
+  compact?: boolean;
+}) {
+  const [query, setQuery] = React.useState("");
+  const [selectedValue, setSelectedValue] = React.useState(defaultValue);
+  const [remoteOptions, setRemoteOptions] = React.useState<SearchableOption[]>([]);
+  const [open, setOpen] = React.useState(false);
+  const [activeIndex, setActiveIndex] = React.useState(0);
+  const [isLoading, setIsLoading] = React.useState(false);
+  const wrapperRef = React.useRef<HTMLDivElement | null>(null);
+
+  const sourceOptions = React.useMemo(
+    () => (searchScope ? remoteOptions : options).filter((item) => item.label.trim()),
+    [options, remoteOptions, searchScope],
+  );
+
+  const normalizedQuery = query.trim();
+  const filteredOptions = React.useMemo(() => {
+    if (searchScope || !normalizedQuery) return sourceOptions;
+    const keyword = normalizedQuery.toLowerCase();
+    return sourceOptions.filter((item) => item.label.toLowerCase().includes(keyword));
+  }, [normalizedQuery, searchScope, sourceOptions]);
+
+  React.useEffect(() => {
+    if (defaultValue) {
+      const baseLabel = sourceOptions.find((item) => item.value === defaultValue)?.label ?? defaultLabel ?? "";
+      setSelectedValue(defaultValue);
+      setQuery(baseLabel);
+      return;
+    }
+
+    setSelectedValue("");
+    setQuery("");
+  }, [defaultValue, defaultLabel, sourceOptions]);
+
+  React.useEffect(() => {
+    if (!searchScope) {
+      setRemoteOptions([]);
+      setIsLoading(false);
+      return;
+    }
+
+    const endpoint = searchScope === "companies" ? "/api/search/companies" : "/api/search/leads";
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setIsLoading(true);
+      const params = new URLSearchParams();
+      if (normalizedQuery) {
+        params.set("q", normalizedQuery);
+      }
+      params.set("limit", "50");
+
+      try {
+        const response = await fetch(`${endpoint}?${params.toString()}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error("Unable to load matches.");
+        }
+
+        const payload = await response.json();
+        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        if (!controller.signal.aborted) {
+          setRemoteOptions(rows);
+        }
+      } catch (error) {
+        if ((error as Error)?.name !== "AbortError") {
+          console.error(error);
+          setRemoteOptions([]);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoading(false);
+        }
+      }
+    }, 200);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [normalizedQuery, searchScope]);
+
+  React.useEffect(() => {
+    setActiveIndex(0);
+  }, [open, filteredOptions.length, query]);
+
+  React.useEffect(() => {
+    const handleOutside = (event: MouseEvent) => {
+      if (!wrapperRef.current || !(event.target instanceof Node)) return;
+      if (!wrapperRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, []);
+
+  const selectOption = React.useCallback((option: SearchableOption) => {
+    setSelectedValue(option.value);
+    setQuery(option.label);
+    setOpen(false);
+  }, []);
+
+  const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const nextQuery = event.target.value;
+    setQuery(nextQuery);
+    setOpen(true);
+
+    const exactMatch = sourceOptions.find((option) => option.label.toLowerCase() === nextQuery.trim().toLowerCase());
+    setSelectedValue(exactMatch ? exactMatch.value : "");
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!filteredOptions.length && event.key !== "Escape") return;
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setOpen(true);
+      setActiveIndex((prev) => Math.min(filteredOptions.length - 1, prev + 1));
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((prev) => Math.max(0, prev - 1));
+    }
+
+    if (event.key === "Enter" && open && filteredOptions.length) {
+      event.preventDefault();
+      selectOption(filteredOptions[activeIndex] ?? filteredOptions[0]!);
+    }
+
+    if (event.key === "Escape") {
+      setOpen(false);
+    }
+  };
+
+  return (
+    <label className={cn("block space-y-1.5", compact && "space-y-1")}>
+      <span className={cn("text-sm font-semibold text-slate-700", compact && "text-xs leading-4")}>{label}</span>
+      <div className="relative" ref={wrapperRef}>
+        <input
+          required={required}
+          value={query}
+          onChange={handleInputChange}
+          onFocus={() => setOpen(true)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder ?? "Search..."}
+          className={cn("h-10 w-full rounded-lg border border-slate-200 bg-white px-3 pr-9 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100", compact && "h-9 px-2.5 text-[13px]")}
+        />
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => setOpen((prev) => !prev)}
+          className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-slate-500"
+          aria-label="Toggle options"
+        >
+          <ChevronDown className="h-4 w-4" />
+        </button>
+        {open ? (
+          <div className="absolute z-20 mt-2 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+            {isLoading ? (
+              <p className="px-3 py-2 text-sm font-semibold text-slate-500">Searching...</p>
+            ) : filteredOptions.length ? (
+              filteredOptions.map((option, index) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={cn(
+                    "w-full px-3 py-2 text-left text-sm font-semibold text-slate-700 transition",
+                    index === activeIndex ? "bg-blue-600 text-white" : "hover:bg-slate-100",
+                  )}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    selectOption(option);
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))
+            ) : (
+              <p className="px-3 py-2 text-sm text-slate-500">No match found</p>
+            )}
+          </div>
+        ) : null}
+      </div>
+      <input type="hidden" name={name} value={selectedValue} />
+    </label>
+  );
+}
+
 function TextField({
   label,
   name,
@@ -428,8 +646,20 @@ function FollowUpForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
   return (
     <ActionForm action={createFollowUpAction} onDone={onDone} submitLabel="Save Follow-up">
       <div className="grid gap-3 sm:grid-cols-2">
-        <SelectBox label="Customer / Company" name="companyId"><EntityOptions workspace={workspace} type="companies" /></SelectBox>
-        <SelectBox label="Lead" name="leadId"><EntityOptions workspace={workspace} type="leads" /></SelectBox>
+        <SearchableEntitySelect
+          label="Customer / Company"
+          name="companyId"
+          options={[]}
+          searchScope="companies"
+          placeholder="Search customer"
+        />
+        <SearchableEntitySelect
+          label="Lead"
+          name="leadId"
+          options={[]}
+          searchScope="leads"
+          placeholder="Search lead"
+        />
         <SelectBox label="Assigned To" name="assignedToId"><EntityOptions workspace={workspace} type="marketers" /></SelectBox>
         <SelectBox label="Method" name="method"><option>Phone Call</option><option>WhatsApp</option><option>Email</option><option>Physical Visit</option><option>Meeting</option></SelectBox>
       </div>
@@ -1204,12 +1434,22 @@ function TaskFollowUpModal({
           </div>
           <input type="hidden" name="taskId" value={task.id} />
           <div className="grid gap-3 sm:grid-cols-2">
-            <SelectBox label="Customer / Company" name="companyId" defaultValue={task.companyId ?? ""}>
-              <EntityOptions workspace={workspace} type="companies" />
-            </SelectBox>
-            <SelectBox label="Lead" name="leadId">
-              <EntityOptions workspace={workspace} type="leads" />
-            </SelectBox>
+            <SearchableEntitySelect
+              label="Customer / Company"
+              name="companyId"
+              options={[]}
+              searchScope="companies"
+              defaultValue={task.companyId ?? ""}
+              defaultLabel={task.companyName}
+              placeholder="Search customer"
+            />
+            <SearchableEntitySelect
+              label="Lead"
+              name="leadId"
+              options={[]}
+              searchScope="leads"
+              placeholder="Search lead"
+            />
             <SelectBox label="Assigned To" name="assignedToId">
               <EntityOptions workspace={workspace} type="users" />
             </SelectBox>
