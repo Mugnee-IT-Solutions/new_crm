@@ -7,7 +7,7 @@ const globalForPrisma = globalThis as unknown as {
 
 export function getPrisma() {
   if (!globalForPrisma.prisma) {
-    const connectionString = process.env.DATABASE_URL;
+    const connectionString = process.env.DATABASE_URL?.trim();
 
     if (!connectionString) {
       throw new Error("DATABASE_URL is required for CRM database access.");

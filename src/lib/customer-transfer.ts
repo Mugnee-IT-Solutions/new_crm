@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import * as XLSX from "xlsx";
 import { getPrisma } from "@/lib/prisma";
 import type { Role } from "@/lib/utils";
