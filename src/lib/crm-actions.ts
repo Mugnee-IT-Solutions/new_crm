@@ -51,6 +51,186 @@ function validDate(value: Date | undefined) {
   return Number.isNaN(value.getTime()) ? undefined : value;
 }
 
+function cleanText(value: FormDataEntryValue | null) {
+  const nextText = textValue(value);
+  return nextText ?? "";
+}
+
+function textValue(value: FormDataEntryValue | null) {
+  if (value === null) return "";
+  const nextValue = String(value).trim();
+  return nextValue || "";
+}
+
+function readTemplateText(formData: FormData, key: string) {
+  return cleanText(formData.get(key));
+}
+
+function readTemplateNumber(formData: FormData, key: string) {
+  const value = Number(formData.get(key));
+  return Number.isFinite(value) ? value : 0;
+}
+
+function buildCustomerTemplateRaw(formData: FormData) {
+  const sl = readTemplateText(formData, "sl");
+  const industry = readTemplateText(formData, "industry");
+  const companyName = readTemplateText(formData, "companyName");
+  const cityOrZilla = readTemplateText(formData, "cityOrZilla");
+  const address = readTemplateText(formData, "address");
+  const primaryPhone = readTemplateText(formData, "primaryPhone");
+  const phone2 = readTemplateText(formData, "phone2");
+  const phone3 = readTemplateText(formData, "phone3");
+  const primaryEmail = readTemplateText(formData, "primaryEmail");
+  const email2 = readTemplateText(formData, "email2");
+  const website = readTemplateText(formData, "website");
+  const note = readTemplateText(formData, "note");
+  const cp1Name = readTemplateText(formData, "contactPerson1Name");
+  const cp1Designation = readTemplateText(formData, "designation1");
+  const cp1Department = readTemplateText(formData, "department1");
+  const cp1Phone1 = readTemplateText(formData, "cp1Phone1");
+  const cp1Phone2 = readTemplateText(formData, "cp1Phone2");
+  const cp1Email1 = readTemplateText(formData, "cp1Email1");
+  const cp1Email2 = readTemplateText(formData, "cp1Email2");
+  const cp2Name = readTemplateText(formData, "contactPerson2Name");
+  const cp2Designation = readTemplateText(formData, "designation2");
+  const cp2Department = readTemplateText(formData, "department2");
+  const cp2Phone1 = readTemplateText(formData, "cp2Phone1");
+  const cp2Phone2 = readTemplateText(formData, "cp2Phone2");
+  const cp2Email1 = readTemplateText(formData, "cp2Email1");
+  const cp2Email2 = readTemplateText(formData, "cp2Email2");
+  const leadSource = readTemplateText(formData, "leadSource");
+
+  return {
+    "SL": sl,
+    "Industry": industry,
+    "Company Name": companyName,
+    "City/Zilla": cityOrZilla,
+    "Address": address,
+    "Primary Phone": primaryPhone,
+    "Phone 2": phone2,
+    "Phone 3": phone3,
+    "Primary Email": primaryEmail,
+    "Email 2": email2,
+    "Website": website,
+    "Note": note,
+    "Contact Person 1 Name": cp1Name,
+    "Contact Person 1 Designation": cp1Designation,
+    "Contact Person 1 Department": cp1Department,
+    "Contact Person 1 Phone 1": cp1Phone1,
+    "Contact Person 1 Phone 2": cp1Phone2,
+    "Contact Person 1 Email 1": cp1Email1,
+    "Contact Person 1 Email 2": cp1Email2,
+    "Contact Person 2 Name": cp2Name,
+    "Contact Person 2 Designation": cp2Designation,
+    "Contact Person 2 Department": cp2Department,
+    "Contact Person 2 Phone 1": cp2Phone1,
+    "Contact Person 2 Phone 2": cp2Phone2,
+    "Contact Person 2 Email 1": cp2Email1,
+    "Contact Person 2 Email 2": cp2Email2,
+    "Lead Source": leadSource,
+  };
+}
+
+function buildCustomerTemplateContactPayload(formData: FormData) {
+  const raw = buildCustomerTemplateRaw(formData);
+  const primaryPhone = raw["Primary Phone"];
+  const contactPerson = raw["Contact Person 1 Name"] || "Primary Contact";
+  const primaryEmail = raw["Primary Email"] || raw["Contact Person 1 Email 1"] || raw["Contact Person 1 Email 2"] || "";
+  const cp1Phone = raw["Contact Person 1 Phone 1"] || "";
+
+  const secondaryContact = raw["Contact Person 2 Name"]
+    ? {
+      name: raw["Contact Person 2 Name"],
+      designation: raw["Contact Person 2 Designation"] || undefined,
+      department: raw["Contact Person 2 Department"] || undefined,
+      email: raw["Contact Person 2 Email 1"] || raw["Contact Person 2 Email 2"] || undefined,
+      mobile: raw["Contact Person 2 Phone 1"] || raw["Contact Person 2 Phone 2"] || undefined,
+      isPrimary: false,
+    }
+    : undefined;
+
+  return {
+    rawData: raw,
+    primaryPhone,
+    contactPerson,
+    primaryEmail: primaryEmail || undefined,
+    cp1Phone,
+    secondaryContact,
+  };
+}
+
+function normalizeCustomerContactName(value?: string) {
+  return value && value.trim().length ? value.trim() : null;
+}
+
+function buildCustomerCreateContacts(raw: ReturnType<typeof buildCustomerTemplateRaw>) {
+  const contacts = [];
+  const primaryContact = {
+    name: normalizeCustomerContactName(raw["Contact Person 1 Name"]) || "Primary Contact",
+    designation: normalizeCustomerContactName(raw["Contact Person 1 Designation"]) || undefined,
+    email: normalizeCustomerContactName(raw["Contact Person 1 Email 1"]) || normalizeCustomerContactName(raw["Contact Person 1 Email 2"]) || normalizeCustomerContactName(raw["Primary Email"]) || undefined,
+    mobile: normalizeCustomerContactName(raw["Contact Person 1 Phone 1"]) || normalizeCustomerContactName(raw["Contact Person 1 Phone 2"]) || normalizeCustomerContactName(raw["Primary Phone"]) || undefined,
+    isPrimary: true,
+  } satisfies Prisma.ContactPersonCreateWithoutCompanyInput;
+
+  if (primaryContact.mobile || primaryContact.email || primaryContact.designation || primaryContact.name !== "Primary Contact") {
+    contacts.push(primaryContact);
+  }
+
+  const secondaryContactName = normalizeCustomerContactName(raw["Contact Person 2 Name"]);
+  if (secondaryContactName) {
+    contacts.push({
+      name: secondaryContactName,
+      designation: normalizeCustomerContactName(raw["Contact Person 2 Designation"]) || undefined,
+      email: normalizeCustomerContactName(raw["Contact Person 2 Email 1"]) || normalizeCustomerContactName(raw["Contact Person 2 Email 2"]) || undefined,
+      mobile: normalizeCustomerContactName(raw["Contact Person 2 Phone 1"]) || normalizeCustomerContactName(raw["Contact Person 2 Phone 2"]) || undefined,
+      isPrimary: false,
+    } satisfies Prisma.ContactPersonCreateWithoutCompanyInput);
+  }
+
+  return contacts;
+}
+
+function buildCustomerCreatePhoneNumbers(raw: ReturnType<typeof buildCustomerTemplateRaw>) {
+  const ordered = [
+    ["Primary", raw["Primary Phone"]],
+    ["Phone 2", raw["Phone 2"]],
+    ["Phone 3", raw["Phone 3"]],
+    ["Phone 1", raw["Contact Person 1 Phone 1"]],
+    ["Phone 2", raw["Contact Person 1 Phone 2"]],
+    ["Phone 1", raw["Contact Person 2 Phone 1"]],
+    ["Phone 2", raw["Contact Person 2 Phone 2"]],
+  ];
+
+  const seen = new Set<string>();
+  const creates: Prisma.PhoneNumberCreateWithoutCompanyInput[] = [];
+
+  for (let index = 0; index < ordered.length; index += 1) {
+    const [label, rawValue] = ordered[index] ?? [];
+    const number = readTemplateTextFromString(rawValue);
+    if (!number) continue;
+    if (seen.has(number)) continue;
+
+    seen.add(number);
+    creates.push({
+      label: index === 0 ? "Primary" : `${label} ${creates.length}`,
+      number,
+      whatsapp: false,
+    });
+  }
+
+  if (!creates.length) {
+    // Keep fallback to avoid invalid empty phone inserts.
+  }
+
+  return creates;
+}
+
+function readTemplateTextFromString(value: string) {
+  const sanitized = value.replace(/\s+/g, "").trim();
+  return sanitized || "";
+}
+
 function startOfCurrentDay() {
   const date = new Date();
   date.setHours(0, 0, 0, 0);
@@ -464,40 +644,37 @@ export async function createLeadAction(formData: FormData) {
 export async function createCustomerAction(formData: FormData) {
   const user = await actionUser();
   const prisma = getPrisma();
-  const contactPerson = text(formData, "contactPerson");
-  const phone = text(formData, "phone") ?? "";
+  const rawData = buildCustomerTemplateRaw(formData);
   const assignedToId = await resolveOptionalMarketerAssignee(prisma, { id: user.id, role: user.role as Role }, text(formData, "assignedToId"));
+  const companyName = rawData["Company Name"]?.trim() || "New Company";
+  const existingSl = rawData["SL"]?.trim?.() || "";
+  const nextSl = existingSl || String((await prisma.customerCompany.count()) + 1);
+  rawData["SL"] = nextSl;
+
+  if (!rawData["Company Name"]?.trim()) {
+    return { ok: false, message: "Company Name is required." };
+  }
+
+  const contacts = buildCustomerCreateContacts(rawData);
+  const phoneNumbers = buildCustomerCreatePhoneNumbers(rawData);
+
+  const contactPerson = rawData["Contact Person 1 Name"] || contacts[0]?.name || null;
+  const phone = rawData["Primary Phone"] || "";
   const company = await prisma.customerCompany.create({
     data: {
-      name: text(formData, "name") ?? "New Company",
-      industry: text(formData, "industry") ?? "General",
+      name: companyName,
+      industry: rawData["Industry"] || "",
       contactPerson,
       phone,
       totalLeads: 0,
-      address: text(formData, "address"),
-      website: text(formData, "website"),
-      notes: text(formData, "notes"),
+      address: rawData["Address"] || undefined,
+      website: rawData["Website"] || undefined,
+      notes: rawData["Note"] || undefined,
+      rawData,
       assignedToId,
-      contacts: {
-        create: {
-          name: contactPerson ?? "Primary Contact",
-          designation: text(formData, "designation"),
-          email: text(formData, "email"),
-          mobile: phone,
-          whatsapp: text(formData, "whatsapp"),
-          isPrimary: true,
-        },
-      },
-      phoneNumbers: phone
-        ? {
-            create: {
-              label: "Primary",
-              number: phone,
-              whatsapp: false,
-            },
-          }
-        : undefined,
-    },
+      contacts: contacts.length ? { create: contacts.map((contact) => ({ ...contact, whatsapp: undefined })) } : undefined,
+      phoneNumbers: phoneNumbers.length ? { create: phoneNumbers } : undefined,
+    } as any,
   });
 
   await addTimeline({

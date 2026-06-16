@@ -35,7 +35,9 @@ export type CompanyRow = {
   contactPerson: string;
   email: string;
   phone: string;
+  phone2: string;
   whatsapp: string;
+  cityOrZilla: string;
   industry: string;
   address: string;
   website: string;
@@ -631,9 +633,39 @@ function normalizeRawJson(value: Prisma.JsonValue): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function normalizeCityLookupKey(value: string) {
+  return value
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/\s*\/\s*/g, " / ")
+    .toLowerCase();
+}
+
+function inferCityFromAddress(address?: string | null) {
+  if (!address) return "";
+  const [lastSegment] = address
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .slice(-1);
+  return lastSegment ?? "";
+}
+
 function readRawField(raw: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
     const found = raw[key];
+    if (typeof found === "string" && found.trim()) return found.trim();
+    if (typeof found === "number" || typeof found === "boolean") return String(found);
+    if (found instanceof Date && !Number.isNaN(found.getTime())) return found.toISOString();
+  }
+
+  const normalized = new Map<string, unknown>();
+  for (const [rawKey, rawValue] of Object.entries(raw)) {
+    normalized.set(normalizeCityLookupKey(rawKey), rawValue);
+  }
+
+  for (const key of keys) {
+    const found = normalized.get(normalizeCityLookupKey(key));
     if (typeof found === "string" && found.trim()) return found.trim();
     if (typeof found === "number" || typeof found === "boolean") return String(found);
     if (found instanceof Date && !Number.isNaN(found.getTime())) return found.toISOString();
@@ -651,19 +683,28 @@ function mapCompanyRow(company: ExistingCustomerRecord | Prisma.CustomerCompanyG
   const primaryContact = company.contacts.find((contact) => contact.isPrimary) ?? company.contacts[0];
   const whatsapp = company.phoneNumbers.find((phone) => phone.whatsapp);
   const regular = company.phoneNumbers[0];
+  const companyPhone2 = (company as { phone2?: string | null }).phone2;
+  const companyCity = (company as { city?: string | null }).city;
   const raw = normalizeRawJson((company as { rawData?: Prisma.JsonValue }).rawData ?? {});
   const rawPrimaryEmail = readRawField(raw, ["Primary Email", "Email 1", "Email"]);
+  const rawPrimaryPhone = readRawField(raw, ["Primary Phone", "Phone", "Phone 1", "phone"]);
+  const rawPhone2 = readRawField(raw, ["Phone 2", "Contact Person 1 Phone 2", "Phone2", "Phone 2 (Contact 1)", "Secondary Phone"]);
   const rawIndustry = readRawField(raw, ["Industry"]);
+  const rawCity = readRawField(raw, ["City / Zilla", "City/Zilla", "City", "Zilla"]);
+  const rawAddress = readRawField(raw, ["Address"]);
+  const addressCity = inferCityFromAddress(company.address);
 
   return {
     id: company.id,
     name: company.name,
     contactPerson: company.contactPerson ?? primaryContact?.name ?? "-",
     email: primaryContact?.email ?? rawPrimaryEmail ?? "-",
-    phone: company.phone || primaryContact?.mobile || regular?.number || "-",
+    phone: company.phone || primaryContact?.mobile || regular?.number || rawPrimaryPhone || "-",
+    phone2: companyPhone2 || rawPhone2 || (company.phoneNumbers[1]?.number ? company.phoneNumbers[1].number : "-"),
     whatsapp: primaryContact?.whatsapp ?? whatsapp?.number ?? "-",
+    cityOrZilla: companyCity || rawCity || addressCity || "-",
     industry: company.industry || rawIndustry || "General",
-    address: company.address ?? "-",
+    address: company.address ?? rawAddress ?? "-",
     website: company.website ?? "-",
     assignedTo: company.assignedTo?.name ?? "-",
     status: labelize(company.status),

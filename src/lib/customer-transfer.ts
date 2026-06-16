@@ -5,6 +5,70 @@ import type { Role } from "@/lib/utils";
 
 export const CUSTOMER_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
 
+export const CUSTOMER_TEMPLATE_COLUMNS = [
+  "SL",
+  "Industry",
+  "Company Name",
+  "City/Zilla",
+  "Address",
+  "Primary Phone",
+  "Phone 2",
+  "Phone 3",
+  "Primary Email",
+  "Email 2",
+  "Website",
+  "Note",
+  "Contact Person 1 Name",
+  "Contact Person 1 Designation",
+  "Contact Person 1 Department",
+  "Contact Person 1 Phone 1",
+  "Contact Person 1 Phone 2",
+  "Contact Person 1 Email 1",
+  "Contact Person 1 Email 2",
+  "Contact Person 2 Name",
+  "Contact Person 2 Designation",
+  "Contact Person 2 Department",
+  "Contact Person 2 Phone 1",
+  "Contact Person 2 Phone 2",
+  "Contact Person 2 Email 1",
+  "Contact Person 2 Email 2",
+  "Lead Source",
+] as const;
+
+export type CustomerTemplateColumn = (typeof CUSTOMER_TEMPLATE_COLUMNS)[number];
+
+export const CUSTOMER_TEMPLATE_RAW_KEYS: readonly string[] = [
+  "SL",
+  "Industry",
+  "Company Name",
+  "City/Zilla",
+  "Address",
+  "Primary Phone",
+  "Phone 2",
+  "Phone 3",
+  "Primary Email",
+  "Email 2",
+  "Website",
+  "Note",
+  "Contact Person 1 Name",
+  "Contact Person 1 Designation",
+  "Contact Person 1 Department",
+  "Contact Person 1 Phone 1",
+  "Contact Person 1 Phone 2",
+  "Contact Person 1 Email 1",
+  "Contact Person 1 Email 2",
+  "Contact Person 2 Name",
+  "Contact Person 2 Designation",
+  "Contact Person 2 Department",
+  "Contact Person 2 Phone 1",
+  "Contact Person 2 Phone 2",
+  "Contact Person 2 Email 1",
+  "Contact Person 2 Email 2",
+  "Lead Source",
+] as const;
+
+const CUSTOMER_IMPORT_TEMPLATE_HEADER_LEN = CUSTOMER_TEMPLATE_COLUMNS.length;
+
 export type CustomerTransferActor = {
   id: string;
   role: Role;
@@ -28,30 +92,38 @@ type CustomerImportFormat = "EXCEL" | "CSV";
 type ParsedCustomerRow = {
   row: number;
   companyName: string;
+  primaryPhone: string;
+  phone2?: string;
+  phone3?: string;
   contactPerson?: string;
-  phone: string;
-  extraPhones: string[];
   industry?: string;
   address?: string;
+  city?: string;
   website?: string;
-  notes?: string;
+  note?: string;
+  leadSource?: string;
   primaryEmail?: string;
-  designation?: string;
-  secondaryContact?: {
-    name: string;
-    designation?: string;
-    email?: string;
-    phone?: string;
-  };
+  email2?: string;
+  designation1?: string;
+  department1?: string;
+  phone11?: string;
+  phone12?: string;
+  email11?: string;
+  email12?: string;
+  contactPerson2?: string;
+  designation2?: string;
+  department2?: string;
+  phone21?: string;
+  phone22?: string;
+  email21?: string;
+  email22?: string;
   rawData: Record<string, unknown>;
-  assignedTo?: string;
   totalLeads: number;
   lastCommunication?: Date;
 };
 
 type ExistingCustomerRecord = Prisma.CustomerCompanyGetPayload<{
   include: {
-    assignedTo: true;
     contacts: { orderBy: { createdAt: "asc" } };
     phoneNumbers: { orderBy: { createdAt: "asc" } };
     leads: true;
@@ -59,43 +131,38 @@ type ExistingCustomerRecord = Prisma.CustomerCompanyGetPayload<{
   };
 }>;
 
+function normalizeCompanyKey(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function normalizeHeader(value: string) {
+  return value
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/\s*\/\s*/g, "/")
+    .toLowerCase();
+}
+
 function normalizeText(value: unknown) {
   if (typeof value === "string") {
     const trimmed = value.trim();
-    return trimmed ? trimmed : undefined;
+    return trimmed || undefined;
   }
 
   if (typeof value === "number" && Number.isFinite(value)) {
     return String(value);
   }
 
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return value.toISOString();
+  }
+
   return undefined;
 }
 
-function normalizeCompanyKey(value: string) {
-  return value.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-function normalizeHeader(value: string) {
-  return value.replace(/^\uFEFF/, "").trim();
-}
-
-function normalizeJsonValue(value: unknown): unknown {
-  if (value === null || value === undefined) return value;
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
-  if (Array.isArray(value)) return value.map((item) => normalizeJsonValue(item));
-  if (typeof value === "object") {
-    const output: Record<string, unknown> = {};
-    for (const [key, nestedValue] of Object.entries(value)) {
-      const normalizedKey = normalizeHeader(key);
-      if (!normalizedKey) continue;
-      output[normalizedKey] = normalizeJsonValue(nestedValue);
-    }
-    return output;
-  }
-
-  return String(value);
+function normalizePhone(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, "").trim();
 }
 
 function normalizeRawJson(value: Prisma.JsonValue | undefined | null): Record<string, unknown> {
@@ -104,89 +171,36 @@ function normalizeRawJson(value: Prisma.JsonValue | undefined | null): Record<st
   return {};
 }
 
-function normalizeRawRow(rawRow: Record<string, unknown>) {
-  const output: Record<string, unknown> = {};
-  for (const [rawKey, rawValue] of Object.entries(rawRow)) {
-    const key = normalizeHeader(rawKey);
-    if (!key) continue;
-    output[key] = normalizeJsonValue(rawValue);
-  }
-  return output;
-}
-
-function getCell(row: Record<string, unknown>, header: string) {
-  if (Object.prototype.hasOwnProperty.call(row, header)) return row[header];
-
-  for (const [key, value] of Object.entries(row)) {
-    if (normalizeHeader(key) === header) return value;
-  }
-
-  return undefined;
-}
-
-export function normalizePhone(value: unknown) {
-  return String(value ?? "").replace(/\s+/g, "").trim();
-}
-
-function getFirstText(row: Record<string, unknown>, headers: string[]) {
-  for (const header of headers) {
-    const value = normalizeText(getCell(row, header));
-    if (value) return value;
-  }
-
-  return undefined;
-}
-
-function getFirstCell(row: Record<string, unknown>, headers: string[]) {
-  for (const header of headers) {
-    const value = getCell(row, header);
-    if (normalizeText(value)) return value;
-  }
-
-  return undefined;
-}
-
-function getFirstPhone(row: Record<string, unknown>, headers: string[]) {
-  for (const header of headers) {
-    const phone = normalizePhone(getCell(row, header));
-    if (phone) return phone;
-  }
-
-  return undefined;
-}
-
 function uniquePhones(values: Array<string | undefined>) {
   const seen = new Set<string>();
   const phones: string[] = [];
-
   for (const value of values) {
     const phone = normalizePhone(value);
     if (!phone || seen.has(phone)) continue;
     seen.add(phone);
     phones.push(phone);
   }
-
   return phones;
 }
 
-function toLeadCount(value: unknown) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return 0;
-  return Math.max(0, Math.round(parsed));
+function normalizeJsonValue(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString();
+  if (Array.isArray(value)) return value.map((item) => normalizeJsonValue(item));
+  if (typeof value === "object") {
+    const output: Record<string, unknown> = {};
+    for (const [key, nestedValue] of Object.entries(value)) {
+      output[key] = normalizeJsonValue(nestedValue);
+    }
+    return output;
+  }
+  return String(value);
 }
 
 function toDate(value: unknown) {
   if (!value) return undefined;
-
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value;
-  }
-
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const parsed = XLSX.SSF.parse_date_code(value);
-    if (!parsed) return undefined;
-    return new Date(parsed.y, parsed.m - 1, parsed.d, parsed.H, parsed.M, parsed.S);
-  }
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
 
   const text = normalizeText(value);
   if (!text) return undefined;
@@ -200,73 +214,71 @@ function exportDate(value?: Date | null) {
   return value.toISOString();
 }
 
-function mapExportRow(company: ExistingCustomerRecord) {
-  const rawDataValue = (company as { rawData?: Prisma.JsonValue }).rawData;
-  const rawData = (typeof rawDataValue === "object" && rawDataValue !== null && !Array.isArray(rawDataValue))
-    ? rawDataValue as Record<string, unknown>
-    : {};
-  const primaryContact = company.contacts.find((contact) => contact.isPrimary) ?? company.contacts[0];
-  const primaryPhone = company.phoneNumbers[0];
-  const exportRow: Record<string, unknown> = { ...rawData };
+function rowIndexFromTemplate(index: number) {
+  const safe = Number.isFinite(index) ? index : 0;
+  return safe + 2;
+}
 
-  if (!("Company Name" in exportRow) && !("companyName" in exportRow) && !("customer" in exportRow)) {
-    exportRow["Company Name"] = company.name;
-  }
+function mapTemplateRow(rawRow: Record<string, unknown>, rowNumber: number): ParsedCustomerRow {
+  const get = (key: string) => normalizeText(rawRow[key]);
 
-  if (!("Contact Person" in exportRow) && !("contactPerson" in exportRow) && !("Contact Person 1 Name" in exportRow)) {
-    exportRow["Contact Person"] = company.contactPerson ?? primaryContact?.name ?? "";
-  }
+  const city = get("City/Zilla") ?? get("City / Zilla");
+  const address = get("Address");
+  const companyName = get("Company Name");
+  const primaryPhone = normalizePhone(get("Primary Phone"));
 
-  if (!("Phone" in exportRow) && !("Primary Phone" in exportRow) && !("phone" in exportRow)) {
-    exportRow["Phone"] = company.phone || primaryPhone?.number || primaryContact?.mobile || "";
-  }
-
-  if (!("Industry" in exportRow) && !("industry" in exportRow)) {
-    exportRow["Industry"] = company.industry ?? "";
-  }
-
-  if (!("Address" in exportRow) && !("address" in exportRow)) {
-    exportRow["Address"] = company.address ?? "";
-  }
-
-  if (!("Website" in exportRow) && !("website" in exportRow)) {
-    exportRow["Website"] = company.website ?? "";
-  }
-
-  if (!("Assigned" in exportRow) && !("Assigned To" in exportRow) && !("assignedTo" in exportRow)) {
-    exportRow["Assigned"] = company.assignedTo?.name ?? "";
-  }
-
-  if (!("Total Leads" in exportRow) && !("totalLeads" in exportRow)) {
-    exportRow["Total Leads"] = Math.max(company.totalLeads, company.leads.length);
-  }
-
-  if (!("Last Communication" in exportRow) && !("Last Communication Date" in exportRow) && !("lastCommunication" in exportRow)) {
-    exportRow["Last Communication"] = exportDate(company.lastCommunication ?? company.communications[0]?.communicationAt);
-  }
-
-  return exportRow;
+  return {
+    row: rowNumber,
+    companyName: companyName ?? "",
+    primaryPhone,
+    phone2: get("Phone 2"),
+    phone3: get("Phone 3"),
+    contactPerson: get("Contact Person 1 Name"),
+    industry: get("Industry"),
+    address,
+    city,
+    website: get("Website"),
+    note: get("Note"),
+    leadSource: get("Lead Source"),
+    primaryEmail: get("Primary Email"),
+    email2: get("Email 2"),
+    designation1: get("Contact Person 1 Designation"),
+    department1: get("Contact Person 1 Department"),
+    phone11: get("Contact Person 1 Phone 1"),
+    phone12: get("Contact Person 1 Phone 2"),
+    email11: get("Contact Person 1 Email 1"),
+    email12: get("Contact Person 1 Email 2"),
+    contactPerson2: get("Contact Person 2 Name"),
+    designation2: get("Contact Person 2 Designation"),
+    department2: get("Contact Person 2 Department"),
+    phone21: get("Contact Person 2 Phone 1"),
+    phone22: get("Contact Person 2 Phone 2"),
+    email21: get("Contact Person 2 Email 1"),
+    email22: get("Contact Person 2 Email 2"),
+    rawData: rawRow,
+    totalLeads: 0,
+  };
 }
 
 function buildContactCreates(row: ParsedCustomerRow): Prisma.ContactPersonCreateWithoutCompanyInput[] | undefined {
   const contacts: Prisma.ContactPersonCreateWithoutCompanyInput[] = [];
 
-  if (row.contactPerson || row.phone) {
+  if (row.contactPerson || row.primaryPhone) {
     contacts.push({
       name: row.contactPerson ?? row.companyName,
-      designation: row.designation,
+      designation: row.designation1,
       email: row.primaryEmail,
-      mobile: row.phone,
+      mobile: row.primaryPhone,
       isPrimary: true,
     });
   }
 
-  if (row.secondaryContact?.name) {
+  if (row.contactPerson2) {
     contacts.push({
-      name: row.secondaryContact.name,
-      designation: row.secondaryContact.designation,
-      email: row.secondaryContact.email,
-      mobile: row.secondaryContact.phone,
+      name: row.contactPerson2,
+      designation: row.designation2,
+      email: row.email21 ?? row.email22 ?? undefined,
+      mobile: row.phone21 ?? row.phone22 ?? undefined,
       isPrimary: false,
     });
   }
@@ -274,71 +286,72 @@ function buildContactCreates(row: ParsedCustomerRow): Prisma.ContactPersonCreate
   return contacts.length ? contacts : undefined;
 }
 
-function hasMatchingContact(existing: ExistingCustomerRecord, contact: NonNullable<ParsedCustomerRow["secondaryContact"]>) {
-  const nameKey = normalizeCompanyKey(contact.name);
-  const emailKey = contact.email?.toLowerCase();
-  const phoneKey = contact.phone ? normalizePhone(contact.phone) : undefined;
+function buildPhoneCreates(row: ParsedCustomerRow): Prisma.PhoneNumberCreateWithoutCompanyInput[] {
+  return uniquePhones([row.primaryPhone, row.phone2, row.phone3, row.phone11, row.phone12, row.phone21, row.phone22]).map((number, index) => ({
+    label: index === 0 ? "Primary" : `Phone ${index + 1}`,
+    number,
+    whatsapp: false,
+  }));
+}
 
-  return existing.contacts.some((person) => {
-    if (normalizeCompanyKey(person.name) === nameKey) return true;
-    if (emailKey && person.email?.toLowerCase() === emailKey) return true;
-    return Boolean(phoneKey && person.mobile && normalizePhone(person.mobile) === phoneKey);
-  });
+function hasMatchingContact(existing: ExistingCustomerRecord, contact: NonNullable<ParsedCustomerRow["contactPerson2"]>) {
+  const normalizedName = normalizeCompanyKey(contact);
+  const normalizedEmail = normalizedText(contact.toLowerCase());
+  const normalizedPhone = normalizePhone(contact);
+
+  return existing.contacts.some((person) =>
+    normalizeCompanyKey(person.name) === normalizedName
+    || (person.email && person.email.toLowerCase() === normalizedEmail)
+    || (person.mobile && normalizePhone(person.mobile) === normalizedPhone),
+  );
+}
+
+function normalizedText(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function buildContactUpdateMutation(row: ParsedCustomerRow, existing: ExistingCustomerRecord): Prisma.ContactPersonUpdateManyWithoutCompanyNestedInput | undefined {
   const primaryContact = existing.contacts.find((contact) => contact.isPrimary) ?? existing.contacts[0];
-  const secondaryCreates = row.secondaryContact && !hasMatchingContact(existing, row.secondaryContact)
+  const secondaryCreates = row.contactPerson2 && (!primaryContact || !hasMatchingContact(existing, row.contactPerson2))
     ? [{
-        name: row.secondaryContact.name,
-        designation: row.secondaryContact.designation,
-        email: row.secondaryContact.email,
-        mobile: row.secondaryContact.phone,
-        isPrimary: false,
-      } satisfies Prisma.ContactPersonCreateWithoutCompanyInput]
+      name: row.contactPerson2,
+      designation: row.designation2,
+      email: row.email21 ?? row.email22 ?? "",
+      mobile: row.phone21 ?? row.phone22 ?? "",
+      isPrimary: false,
+    } satisfies Prisma.ContactPersonCreateWithoutCompanyInput]
     : undefined;
 
   if (primaryContact) {
     return {
-      update: [
-        {
-          where: { id: primaryContact.id },
-          data: {
-            name: row.contactPerson ?? primaryContact.name,
-            designation: row.designation ?? primaryContact.designation,
-            email: row.primaryEmail ?? primaryContact.email,
-            mobile: row.phone,
-            isPrimary: true,
-          },
+      update: [{
+        where: { id: primaryContact.id },
+        data: {
+          name: row.contactPerson ?? primaryContact.name,
+          designation: row.designation1 ?? primaryContact.designation,
+          email: row.primaryEmail ?? primaryContact.email,
+          mobile: row.primaryPhone,
+          isPrimary: true,
         },
-      ],
+      }],
       ...(secondaryCreates ? { create: secondaryCreates } : {}),
     };
   }
 
-  if (!row.contactPerson && !row.phone) return undefined;
-
   const contactCreates = buildContactCreates(row);
   if (!contactCreates) return undefined;
-
-  return {
-    create: contactCreates,
-  };
+  return { create: contactCreates };
 }
 
 function buildContactCreateMutation(row: ParsedCustomerRow): Prisma.ContactPersonCreateNestedManyWithoutCompanyInput | undefined {
   const contactCreates = buildContactCreates(row);
-  if (!contactCreates) return undefined;
-
-  return {
-    create: contactCreates,
-  };
+  return contactCreates ? { create: contactCreates } : undefined;
 }
 
 function buildPhoneUpdateMutation(row: ParsedCustomerRow, existing: ExistingCustomerRecord): Prisma.PhoneNumberUpdateManyWithoutCompanyNestedInput {
   const primaryPhone = existing.phoneNumbers[0];
-  const existingPhones = new Set(existing.phoneNumbers.map((phone) => normalizePhone(phone.number)).filter(Boolean));
-  const extraCreates = uniquePhones(row.extraPhones)
+  const existingPhones = new Set(existing.phoneNumbers.map((item) => normalizePhone(item.number)).filter(Boolean));
+  const createPhones = uniquePhones([row.phone2, row.phone3, row.phone11, row.phone12, row.phone21, row.phone22])
     .filter((phone) => !existingPhones.has(phone))
     .map((phone, index) => ({
       label: `Phone ${index + 2}`,
@@ -348,33 +361,19 @@ function buildPhoneUpdateMutation(row: ParsedCustomerRow, existing: ExistingCust
 
   if (primaryPhone) {
     return {
-      update: [
-        {
-          where: { id: primaryPhone.id },
-          data: {
-            label: primaryPhone.label || "Primary",
-            number: row.phone,
-            whatsapp: primaryPhone.whatsapp,
-          },
+      update: [{
+        where: { id: primaryPhone.id },
+        data: {
+          label: primaryPhone.label || "Primary",
+          number: row.primaryPhone,
+          whatsapp: primaryPhone.whatsapp,
         },
-      ],
-      ...(extraCreates.length ? { create: extraCreates } : {}),
+      }],
+      ...(createPhones.length ? { create: createPhones } : {}),
     };
   }
 
-  return {
-    create: buildPhoneCreates(row),
-  };
-}
-
-function buildPhoneCreates(row: ParsedCustomerRow): Prisma.PhoneNumberCreateWithoutCompanyInput[] {
-  return uniquePhones([row.phone, ...row.extraPhones]).map((phone, index) => (
-    {
-      label: index === 0 ? "Primary" : `Phone ${index + 1}`,
-      number: phone,
-      whatsapp: false,
-    }
-  ));
+  return { create: buildPhoneCreates(row) };
 }
 
 function buildPhoneCreateMutation(row: ParsedCustomerRow): Prisma.PhoneNumberCreateNestedManyWithoutCompanyInput {
@@ -383,125 +382,164 @@ function buildPhoneCreateMutation(row: ParsedCustomerRow): Prisma.PhoneNumberCre
   };
 }
 
-function buildAddress(street?: string, city?: string) {
-  return [street, city].filter(Boolean).join(", ") || undefined;
-}
-
-function buildNotes(note?: string, leadSource?: string) {
-  return [
-    note,
-    leadSource ? `Lead Source: ${leadSource}` : undefined,
-  ].filter(Boolean).join("\n") || undefined;
-}
-
-function buildSecondaryContact(rawRow: Record<string, unknown>): ParsedCustomerRow["secondaryContact"] {
-  const name = getFirstText(rawRow, ["Contact Person 2 Name"]);
-  if (!name) return undefined;
-
-  return {
-    name,
-    designation: getFirstText(rawRow, ["Designation_1"]),
-    email: getFirstText(rawRow, ["Email 1_1", "Email 2_2"]),
-    phone: getFirstPhone(rawRow, ["Phone 1_1", "Phone 2_2"]),
-  };
-}
-
-function importFormatFromFileName(fileName: string): CustomerImportFormat {
-  return fileName.toLowerCase().endsWith(".csv") ? "CSV" : "EXCEL";
-}
-
 function parseWorkbookRows(buffer: Buffer, fileName: string) {
-  const format = importFormatFromFileName(fileName);
+  const format = fileName.toLowerCase().endsWith(".csv") ? "CSV" : "EXCEL";
   const workbook = format === "CSV"
     ? XLSX.read(buffer.toString("utf8"), { type: "string", cellDates: true })
     : XLSX.read(buffer, { type: "buffer", cellDates: true });
-  const [firstSheetName] = workbook.SheetNames;
 
+  const [firstSheetName] = workbook.SheetNames;
   if (!firstSheetName) {
-    return { rows: [] as ParsedCustomerRow[], failed: [{ row: 1, reason: "Workbook is empty." }] as CustomerImportFailure[] };
+    return {
+      rows: [] as ParsedCustomerRow[],
+      failed: [{ row: 1, reason: "Workbook is empty." }] as CustomerImportFailure[],
+    };
   }
 
   const sheet = workbook.Sheets[firstSheetName];
-  const jsonRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
-    defval: "",
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    header: 1,
     raw: true,
+    defval: "",
   });
 
+  if (!rows.length) {
+    return { rows: [] as ParsedCustomerRow[], failed: [{ row: 1, reason: "No rows found." }] as CustomerImportFailure[] };
+  }
+
+  const headers = rows[0] as unknown[];
   const failed: CustomerImportFailure[] = [];
+  const fileHeaders = headers.map((value) => normalizeHeader(String(value ?? "")));
+  const expectedHeaders = CUSTOMER_TEMPLATE_COLUMNS.map(normalizeHeader);
+
+  for (let index = 0; index < CUSTOMER_IMPORT_TEMPLATE_HEADER_LEN; index += 1) {
+    if (fileHeaders[index] !== expectedHeaders[index]) {
+      failed.push({ row: 1, reason: `Template mismatch at column ${index + 1}. Expected "${CUSTOMER_TEMPLATE_COLUMNS[index]}".` });
+      break;
+    }
+  }
+
+  if (failed.length) {
+    return { rows: [] as ParsedCustomerRow[], failed };
+  }
+
+  const parsed: ParsedCustomerRow[] = [];
   const seenNames = new Set<string>();
-  const rows: ParsedCustomerRow[] = [];
 
-  jsonRows.forEach((rawRow, index) => {
-    const rawData = normalizeRawRow(rawRow);
-    const rowNumber = index + 2;
-    const companyName = getFirstText(rawRow, ["Company Name", "Customer Name", "Customer/Company Name"]);
-    const primaryPhone = getFirstPhone(rawRow, ["Phone", "Primary Phone", "Phone 1"]);
+  for (let index = 1; index < rows.length; index += 1) {
+    const values = rows[index] as Array<unknown>;
+    const rowNumber = index + 1;
+    const rawData: Record<string, unknown> = {};
 
-    if (!companyName) {
-      failed.push({ row: rowNumber, reason: "Company Name is required." });
-      return;
+    for (let column = 0; column < CUSTOMER_IMPORT_TEMPLATE_HEADER_LEN; column += 1) {
+      rawData[CUSTOMER_TEMPLATE_RAW_KEYS[column]] = normalizeJsonValue(values[column]);
     }
 
-    if (!primaryPhone) {
-      failed.push({ row: rowNumber, reason: "Phone or Primary Phone is required." });
-      return;
+    const templateRow = mapTemplateRow(rawData, rowNumber);
+    if (!templateRow.companyName) {
+      failed.push({ row: rowIndexFromTemplate(index), reason: "Company Name is required." });
+      continue;
     }
 
-    const key = normalizeCompanyKey(companyName);
-    if (seenNames.has(key)) {
-      failed.push({ row: rowNumber, reason: "Duplicate company name found in the uploaded file." });
-      return;
+    if (!templateRow.primaryPhone) {
+      failed.push({ row: rowIndexFromTemplate(index), reason: "Primary Phone is required." });
+      continue;
     }
 
-    seenNames.add(key);
+    const existingKey = normalizeCompanyKey(templateRow.companyName);
+    if (seenNames.has(existingKey)) {
+      failed.push({ row: rowIndexFromTemplate(index), reason: "Duplicate company name found in uploaded file." });
+      continue;
+    }
 
-    const streetAddress = getFirstText(rawRow, ["Address"]);
-    const city = getFirstText(rawRow, ["City/Zilla", "City", "Zilla"]);
-    const note = getFirstText(rawRow, ["Note", "Notes"]);
-    const leadSource = getFirstText(rawRow, ["Lead Source"]);
-    const allPhones = uniquePhones([
-      primaryPhone,
-      getFirstPhone(rawRow, ["Phone 2"]),
-      getFirstPhone(rawRow, ["Phone 3"]),
-      getFirstPhone(rawRow, ["Phone 2_1"]),
-      getFirstPhone(rawRow, ["Phone 1_1"]),
-      getFirstPhone(rawRow, ["Phone 2_2"]),
-    ]);
+    seenNames.add(existingKey);
+    parsed.push(templateRow);
+  }
 
-    rows.push({
-      row: rowNumber,
-      companyName,
-      rawData,
-      contactPerson: getFirstText(rawRow, ["Contact Person", "Contact Person 1 Name"]),
-      phone: primaryPhone,
-      extraPhones: allPhones.filter((phone) => phone !== primaryPhone),
-      industry: getFirstText(rawRow, ["Industry"]),
-      address: buildAddress(streetAddress, city),
-      website: getFirstText(rawRow, ["Website"]),
-      notes: buildNotes(note, leadSource),
-      primaryEmail: getFirstText(rawRow, ["Primary Email", "Email 1", "Email 2"]),
-      designation: getFirstText(rawRow, ["Designation"]),
-      secondaryContact: buildSecondaryContact(rawRow),
-      assignedTo: getFirstText(rawRow, ["Assigned", "Assigned To"]),
-      totalLeads: toLeadCount(getFirstCell(rawRow, ["Total Leads"])),
-      lastCommunication: toDate(getFirstCell(rawRow, ["Last Communication", "Last Communication Date"])),
-    });
-  });
+  return { rows: parsed, failed };
+}
 
-  return { rows, failed };
+function readTemplateField(rawData: Record<string, unknown>, candidates: string[], fallback: string | undefined) {
+  for (const key of candidates) {
+    const value = normalizeText(rawData[key]);
+    if (value) return value;
+  }
+  return fallback;
+}
+
+function buildTemplateRaw(company: ExistingCustomerRecord): Record<string, unknown> {
+  const raw = normalizeRawJson((company as { rawData?: Prisma.JsonValue }).rawData);
+  const primaryContact = company.contacts.find((contact) => contact.isPrimary) ?? company.contacts[0];
+  const companyCity = (company as { city?: string | null }).city;
+
+  return {
+    "SL": raw["SL"] ?? "",
+    "Industry": raw["Industry"] ?? company.industry,
+    "Company Name": raw["Company Name"] ?? raw["name"] ?? raw["customer"] ?? company.name,
+    "City/Zilla": raw["City/Zilla"] ?? raw["City / Zilla"] ?? companyCity ?? "",
+    "Address": raw["Address"] ?? company.address ?? "",
+    "Primary Phone": raw["Primary Phone"] ?? company.phone,
+    "Phone 2": raw["Phone 2"] ?? "",
+    "Phone 3": raw["Phone 3"] ?? "",
+    "Primary Email": readTemplateField(raw, ["Primary Email", "Email"], ""),
+    "Email 2": readTemplateField(raw, ["Email 2"], ""),
+    "Website": raw["Website"] ?? company.website ?? "",
+    "Note": raw["Note"] ?? company.notes ?? "",
+    "Contact Person 1 Name": raw["Contact Person 1 Name"] ?? company.contactPerson ?? primaryContact?.name ?? "",
+    "Contact Person 1 Designation": raw["Contact Person 1 Designation"] ?? raw["Designation"] ?? "",
+    "Contact Person 1 Department": raw["Contact Person 1 Department"] ?? raw["Department"] ?? "",
+    "Contact Person 1 Phone 1": raw["Contact Person 1 Phone 1"] ?? "",
+    "Contact Person 1 Phone 2": raw["Contact Person 1 Phone 2"] ?? "",
+    "Contact Person 1 Email 1": raw["Contact Person 1 Email 1"] ?? primaryContact?.email ?? "",
+    "Contact Person 1 Email 2": raw["Contact Person 1 Email 2"] ?? "",
+    "Contact Person 2 Name": raw["Contact Person 2 Name"] ?? "",
+    "Contact Person 2 Designation": raw["Contact Person 2 Designation"] ?? "",
+    "Contact Person 2 Department": raw["Contact Person 2 Department"] ?? "",
+    "Contact Person 2 Phone 1": raw["Contact Person 2 Phone 1"] ?? "",
+    "Contact Person 2 Phone 2": raw["Contact Person 2 Phone 2"] ?? "",
+    "Contact Person 2 Email 1": raw["Contact Person 2 Email 1"] ?? "",
+    "Contact Person 2 Email 2": raw["Contact Person 2 Email 2"] ?? "",
+    "Lead Source": raw["Lead Source"] ?? "",
+  };
+}
+
+function mapExportRow(company: ExistingCustomerRecord) {
+  const baseRaw = normalizeRawJson((company as { rawData?: Prisma.JsonValue }).rawData);
+  const primaryContact = company.contacts.find((contact) => contact.isPrimary) ?? company.contacts[0];
+  const rawData = buildTemplateRaw({
+    ...company,
+    rawData: baseRaw,
+    contacts: company.contacts,
+    phoneNumbers: company.phoneNumbers,
+    communications: company.communications,
+    leads: company.leads,
+  } as ExistingCustomerRecord);
+  return CUSTOMER_TEMPLATE_RAW_KEYS.map((key) => normalizeText(rawData[key]) ?? "");
+}
+
+function readRawValue(raw: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const found = raw[key];
+    if (found === undefined || found === null) continue;
+    const value = normalizeText(found);
+    if (value) return value;
+  }
+  return "";
 }
 
 export async function importCustomersFromFile(buffer: Buffer, fileName: string, actor: CustomerTransferActor): Promise<CustomerImportResult> {
   const prisma = getPrisma();
-  const format = importFormatFromFileName(fileName);
-  const { rows, failed } = parseWorkbookRows(buffer, fileName);
+  const format = fileName.toLowerCase().endsWith(".csv") ? "CSV" : "EXCEL";
+  const parsed = parseWorkbookRows(buffer, fileName);
+  const rows = parsed.rows;
+  const failed = [...parsed.failed];
 
   if (!rows.length) {
     await prisma.importExportLog.create({
       data: {
         type: "IMPORT",
         module: "CUSTOMERS",
-        format,
+        format: format === "CSV" ? "CSV" : "EXCEL",
         requestedById: actor.id,
         fileName,
         status: "FAILED",
@@ -515,40 +553,21 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
     return { success: true, inserted: 0, updated: 0, failed };
   }
 
-  const assignedNames = Array.from(new Set(rows.map((row) => row.assignedTo).filter((value): value is string => Boolean(value)).map(normalizeCompanyKey)));
-  const [assignedUsers, existingCompanies] = await Promise.all([
-    assignedNames.length
-      ? prisma.user.findMany({
-          where: {
-            status: "ACTIVE",
-            role: "MARKETER",
-            OR: assignedNames.map((name) => ({
-              name: { equals: name, mode: "insensitive" },
-            })),
-          },
-          select: { id: true, name: true },
-        })
-      : Promise.resolve([]),
-    prisma.customerCompany.findMany({
-      where: {
-        OR: rows.map((row) => ({
-          name: { equals: row.companyName, mode: "insensitive" },
-        })),
-      },
-      include: {
-        assignedTo: true,
-        contacts: { orderBy: { createdAt: "asc" } },
-        phoneNumbers: { orderBy: { createdAt: "asc" } },
-        leads: true,
-        communications: { orderBy: { communicationAt: "desc" }, take: 1 },
-      },
-    }),
-  ]);
+  const companyNames = rows.map((row) => row.companyName);
+  const existingCompanies = await prisma.customerCompany.findMany({
+    where: {
+      OR: companyNames.map((name) => ({ name: { equals: name, mode: "insensitive" } })),
+    },
+    include: {
+      contacts: { orderBy: { createdAt: "asc" } },
+      phoneNumbers: { orderBy: { createdAt: "asc" } },
+      leads: true,
+      communications: { orderBy: { communicationAt: "desc" }, take: 1 },
+    },
+  });
 
-  const assignedUserByName = new Map(assignedUsers.map((user) => [normalizeCompanyKey(user.name), user]));
   const existingByName = new Map<string, ExistingCustomerRecord>();
   const duplicateExistingKeys = new Set<string>();
-
   for (const company of existingCompanies) {
     const key = normalizeCompanyKey(company.name);
     if (existingByName.has(key)) {
@@ -557,54 +576,65 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
     }
     existingByName.set(key, company);
   }
+
   const operations: Prisma.PrismaPromise<unknown>[] = [];
   let inserted = 0;
   let updated = 0;
+
   const mergeRawData = (existing: Prisma.JsonValue | null | undefined, incoming: Record<string, unknown>) => {
-    const base = normalizeRawJson(existing ?? {});
-    return {
-      ...base,
-      ...incoming,
-    };
+    const base = normalizeRawJson(existing);
+    const merged = { ...base };
+    const templateEntries = Object.entries(incoming);
+
+    for (const [key, value] of templateEntries) {
+      const asString = normalizeText(value);
+      if (asString === undefined) continue;
+      if (key === "SL") continue;
+      merged[key] = asString;
+    }
+
+    for (const alias of ["Contact Person 1 Designation", "Designation"]) {
+      const value = normalizeText(incoming[alias]);
+      if (value) merged["Contact Person 1 Designation"] = value;
+    }
+    for (const alias of ["Contact Person 2 Designation"]) {
+      const value = normalizeText(incoming[alias]);
+      if (value) merged["Contact Person 2 Designation"] = value;
+    }
+
+    return merged;
   };
 
   for (const row of rows) {
     const rowKey = normalizeCompanyKey(row.companyName);
     if (duplicateExistingKeys.has(rowKey)) {
-      failed.push({ row: row.row, reason: `Multiple existing companies match \"${row.companyName}\".` });
+      failed.push({ row: row.row, reason: `Multiple existing records match "${row.companyName}".` });
       continue;
     }
 
-    const assignedUser = row.assignedTo ? assignedUserByName.get(normalizeCompanyKey(row.assignedTo)) : undefined;
-    if (row.assignedTo && actor.role === "ADMIN" && !assignedUser) {
-      failed.push({ row: row.row, reason: `Assigned user \"${row.assignedTo}\" was not found.` });
-      continue;
-    }
-
-    const assignedToId = actor.role === "MARKETER" ? actor.id : assignedUser?.id ?? null;
     const existing = existingByName.get(rowKey);
     const assignedRelation = actor.role === "MARKETER"
       ? { assignedTo: { connect: { id: actor.id } } }
-      : assignedToId
-        ? { assignedTo: { connect: { id: assignedToId } } }
-        : { assignedTo: { disconnect: true } };
+      : undefined;
 
     const mergedRawData = existing
       ? mergeRawData((existing as { rawData?: Prisma.JsonValue }).rawData, row.rawData)
       : row.rawData;
 
-    const data = {
+    const companyPayload = {
       name: row.companyName,
       contactPerson: row.contactPerson ?? null,
-      phone: row.phone,
+      phone: row.primaryPhone,
       industry: row.industry ?? "General",
-      address: row.address ?? null,
-      website: row.website ?? null,
-      notes: row.notes ?? null,
+      phone2: row.phone2 || readRawValue(row.rawData, ["Phone 2"]) || undefined,
+      city: row.city,
+      address: row.address,
+      website: row.website,
+      notes: row.note ? row.note : undefined,
       totalLeads: row.totalLeads,
-      lastCommunication: row.lastCommunication ?? null,
+      lastCommunication: row.lastCommunication ?? undefined,
       rawData: mergedRawData,
-      ...assignedRelation,
+      ...(assignedRelation ? assignedRelation : {}),
     } as Prisma.CustomerCompanyUpdateInput & { rawData?: Prisma.JsonValue };
 
     if (existing) {
@@ -612,7 +642,7 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
       operations.push(prisma.customerCompany.update({
         where: { id: existing.id },
         data: {
-          ...data,
+          ...companyPayload,
           contacts: buildContactUpdateMutation(row, existing),
           phoneNumbers: buildPhoneUpdateMutation(row, existing),
         },
@@ -623,20 +653,10 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
     inserted += 1;
     operations.push(prisma.customerCompany.create({
       data: {
-        name: row.companyName,
-        contactPerson: row.contactPerson,
-        phone: row.phone,
-        industry: row.industry ?? "General",
-        address: row.address,
-        website: row.website,
-        notes: row.notes,
-        totalLeads: row.totalLeads,
-        lastCommunication: row.lastCommunication,
-        rawData: row.rawData,
-        ...(assignedToId ? { assignedTo: { connect: { id: assignedToId } } } : actor.role === "MARKETER" ? { assignedTo: { connect: { id: actor.id } } } : {}),
+        ...companyPayload,
         contacts: buildContactCreateMutation(row),
         phoneNumbers: buildPhoneCreateMutation(row),
-      } as Prisma.CustomerCompanyCreateInput & { rawData?: Prisma.JsonValue },
+      } as any,
     }));
   }
 
@@ -648,7 +668,7 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
     data: {
       type: "IMPORT",
       module: "CUSTOMERS",
-      format,
+      format: format === "CSV" ? "CSV" : "EXCEL",
       requestedById: actor.id,
       fileName,
       status: failed.length ? "FAILED" : "COMPLETED",
@@ -681,22 +701,8 @@ export async function exportCustomers(actor: CustomerTransferActor, format: Cust
     orderBy: { name: "asc" },
   });
 
-  const rows = companies.map(mapExportRow);
-  const headerOrder = new Set<string>();
-  for (const row of rows) {
-    for (const key of Object.keys(row)) {
-      headerOrder.add(key);
-    }
-  }
-  const headers = Array.from(headerOrder);
-  const normalizedRows = rows.map((row) => {
-    const output: Record<string, unknown> = {};
-    for (const header of headers) {
-      output[header] = row[header] ?? "";
-    }
-    return output;
-  });
-  const worksheet = XLSX.utils.json_to_sheet(normalizedRows, { header: headers });
+  const rows = companies.map((company) => mapExportRow(company));
+  const worksheet = XLSX.utils.aoa_to_sheet([[...CUSTOMER_TEMPLATE_COLUMNS], ...rows]);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Customers");
 

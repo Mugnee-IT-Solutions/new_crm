@@ -383,6 +383,7 @@ function TextField({
   defaultValue,
   placeholder,
   required = false,
+  readOnly = false,
   compact = false,
 }: {
   label: string;
@@ -391,12 +392,24 @@ function TextField({
   defaultValue?: string | number;
   placeholder?: string;
   required?: boolean;
+  readOnly?: boolean;
   compact?: boolean;
 }) {
   return (
     <label className={cn("block space-y-1.5", compact && "space-y-1")}>
       <span className={cn("text-sm font-semibold text-slate-700", compact && "text-xs leading-4")}>{label}</span>
-      <Input name={name} type={type} required={required} defaultValue={defaultValue} placeholder={placeholder} className={compact ? "h-9 px-2.5 text-[13px]" : undefined} />
+      <Input
+        name={name}
+        type={type}
+        required={required}
+        defaultValue={defaultValue}
+        placeholder={placeholder}
+        readOnly={readOnly}
+        className={cn(
+          compact ? "h-9 px-2.5 text-[13px]" : undefined,
+          readOnly ? "bg-slate-100 text-slate-500" : undefined,
+        )}
+      />
     </label>
   );
 }
@@ -539,22 +552,53 @@ function readRawValue(raw: Record<string, unknown>, candidates: string[]) {
     const value = raw[key];
     if (value === undefined || value === null) continue;
     const text = String(value).trim();
-    if (text) return text;
+    if (text && text !== "-") return text;
   }
 
+  const normalizeKey = (value: string) => value.trim().replace(/\s+/g, " ").replace(/\s*\/\s*/g, " / ").toLowerCase();
   const normalized = new Map<string, unknown>();
   for (const [rawKey, rawValue] of Object.entries(raw)) {
-    normalized.set(rawKey.toLowerCase(), rawValue);
+    normalized.set(normalizeKey(rawKey), rawValue);
   }
 
   for (const key of candidates) {
-    const found = normalized.get(key.toLowerCase());
+    const found = normalized.get(normalizeKey(key));
     if (found === undefined || found === null) continue;
     const text = String(found).trim();
-    if (text) return text;
+    if (text && text !== "-") return text;
   }
 
   return undefined;
+}
+
+function readTemplateField(raw: Record<string, unknown>, candidates: string[]) {
+  return readRawValue(raw, candidates) || "";
+}
+
+function toDisplayValue(value: unknown) {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim();
+  return normalized && normalized !== "-" ? normalized : "";
+}
+
+function parseTemplateRawData(rawData: CompanyRow["rawData"] | string | unknown) {
+  if (!rawData) return {};
+  if (typeof rawData === "string") {
+    try {
+      const parsed = JSON.parse(rawData) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      return {};
+    }
+  }
+
+  if (typeof rawData === "object" && !Array.isArray(rawData)) {
+    return rawData as Record<string, unknown>;
+  }
+
+  return {};
 }
 
 function Timeline({ rows }: { rows: CrmWorkspace["activities"] }) {
@@ -741,21 +785,128 @@ function FollowUpForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
 function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: () => void }) {
   return (
     <ActionForm action={createCustomerAction} onDone={onDone} submitLabel="Save Customer">
-      <TextField label="Company Name" name="name" />
       <div className="grid gap-3 sm:grid-cols-2">
-        <TextField label="Contact Person" name="contactPerson" />
-        <TextField label="Designation" name="designation" />
-        <TextField label="Email" name="email" type="email" />
-        <TextField label="Phone" name="phone" />
-        <TextField label="WhatsApp" name="whatsapp" />
         <TextField label="Industry" name="industry" />
+        <TextField label="Company Name" name="companyName" required />
+        <TextField label="City / Zilla" name="cityOrZilla" />
+        <TextAreaField label="Address" name="address" />
+        <TextField label="Primary Phone" name="primaryPhone" />
+        <TextField label="Phone 2" name="phone2" />
+        <TextField label="Phone 3" name="phone3" />
+        <TextField label="Primary Email" name="primaryEmail" type="email" />
+        <TextField label="Email 2" name="email2" />
+        <TextField label="Website" name="website" />
+        <TextAreaField label="Note" name="note" />
+        <TextField label="Contact Person 1 Name" name="contactPerson1Name" />
+        <TextField label="Designation" name="designation1" />
+        <TextField label="Department" name="department1" />
+        <TextField label="Phone 1" name="cp1Phone1" />
+        <TextField label="Phone 2" name="cp1Phone2" />
+        <TextField label="Email 1" name="cp1Email1" />
+        <TextField label="Email 2" name="cp1Email2" />
+        <TextField label="Contact Person 2 Name" name="contactPerson2Name" />
+        <TextField label="Designation" name="designation2" />
+        <TextField label="Department" name="department2" />
+        <TextField label="Phone 1" name="cp2Phone1" />
+        <TextField label="Phone 2" name="cp2Phone2" />
+        <TextField label="Email 1" name="cp2Email1" />
+        <TextField label="Email 2" name="cp2Email2" />
+        <TextField label="Lead Source" name="leadSource" />
       </div>
       <SelectBox label="Assigned Marketer" name="assignedToId"><EntityOptions workspace={workspace} type="marketers" /></SelectBox>
-      <TextField label="Website" name="website" />
-      <TextAreaField label="Address" name="address" />
-      <TextAreaField label="Notes" name="notes" />
     </ActionForm>
   );
+}
+
+type CustomerTemplateEditValues = {
+  industry: string;
+  companyName: string;
+  cityOrZilla: string;
+  address: string;
+  primaryPhone: string;
+  phone2: string;
+  phone3: string;
+  primaryEmail: string;
+  email2: string;
+  website: string;
+  note: string;
+  contactPerson1Name: string;
+  designation1: string;
+  department1: string;
+  cp1Phone1: string;
+  cp1Phone2: string;
+  cp1Email1: string;
+  cp1Email2: string;
+  contactPerson2Name: string;
+  designation2: string;
+  department2: string;
+  cp2Phone1: string;
+  cp2Phone2: string;
+  cp2Email1: string;
+  cp2Email2: string;
+  leadSource: string;
+};
+
+const EMPTY_CUSTOMER_TEMPLATE_VALUES: CustomerTemplateEditValues = {
+  industry: "",
+  companyName: "",
+  cityOrZilla: "",
+  address: "",
+  primaryPhone: "",
+  phone2: "",
+  phone3: "",
+  primaryEmail: "",
+  email2: "",
+  website: "",
+  note: "",
+  contactPerson1Name: "",
+  designation1: "",
+  department1: "",
+  cp1Phone1: "",
+  cp1Phone2: "",
+  cp1Email1: "",
+  cp1Email2: "",
+  contactPerson2Name: "",
+  designation2: "",
+  department2: "",
+  cp2Phone1: "",
+  cp2Phone2: "",
+  cp2Email1: "",
+  cp2Email2: "",
+  leadSource: "",
+};
+
+function buildCustomerTemplateValues(customer: CompanyRow): CustomerTemplateEditValues {
+  const raw = parseTemplateRawData(customer.rawData) as Record<string, unknown>;
+
+  return {
+    industry: toDisplayValue(readTemplateField(raw, ["Industry", "Business Type", "Sector"])) || toDisplayValue(customer.industry),
+    companyName: customer.name || "",
+    cityOrZilla: toDisplayValue(readTemplateField(raw, ["City / Zilla", "City/Zilla", "City", "Zilla"])) || toDisplayValue(customer.cityOrZilla),
+    address: toDisplayValue(readTemplateField(raw, ["Address", "Company Address"])) || toDisplayValue(customer.address),
+    primaryPhone: toDisplayValue(readTemplateField(raw, ["Primary Phone", "Phone", "Phone 1", "Main Phone", "Mobile"])) || toDisplayValue(customer.phone),
+    phone2: toDisplayValue(readTemplateField(raw, ["Phone 2", "Secondary Phone", "Phone 2 ", "Second Phone"])) || toDisplayValue(customer.phone2),
+    phone3: toDisplayValue(readTemplateField(raw, ["Phone 3", "Phone 3 ", "Tertiary Phone"])),
+    primaryEmail: toDisplayValue(readTemplateField(raw, ["Primary Email", "Email", "Email 1", "Primary Email Address", "Email Address"])) || toDisplayValue(customer.email),
+    email2: toDisplayValue(readTemplateField(raw, ["Email 2", "Secondary Email", "Email 2 Address"])),
+    website: toDisplayValue(readTemplateField(raw, ["Website", "Web", "Web Site"])) || toDisplayValue(customer.website),
+    note: toDisplayValue(readTemplateField(raw, ["Note", "Notes", "Remarks"])) || toDisplayValue(customer.notes),
+    contactPerson1Name: toDisplayValue(readTemplateField(raw, ["Contact Person 1 Name", "Contact Person Name", "Primary Contact", "Contact Person"])) || toDisplayValue(customer.contactPerson),
+    designation1: toDisplayValue(readTemplateField(raw, ["Contact Person 1 Designation", "Designation", "Contact Person Designation", "Designation 1"])),
+    department1: toDisplayValue(readTemplateField(raw, ["Contact Person 1 Department", "Department", "Department 1", "Contact Person Department"])),
+    cp1Phone1: toDisplayValue(readTemplateField(raw, ["Contact Person 1 Phone 1", "Contact Person 1 Phone", "Contact Person 1 Mobile", "Contact Person 1 Tel", "Phone 1"])),
+    cp1Phone2: toDisplayValue(readTemplateField(raw, ["Contact Person 1 Phone 2", "Contact Person 1 Mobile 2", "Phone 2"])),
+    cp1Email1: toDisplayValue(readTemplateField(raw, ["Contact Person 1 Email 1", "Contact Person 1 Email", "Email 1", "Email"])),
+    cp1Email2: toDisplayValue(readTemplateField(raw, ["Contact Person 1 Email 2", "Contact Person 1 Mail", "Email 2"])),
+    contactPerson2Name: toDisplayValue(readTemplateField(raw, ["Contact Person 2 Name", "Contact Person 2"])),
+    designation2: toDisplayValue(readTemplateField(raw, ["Contact Person 2 Designation", "Designation 2"])),
+    department2: toDisplayValue(readTemplateField(raw, ["Contact Person 2 Department", "Department 2"])),
+    cp2Phone1: toDisplayValue(readTemplateField(raw, ["Contact Person 2 Phone 1", "Contact Person 2 Phone", "Contact Person 2 Mobile", "Phone 1 (2)", "Secondary Phone 1"])),
+    cp2Phone2: toDisplayValue(readTemplateField(raw, ["Contact Person 2 Phone 2", "Secondary Phone 2", "Phone 2 (2)"])),
+    cp2Email1: toDisplayValue(readTemplateField(raw, ["Contact Person 2 Email 1", "Contact Person 2 Email", "Email 1 (2)", "Secondary Email 1"])),
+    cp2Email2: toDisplayValue(readTemplateField(raw, ["Contact Person 2 Email 2", "Contact Person 2 Mail", "Email 2 (2)", "Secondary Email 2"])),
+    leadSource: toDisplayValue(readTemplateField(raw, ["Lead Source", "Source"])),
+  };
 }
 
 function CustomerRowActions({
@@ -851,30 +1002,30 @@ function CustomerEditModal({
 }: {
   customer: CompanyRow | null;
   open: boolean;
-  onDone: (customer: CompanyRow) => void;
+  onDone: (customer: CompanyRow | null) => void;
   onClose: () => void;
 }) {
-  const [companyName, setCompanyName] = React.useState("");
-  const [contactPerson, setContactPerson] = React.useState("");
-  const [phone, setPhone] = React.useState("");
-  const [industry, setIndustry] = React.useState("");
+  const [values, setValues] = React.useState<CustomerTemplateEditValues>(EMPTY_CUSTOMER_TEMPLATE_VALUES);
   const [pending, setPending] = React.useState(false);
   const [message, setMessage] = React.useState("");
+  const [pendingMessage, setPendingMessage] = React.useState("");
 
   React.useEffect(() => {
-    setCompanyName(customer?.name ?? "");
-    setContactPerson(customer?.contactPerson ?? "");
-    setPhone(customer?.phone ?? "");
-    setIndustry(customer?.industry ?? "");
+    setValues(customer ? buildCustomerTemplateValues(customer) : EMPTY_CUSTOMER_TEMPLATE_VALUES);
     setMessage("");
+    setPendingMessage("");
     setPending(false);
   }, [customer]);
+
+  const updateField = React.useCallback((field: keyof CustomerTemplateEditValues, nextValue: string) => {
+    setValues((state) => ({ ...state, [field]: nextValue }));
+  }, []);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!customer) return;
 
-    const normalizedName = companyName.trim();
+    const normalizedName = values.companyName.trim();
     if (!normalizedName) {
       setMessage("Company Name is required.");
       return;
@@ -882,6 +1033,7 @@ function CustomerEditModal({
 
     setPending(true);
     setMessage("");
+    setPendingMessage("Saving...");
 
     try {
       const response = await fetch(`/api/customers/${customer.id}`, {
@@ -891,9 +1043,32 @@ function CustomerEditModal({
         },
         body: JSON.stringify({
           companyName: normalizedName,
-          contactPerson: contactPerson.trim(),
-          phone: phone.trim(),
-          industry: industry.trim(),
+          industry: values.industry.trim(),
+          cityOrZilla: values.cityOrZilla.trim(),
+          address: values.address.trim(),
+          primaryPhone: values.primaryPhone.trim(),
+          phone2: values.phone2.trim(),
+          phone3: values.phone3.trim(),
+          primaryEmail: values.primaryEmail.trim(),
+          email2: values.email2.trim(),
+          website: values.website.trim(),
+          note: values.note.trim(),
+          contactPerson: values.contactPerson1Name.trim(),
+          contactPerson1Name: values.contactPerson1Name.trim(),
+          designation1: values.designation1.trim(),
+          department1: values.department1.trim(),
+          cp1Phone1: values.cp1Phone1.trim(),
+          cp1Phone2: values.cp1Phone2.trim(),
+          cp1Email1: values.cp1Email1.trim(),
+          cp1Email2: values.cp1Email2.trim(),
+          contactPerson2Name: values.contactPerson2Name.trim(),
+          designation2: values.designation2.trim(),
+          department2: values.department2.trim(),
+          cp2Phone1: values.cp2Phone1.trim(),
+          cp2Phone2: values.cp2Phone2.trim(),
+          cp2Email1: values.cp2Email1.trim(),
+          cp2Email2: values.cp2Email2.trim(),
+          leadSource: values.leadSource.trim(),
         }),
       });
 
@@ -905,23 +1080,13 @@ function CustomerEditModal({
       const payload = result.customer as Partial<CompanyRow> | undefined;
       onDone({
         ...customer,
-        name: typeof payload?.name === "string" && payload.name.trim() ? payload.name : normalizedName,
-        contactPerson: typeof payload?.contactPerson === "string" ? payload.contactPerson : contactPerson.trim(),
-        phone: typeof payload?.phone === "string" ? payload.phone : phone.trim(),
-        industry: typeof payload?.industry === "string" ? payload.industry : industry.trim(),
-        assignedTo: customer.assignedTo,
-        status: customer.status,
-        totalLeads: customer.totalLeads,
-        lastCommunication: customer.lastCommunication,
-        email: customer.email,
-        whatsapp: customer.whatsapp,
-        address: customer.address,
-        website: customer.website,
-        notes: customer.notes,
+        ...payload,
       });
+      setPendingMessage("");
       onClose();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Customer update failed.");
+      setPendingMessage("");
     } finally {
       setPending(false);
     }
@@ -932,46 +1097,246 @@ function CustomerEditModal({
   return (
     <FormModal open={open} title="Edit Customer" onClose={onClose} panelClassName="max-w-xl">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <label className="block space-y-1.5">
-          <span className="text-xs font-semibold text-slate-700">Company Name</span>
-          <Input
-            name="companyName"
-            required
-            value={companyName}
-            onChange={(event) => setCompanyName(event.target.value)}
-            className="h-10 px-3 text-[13px]"
-          />
-        </label>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block space-y-1.5">
-            <span className="text-xs font-semibold text-slate-700">Contact Person</span>
+            <span className="text-xs font-semibold text-slate-700">Industry</span>
             <Input
-              name="contactPerson"
-              value={contactPerson}
-              onChange={(event) => setContactPerson(event.target.value)}
+              name="industry"
+              value={values.industry}
+              onChange={(event) => updateField("industry", event.target.value)}
               className="h-10 px-3 text-[13px]"
             />
           </label>
           <label className="block space-y-1.5">
-            <span className="text-xs font-semibold text-slate-700">Phone</span>
+            <span className="text-xs font-semibold text-slate-700">Company Name</span>
             <Input
-              name="phone"
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
+              name="companyName"
+              required
+              value={values.companyName}
+              onChange={(event) => updateField("companyName", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">City / Zilla</span>
+            <Input
+              name="cityOrZilla"
+              value={values.cityOrZilla}
+              onChange={(event) => updateField("cityOrZilla", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Address</span>
+            <Input
+              name="address"
+              value={values.address}
+              onChange={(event) => updateField("address", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Primary Phone</span>
+            <Input
+              name="primaryPhone"
+              value={values.primaryPhone}
+              onChange={(event) => updateField("primaryPhone", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Phone 2</span>
+            <Input
+              name="phone2"
+              value={values.phone2}
+              onChange={(event) => updateField("phone2", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Phone 3</span>
+            <Input
+              name="phone3"
+              value={values.phone3}
+              onChange={(event) => updateField("phone3", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Primary Email</span>
+            <Input
+              type="email"
+              name="primaryEmail"
+              value={values.primaryEmail}
+              onChange={(event) => updateField("primaryEmail", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Email 2</span>
+            <Input
+              name="email2"
+              value={values.email2}
+              onChange={(event) => updateField("email2", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Website</span>
+            <Input
+              name="website"
+              value={values.website}
+              onChange={(event) => updateField("website", event.target.value)}
               className="h-10 px-3 text-[13px]"
             />
           </label>
           <label className="block space-y-1.5 sm:col-span-2">
-            <span className="text-xs font-semibold text-slate-700">Industry</span>
+            <span className="text-xs font-semibold text-slate-700">Note</span>
+            <textarea
+              name="note"
+              value={values.note}
+              onChange={(event) => updateField("note", event.target.value)}
+              className="min-h-16 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Contact Person 1 Name</span>
             <Input
-              name="industry"
-              value={industry}
-              onChange={(event) => setIndustry(event.target.value)}
+              name="contactPerson1Name"
+              value={values.contactPerson1Name}
+              onChange={(event) => updateField("contactPerson1Name", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Designation</span>
+            <Input
+              name="designation1"
+              value={values.designation1}
+              onChange={(event) => updateField("designation1", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Department</span>
+            <Input
+              name="department1"
+              value={values.department1}
+              onChange={(event) => updateField("department1", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Phone 1</span>
+            <Input
+              name="cp1Phone1"
+              value={values.cp1Phone1}
+              onChange={(event) => updateField("cp1Phone1", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Phone 2</span>
+            <Input
+              name="cp1Phone2"
+              value={values.cp1Phone2}
+              onChange={(event) => updateField("cp1Phone2", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Email 1</span>
+            <Input
+              name="cp1Email1"
+              value={values.cp1Email1}
+              onChange={(event) => updateField("cp1Email1", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Email 2</span>
+            <Input
+              name="cp1Email2"
+              value={values.cp1Email2}
+              onChange={(event) => updateField("cp1Email2", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5 sm:col-span-2">
+            <span className="text-xs font-semibold text-slate-700">Contact Person 2 Name</span>
+            <Input
+              name="contactPerson2Name"
+              value={values.contactPerson2Name}
+              onChange={(event) => updateField("contactPerson2Name", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Designation</span>
+            <Input
+              name="designation2"
+              value={values.designation2}
+              onChange={(event) => updateField("designation2", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Department</span>
+            <Input
+              name="department2"
+              value={values.department2}
+              onChange={(event) => updateField("department2", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Phone 1</span>
+            <Input
+              name="cp2Phone1"
+              value={values.cp2Phone1}
+              onChange={(event) => updateField("cp2Phone1", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Phone 2</span>
+            <Input
+              name="cp2Phone2"
+              value={values.cp2Phone2}
+              onChange={(event) => updateField("cp2Phone2", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Email 1</span>
+            <Input
+              name="cp2Email1"
+              value={values.cp2Email1}
+              onChange={(event) => updateField("cp2Email1", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Email 2</span>
+            <Input
+              name="cp2Email2"
+              value={values.cp2Email2}
+              onChange={(event) => updateField("cp2Email2", event.target.value)}
+              className="h-10 px-3 text-[13px]"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold text-slate-700">Lead Source</span>
+            <Input
+              name="leadSource"
+              value={values.leadSource}
+              onChange={(event) => updateField("leadSource", event.target.value)}
               className="h-10 px-3 text-[13px]"
             />
           </label>
         </div>
         {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
+        {pendingMessage ? <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700">{pendingMessage}</p> : null}
         <div className="flex flex-wrap gap-2">
           <Button type="submit" disabled={pending}>
             {pending ? "Saving..." : "Save Changes"}
@@ -1163,6 +1528,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   const [exportingFormat, setExportingFormat] = React.useState<"xlsx" | "csv" | null>(null);
   const [exportMenuOpen, setExportMenuOpen] = React.useState(false);
   const [feedback, setFeedback] = React.useState<{ type: "success" | "error"; title: string; message: string } | null>(null);
+
   const handleViewCustomer = React.useCallback((customer: CompanyRow) => {
     setViewCustomer(customer);
   }, []);
@@ -1181,11 +1547,12 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
       { accessorKey: "name", header: "Company Name", cell: ({ row }) => <EntityLink href={`/customers/${row.original.id}`} className="font-bold">{row.original.name}</EntityLink> },
       { accessorKey: "contactPerson", header: "Contact Person" },
       { accessorKey: "phone", header: "Primary Phone" },
+      { accessorKey: "phone2", header: "Phone 2" },
       { accessorKey: "email", header: "Primary Email" },
+      { accessorKey: "cityOrZilla", header: "City / Zilla" },
+      { accessorKey: "address", header: "Address" },
       { accessorKey: "industry", header: "Industry" },
       { accessorKey: "assignedTo", header: "Assigned" },
-      { accessorKey: "totalLeads", header: "Total Leads" },
-      { accessorKey: "lastCommunication", header: "Last Communication" },
       {
         id: "Action",
         header: "Action",
@@ -1352,9 +1719,12 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
     }
   };
 
-  const handleEditDone = (updatedCustomer: CompanyRow) => {
-    setCustomers((prev) => prev.map((customer) => customer.id === updatedCustomer.id ? updatedCustomer : customer));
+  const handleEditDone = (updatedCustomer: CompanyRow | null) => {
     setEditCustomer(null);
+    router.refresh();
+    if (updatedCustomer?.id) {
+      setCustomers((prev) => prev.map((customer) => customer.id === updatedCustomer.id ? updatedCustomer : customer));
+    }
     setFeedback({
       type: "success",
       title: "Customer updated",
@@ -1536,7 +1906,7 @@ export function CustomerProfilePage({ role, workspace, customer, history }: { ro
                       <InfoLine label="SL" value={readRawValue(rawData, ["SL", "Serial", "Serial Number"]) || "-"} />
                       <InfoLine label="Company Name" value={active.name} />
                       <InfoLine label="Industry" value={readRawValue(rawData, ["Industry"]) || active.industry || "-"} />
-                      <InfoLine label="City/Zilla" value={readRawValue(rawData, ["City/Zilla", "City", "Zilla"]) || "-"} />
+                      <InfoLine label="City/Zilla" value={readRawValue(rawData, ["City / Zilla", "City/Zilla", "City", "Zilla"]) || "-"} />
                       <InfoLine label="Address" value={readRawValue(rawData, ["Address"]) || active.address || "-"} />
                       <InfoLine label="Website" value={readRawValue(rawData, ["Website"]) || active.website || "-"} />
                       <InfoLine label="Note" value={readRawValue(rawData, ["Note", "Notes"]) || active.notes || "-"} />

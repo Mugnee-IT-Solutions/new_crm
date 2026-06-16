@@ -191,6 +191,8 @@ model CustomerCompany {
   industry       String
   contactPerson  String?
   phone          String             @default("")
+  phone2         String?
+  city           String?
   totalLeads     Int                @default(0)
   lastCommunication DateTime?
   address        String?
