@@ -422,29 +422,93 @@ const taskInclude = {
   assignedTo: true,
   assignedBy: true,
   completedBy: true,
-  company: true,
-  lead: true,
-  product: true,
+  company: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+  lead: {
+    select: {
+      id: true,
+      title: true,
+      customerName: true,
+    },
+  },
+  product: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
 } satisfies Prisma.Prisma.TaskInclude;
 
 type TaskRecord = Prisma.Prisma.TaskGetPayload<{ include: typeof taskInclude }>;
 
 const followUpInclude = {
   company: {
-    include: {
-      contacts: true,
-      phoneNumbers: true,
-      communications: { orderBy: { communicationAt: "desc" }, take: 1 },
+    select: {
+      id: true,
+      name: true,
+      contacts: {
+        select: {
+          id: true,
+          name: true,
+          mobile: true,
+          whatsapp: true,
+          email: true,
+          isPrimary: true,
+        },
+      },
+      phoneNumbers: {
+        select: {
+          id: true,
+          number: true,
+          whatsapp: true,
+        },
+      },
+      communications: {
+        select: {
+          id: true,
+          method: true,
+          communicationAt: true,
+        },
+        orderBy: { communicationAt: "desc" },
+        take: 1,
+      },
     },
   },
   lead: {
-    include: {
-      communications: { orderBy: { communicationAt: "desc" }, take: 1 },
+    select: {
+      id: true,
+      title: true,
+      customerName: true,
+      communications: {
+        select: {
+          id: true,
+          method: true,
+          communicationAt: true,
+        },
+        orderBy: { communicationAt: "desc" },
+        take: 1,
+      },
     },
   },
-  assignedTo: true,
+  assignedTo: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
   timelineItems: {
-    include: { user: true },
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
     orderBy: { createdAt: "asc" },
     take: 1,
   },
@@ -454,38 +518,123 @@ type FollowUpRecord = Prisma.Prisma.FollowUpGetPayload<{ include: typeof followU
 
 const communicationHistoryInclude = {
   user: true,
-  company: true,
-  lead: true,
+  lead: {
+    select: {
+      id: true,
+      title: true,
+    },
+  },
   task: true,
 } satisfies Prisma.Prisma.CommunicationLogInclude;
 
 type CommunicationHistoryRecord = Prisma.Prisma.CommunicationLogGetPayload<{ include: typeof communicationHistoryInclude }>;
 
-type ExistingCustomerRecord = Prisma.Prisma.CustomerCompanyGetPayload<{
-  include: {
-    assignedTo: true;
-    contacts: true;
-    phoneNumbers: true;
-    leads: true;
-    communications: true;
-  };
-}>;
+const workspaceCompanySelect = {
+  id: true,
+  name: true,
+  industry: true,
+  contactPerson: true,
+  phone: true,
+  totalLeads: true,
+  lastCommunication: true,
+  city: true,
+  address: true,
+  website: true,
+  notes: true,
+  status: true,
+  rawData: true,
+  assignedTo: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+  contacts: {
+    select: {
+      id: true,
+      name: true,
+      designation: true,
+      mobile: true,
+      whatsapp: true,
+      email: true,
+      isPrimary: true,
+    },
+  },
+  phoneNumbers: {
+    select: {
+      id: true,
+      label: true,
+      number: true,
+      whatsapp: true,
+    },
+  },
+  leads: {
+    select: {
+      id: true,
+      title: true,
+    },
+  },
+  communications: {
+    select: {
+      id: true,
+      createdAt: true,
+      leadId: true,
+      method: true,
+    },
+    orderBy: { createdAt: "desc" },
+    take: 1,
+  },
+  assignedToId: true,
+} satisfies Prisma.Prisma.CustomerCompanySelect;
+
+type ExistingCustomerRecord = Prisma.Prisma.CustomerCompanyGetPayload<{ select: typeof workspaceCompanySelect }>;
 
 const productInclude = {
   interests: {
     include: {
       user: true,
       company: {
-        include: {
-          assignedTo: true,
-          communications: { include: { user: true }, orderBy: { communicationAt: "desc" } },
+        select: {
+          id: true,
+          name: true,
+          assignedToId: true,
+          assignedTo: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+          communications: {
+            select: {
+              id: true,
+              leadId: true,
+              method: true,
+              communicationAt: true,
+              userId: true,
+            },
+            orderBy: { communicationAt: "desc" },
+          },
         },
       },
       lead: {
         include: {
           assignedTo: true,
-          company: true,
-          communications: { include: { user: true }, orderBy: { communicationAt: "desc" } },
+          company: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+          communications: {
+            select: {
+              id: true,
+              leadId: true,
+              method: true,
+              communicationAt: true,
+              userId: true,
+            },
+            orderBy: { communicationAt: "desc" },
+          },
           followUps: true,
           quotations: true,
         },
@@ -496,11 +645,31 @@ const productInclude = {
     include: {
       assignedTo: true,
       company: {
-        include: {
-          communications: { include: { user: true }, orderBy: { communicationAt: "desc" } },
+        select: {
+          id: true,
+          name: true,
+          communications: {
+            select: {
+              id: true,
+              leadId: true,
+              method: true,
+              communicationAt: true,
+              userId: true,
+            },
+            orderBy: { communicationAt: "desc" },
+          },
         },
       },
-      communications: { include: { user: true }, orderBy: { communicationAt: "desc" } },
+      communications: {
+        select: {
+          id: true,
+          leadId: true,
+          method: true,
+          communicationAt: true,
+          userId: true,
+        },
+        orderBy: { communicationAt: "desc" },
+      },
       followUps: true,
       quotations: { include: { items: true, createdBy: true } },
     },
@@ -509,7 +678,7 @@ const productInclude = {
     include: {
       quotation: {
         include: {
-          company: true,
+          company: { select: { id: true, name: true } },
           createdBy: true,
           lead: { include: { assignedTo: true, createdBy: true } },
         },
@@ -679,11 +848,10 @@ function readRawCsvField(raw: Record<string, unknown>, keys: string[]) {
   return value === undefined ? "-" : value;
 }
 
-function mapCompanyRow(company: ExistingCustomerRecord | Prisma.Prisma.CustomerCompanyGetPayload<{ include: { assignedTo: true; contacts: true; phoneNumbers: true; leads: true; communications: true; } }>): CompanyRow {
+function mapCompanyRow(company: ExistingCustomerRecord): CompanyRow {
   const primaryContact = company.contacts.find((contact) => contact.isPrimary) ?? company.contacts[0];
   const whatsapp = company.phoneNumbers.find((phone) => phone.whatsapp);
   const regular = company.phoneNumbers[0];
-  const companyPhone2 = (company as { phone2?: string | null }).phone2;
   const companyCity = (company as { city?: string | null }).city;
   const raw = normalizeRawJson((company as { rawData?: Prisma.Prisma.JsonValue }).rawData ?? {});
   const rawPrimaryEmail = readRawField(raw, ["Primary Email", "Email 1", "Email"]);
@@ -700,7 +868,7 @@ function mapCompanyRow(company: ExistingCustomerRecord | Prisma.Prisma.CustomerC
     contactPerson: company.contactPerson ?? primaryContact?.name ?? "-",
     email: primaryContact?.email ?? rawPrimaryEmail ?? "-",
     phone: company.phone || primaryContact?.mobile || regular?.number || rawPrimaryPhone || "-",
-    phone2: companyPhone2 || rawPhone2 || (company.phoneNumbers[1]?.number ? company.phoneNumbers[1].number : "-"),
+    phone2: rawPhone2 || (company.phoneNumbers[1]?.number ? company.phoneNumbers[1].number : "-"),
     whatsapp: primaryContact?.whatsapp ?? whatsapp?.number ?? "-",
     cityOrZilla: companyCity || rawCity || addressCity || "-",
     industry: company.industry || rawIndustry || "General",
@@ -1190,7 +1358,22 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     prisma.lead.findMany({
       where: leadWhere,
       include: {
-        company: { include: { contacts: true } },
+        company: {
+          select: {
+            id: true,
+            name: true,
+            contacts: {
+              select: {
+                id: true,
+                name: true,
+                mobile: true,
+                email: true,
+                isPrimary: true,
+                whatsapp: true,
+              },
+            },
+          },
+        },
         interestedProduct: true,
         assignedTo: true,
         communications: true,
@@ -1202,13 +1385,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     }),
     prisma.customerCompany.findMany({
       where: companyWhere,
-      include: {
-        assignedTo: true,
-        contacts: true,
-        phoneNumbers: true,
-        leads: true,
-        communications: { orderBy: { createdAt: "desc" }, take: 1 },
-      },
+      select: workspaceCompanySelect,
       orderBy: { updatedAt: "desc" },
       take: 200,
     }),
@@ -1220,7 +1397,12 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     }),
     prisma.todayPlan.findMany({
       where: planWhere,
-      include: { user: true, company: true, lead: true, product: true },
+      include: {
+        user: { select: { id: true, name: true } },
+        company: { select: { id: true, name: true } },
+        lead: { select: { id: true, title: true, customerName: true } },
+        product: { select: { id: true, name: true } },
+      },
       orderBy: { plannedAt: "asc" },
       take: 200,
     }),
@@ -1815,13 +1997,7 @@ export async function getCustomerDetail(id: string, role: Role, user: ShellUser)
   const record = scopeCustomer
     ? await prisma.customerCompany.findUnique({
       where: { id: scopeCustomer.id },
-      include: {
-        assignedTo: true,
-        contacts: { orderBy: { createdAt: "asc" } },
-        phoneNumbers: { orderBy: { createdAt: "asc" } },
-        leads: true,
-        communications: { orderBy: { communicationAt: "desc" }, take: 1 },
-      },
+      select: workspaceCompanySelect,
     })
     : await prisma.customerCompany.findFirst({
       where: {
@@ -1830,13 +2006,7 @@ export async function getCustomerDetail(id: string, role: Role, user: ShellUser)
           { name: { equals: lookup, mode: "insensitive" } },
         ],
       },
-      include: {
-        assignedTo: true,
-        contacts: { orderBy: { createdAt: "asc" } },
-        phoneNumbers: { orderBy: { createdAt: "asc" } },
-        leads: true,
-        communications: { orderBy: { communicationAt: "desc" }, take: 1 },
-      },
+      select: workspaceCompanySelect,
     });
 
   const scopedCustomer = record && allowedCustomerIds.has(record.id) ? mapCompanyRow(record) : undefined;
