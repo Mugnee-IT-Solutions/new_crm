@@ -13,7 +13,7 @@ type SidebarMenuItem = (typeof sidebarMenus)[Role][number];
 
 const sidebarGroupOrder = [
   { title: "", labels: ["Dashboard"] },
-  { title: "CORE WORKFLOW", labels: ["Today's Plan", "Tasks", "Follow-ups"] },
+  { title: "CORE WORKFLOW", labels: ["Today's Task", "Follow-ups"] },
   { title: "SALES CRM", labels: ["Products", "Customers", "Leads"] },
   { title: "COMMUNICATION", labels: ["Communication"] },
   { title: "TEAM", labels: ["Team"] },
@@ -73,8 +73,7 @@ export function AppSidebar({
     if (label === "Follow-ups") return counts.followUps;
     if (label === "Leads") return counts.leads;
     if (label === "Customers" || label === "Customers/Companies") return counts.customers;
-    if (label === "Tasks") return counts.tasks;
-    if (label === "Today's Plan") return counts.todaysPlan;
+    if (label === "Today's Task" || label === "Tasks") return counts.tasks;
     if (label === "Products" || label === "Products/Services") return counts.products;
     if (label === "Rewards") return counts.rewards;
     return undefined;

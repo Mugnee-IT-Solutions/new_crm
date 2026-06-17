@@ -44,7 +44,7 @@ export function isActiveRoute(pathname: string, href: string) {
 export const sidebarMenus: Record<Role, { label: string; href: string; icon: typeof LayoutDashboard }[]> = {
   ADMIN: [
     { label: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
-    { label: "Tasks", href: "/admin/tasks", icon: ClipboardCheck },
+    { label: "Today's Task", href: "/admin/tasks", icon: ClipboardCheck },
     { label: "Follow-ups", href: "/admin/follow-ups", icon: CalendarClock },
     { label: "Products", href: "/admin/products", icon: Package },
     { label: "Customers", href: "/admin/customers", icon: BriefcaseBusiness },
@@ -57,7 +57,7 @@ export const sidebarMenus: Record<Role, { label: string; href: string; icon: typ
   ],
   SUPERVISOR: [
     { label: "Dashboard", href: "/supervisor/dashboard", icon: LayoutDashboard },
-    { label: "Tasks", href: "/supervisor/tasks", icon: ClipboardCheck },
+    { label: "Today's Task", href: "/supervisor/tasks", icon: ClipboardCheck },
     { label: "Follow-ups", href: "/supervisor/follow-ups", icon: CalendarClock },
     { label: "Products", href: "/supervisor/products", icon: Package },
     { label: "Customers", href: "/supervisor/customers", icon: BriefcaseBusiness },
@@ -69,8 +69,7 @@ export const sidebarMenus: Record<Role, { label: string; href: string; icon: typ
   ],
   MARKETER: [
     { label: "Dashboard", href: "/marketer/dashboard", icon: LayoutDashboard },
-    { label: "Today's Plan", href: "/marketer/todays-plan", icon: CalendarClock },
-    { label: "Tasks", href: "/marketer/tasks", icon: ClipboardCheck },
+    { label: "Today's Task", href: "/marketer/tasks", icon: ClipboardCheck },
     { label: "Follow-ups", href: "/marketer/follow-ups", icon: PhoneCall },
     { label: "Products", href: "/marketer/products", icon: Package },
     { label: "Customers", href: "/marketer/customers", icon: BriefcaseBusiness },
