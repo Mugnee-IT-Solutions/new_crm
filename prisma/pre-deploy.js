@@ -17,6 +17,15 @@ function readMigrateStatus() {
   }
 }
 
+if (!process.env.DATABASE_URL) {
+  console.error(
+    "DATABASE_URL is not set. Add your production Postgres connection string in Vercel Project Settings → Environment Variables.",
+  );
+  process.exit(1);
+}
+
+run("npx prisma generate");
+
 const failedMigration = "20260617000000_customer_phone2_city";
 const status = readMigrateStatus();
 
