@@ -1,8 +1,14 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { PrismaClient } = require("@prisma/client");
 const { PrismaPg } = require("@prisma/adapter-pg");
+const { syncDatabaseUrlEnv } = require("./database-url");
 
-const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+const connectionString = syncDatabaseUrlEnv();
+if (!connectionString) {
+  throw new Error("DATABASE_URL is required for seeding.");
+}
+
+const adapter = new PrismaPg({ connectionString });
 const prisma = new PrismaClient({ adapter });
 
 const roles = {

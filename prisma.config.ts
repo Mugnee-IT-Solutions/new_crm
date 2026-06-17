@@ -1,10 +1,9 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
+import { resolveDatabaseUrl } from "./prisma/database-url.js";
 
-// Prisma generate does not connect to the database, but Prisma 7 config
-// still requires a datasource URL when the config file is loaded.
 const databaseUrl =
-  process.env.DATABASE_URL ??
+  resolveDatabaseUrl() ||
   "postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder?schema=public";
 
 export default defineConfig({

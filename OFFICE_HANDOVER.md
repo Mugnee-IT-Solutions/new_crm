@@ -43,6 +43,23 @@ npm run build
 npm run start
 ```
 
+## Vercel Deploy
+
+1. Import the GitHub repo in Vercel.
+2. Add a Postgres database:
+   - Vercel project -> Storage -> Create Database -> Postgres -> Connect to project
+   - This auto-adds `POSTGRES_PRISMA_URL` / `POSTGRES_URL`
+3. Or add `DATABASE_URL` manually in Project -> Settings -> Environment Variables.
+4. Add the other production env vars from the section above.
+5. Deploy. Vercel runs `npm run vercel-build`, which applies migrations and builds Next.js.
+
+Admin login after deploy:
+
+- Email: `admin@crm.com`
+- Password: value of `CRM_ADMIN_PASSWORD` (default `Crm@admin1234`)
+
+If email OTP is not configured yet, keep `CRM_SHOW_LOGIN_OTP="true"` so OTP appears on the login screen.
+
 ## Notes
 
 - Do not commit `.env` or database backup files.

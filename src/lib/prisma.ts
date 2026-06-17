@@ -1,5 +1,6 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
+import { resolveDatabaseUrl } from "@/lib/database-url";
 
 const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient;
@@ -7,10 +8,12 @@ const globalForPrisma = globalThis as unknown as {
 
 export function getPrisma() {
   if (!globalForPrisma.prisma) {
-    const connectionString = process.env.DATABASE_URL?.trim();
+    const connectionString = resolveDatabaseUrl();
 
     if (!connectionString) {
-      throw new Error("DATABASE_URL is required for CRM database access.");
+      throw new Error(
+        "Database connection is not configured. Set DATABASE_URL or connect Vercel Postgres (POSTGRES_PRISMA_URL).",
+      );
     }
 
     const adapter = new PrismaPg({ connectionString });

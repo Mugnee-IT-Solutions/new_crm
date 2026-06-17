@@ -1,4 +1,5 @@
 const { execSync } = require("node:child_process");
+const { syncDatabaseUrlEnv } = require("./database-url");
 
 function run(command) {
   execSync(command, { stdio: "inherit" });
@@ -17,14 +18,32 @@ function readMigrateStatus() {
   }
 }
 
-if (!process.env.DATABASE_URL) {
-  console.error(
-    "DATABASE_URL is not set. Add your production Postgres connection string in Vercel Project Settings → Environment Variables.",
-  );
-  process.exit(1);
-}
+const databaseUrl = syncDatabaseUrlEnv();
 
 run("npx prisma generate");
+
+if (!databaseUrl) {
+  console.error(`
+[CRM deploy] Database connection is missing.
+
+Add ONE of these environment variables in Vercel:
+  Project -> Settings -> Environment Variables
+
+Required (pick one source):
+  DATABASE_URL          Your Postgres connection string
+  POSTGRES_PRISMA_URL   Auto-created when you add Vercel Postgres
+  POSTGRES_URL          Auto-created when you add Vercel Postgres
+
+Recommended Vercel setup:
+  1. Open your Vercel project
+  2. Go to Storage -> Create Database -> Postgres
+  3. Connect the database to this project
+  4. Redeploy
+
+Or use Neon / Supabase / Railway and paste the connection string as DATABASE_URL.
+`);
+  process.exit(1);
+}
 
 const failedMigration = "20260617000000_customer_phone2_city";
 const status = readMigrateStatus();
