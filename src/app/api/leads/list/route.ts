@@ -1,4 +1,3 @@
-import type * as Prisma from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getPrisma } from "@/lib/prisma";
 import { requireRequestUser } from "@/lib/request-user";
@@ -38,8 +37,8 @@ export async function GET(request: Request) {
     const limit = parseLimit(searchParams.get("limit"));
     const scopedUserIds = await resolveScopedUserIds(auth.user.role, auth.user.id);
 
-    const searchFilters: Prisma.LeadWhereInput[] = [];
-    const roleFilters: Prisma.LeadWhereInput[] = [];
+    const searchFilters: Record<string, unknown>[] = [];
+    const roleFilters: Record<string, unknown>[] = [];
 
     if (search) {
       searchFilters.push({
@@ -60,7 +59,7 @@ export async function GET(request: Request) {
       });
     }
 
-    const where: Prisma.LeadWhereInput = {
+    const where: Record<string, unknown> = {
       ...(searchFilters.length || roleFilters.length
         ? {
             AND: [...searchFilters, ...roleFilters],

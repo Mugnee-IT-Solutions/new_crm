@@ -1,4 +1,3 @@
-import type * as Prisma from "@prisma/client";
 import { Priority, TaskStatus } from "@prisma/client";
 import { format } from "date-fns";
 import { getPrisma } from "@/lib/prisma";
@@ -49,9 +48,30 @@ const taskQueryInclude = {
   assignedTo: true,
   assignedBy: true,
   completedBy: true,
-} satisfies Prisma.TaskInclude;
+} as const;
 
-type TaskQueryRecord = Prisma.TaskGetPayload<{ include: typeof taskQueryInclude }>;
+type TaskQueryRecord = {
+  id: string;
+  title: string;
+  companyName: string | null;
+  description: string | null;
+  companyId: string | null;
+  taskTime: Date | null;
+  assignedToId: string | null;
+  assignedById: string | null;
+  completedById: string | null;
+  priority: Priority;
+  status: TaskStatus;
+  taskDate: Date;
+  dueDate: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  isPrevious: boolean;
+  company: { name: string } | null;
+  assignedTo: { name: string; role: string | null } | null;
+  assignedBy: { name: string; role: string | null } | null;
+  completedBy: { name: string } | null;
+};
 
 export class TaskInputError extends Error {
   status: number;
@@ -179,7 +199,7 @@ function parseCompanyFilter(company?: string) {
       { companyName: { contains: value, mode: "insensitive" as const } },
       { company: { is: { name: { contains: value, mode: "insensitive" as const } } } },
     ],
-  } satisfies Prisma.TaskWhereInput;
+  } as Record<string, unknown>;
 }
 
 export function parseTaskDateInput(value: string) {
@@ -203,16 +223,16 @@ async function getTaskScopeUserIds(prisma: ReturnType<typeof getPrisma>, actor: 
 }
 
 async function scopedTaskWhere(prisma: ReturnType<typeof getPrisma>, actor: TaskActor) {
-  if (actor.role === "ADMIN") return {} satisfies Prisma.TaskWhereInput;
-  if (actor.role === "MARKETER") return { assignedToId: actor.id } satisfies Prisma.TaskWhereInput;
+  if (actor.role === "ADMIN") return {};
+  if (actor.role === "MARKETER") return { assignedToId: actor.id };
 
   const scopedIds = await getTaskScopeUserIds(prisma, actor);
-  return {
-    OR: [
-      { assignedToId: { in: scopedIds } },
-      { assignedById: actor.id },
-    ],
-  } satisfies Prisma.TaskWhereInput;
+    return {
+      OR: [
+        { assignedToId: { in: scopedIds } },
+        { assignedById: actor.id },
+      ],
+    };
 }
 
 async function resolveAssignedMarketer(prisma: ReturnType<typeof getPrisma>, actor: TaskActor, assignedToId?: string) {
@@ -307,7 +327,7 @@ export async function getTodayTasks(actor: TaskActor, filters: TaskFilters = {})
   await syncPreviousTaskFlags();
 
   const tomorrow = startOfTomorrow();
-  const where: Prisma.TaskWhereInput = {
+    const where: Record<string, unknown> = {
     AND: [
       await scopedTaskWhere(prisma, actor),
       { status: "PENDING" },
@@ -334,7 +354,7 @@ export async function getCompletedTasks(actor: TaskActor, filters: TaskFilters =
   const prisma = getPrisma();
   await syncPreviousTaskFlags();
 
-  const where: Prisma.TaskWhereInput = {
+  const where: Record<string, unknown> = {
     AND: [
       await scopedTaskWhere(prisma, actor),
       { status: "COMPLETED" },

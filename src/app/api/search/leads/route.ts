@@ -1,4 +1,3 @@
-import type * as Prisma from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getPrisma } from "@/lib/prisma";
 import { requireRequestUser } from "@/lib/request-user";
@@ -37,15 +36,16 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const query = searchParams.get("q")?.trim() ?? "";
     const limit = normalizeLimit(searchParams.get("limit"));
+    const queryMode = "insensitive" as const;
 
-    const searchFilters: Prisma.LeadWhereInput[] = [];
-    const roleFilters: Prisma.LeadWhereInput[] = [];
+    const searchFilters: Record<string, unknown>[] = [];
+    const roleFilters: Record<string, unknown>[] = [];
 
     if (query) {
       searchFilters.push({
         OR: [
-          { title: { contains: query, mode: "insensitive" } },
-          { customerName: { contains: query, mode: "insensitive" } },
+          { title: { contains: query, mode: queryMode } },
+          { customerName: { contains: query, mode: queryMode } },
         ],
       });
     }
@@ -59,7 +59,7 @@ export async function GET(request: Request) {
       });
     }
 
-    const where: Prisma.LeadWhereInput = {
+    const where: Record<string, unknown> = {
       ...(searchFilters.length || roleFilters.length
         ? {
             AND: [...searchFilters, ...roleFilters],

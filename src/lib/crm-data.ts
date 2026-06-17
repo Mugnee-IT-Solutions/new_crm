@@ -46,7 +46,7 @@ export type CompanyRow = {
   totalLeads: number;
   lastCommunication: string;
   notes: string;
-  rawData: Prisma.JsonValue;
+  rawData: Prisma.Prisma.JsonValue;
 };
 
 export type TaskRow = {
@@ -399,7 +399,7 @@ function dateLabel(date: Date | null | undefined, pattern = "dd/MM/yyyy") {
 }
 
 function money(value: number) {
-  return `৳ ${new Intl.NumberFormat("en-US").format(Math.round(value))}`;
+  return `? ${new Intl.NumberFormat("en-US").format(Math.round(value))}`;
 }
 
 function followUpBucket(status: string, date: Date) {
@@ -425,9 +425,9 @@ const taskInclude = {
   company: true,
   lead: true,
   product: true,
-} satisfies Prisma.TaskInclude;
+} satisfies Prisma.Prisma.TaskInclude;
 
-type TaskRecord = Prisma.TaskGetPayload<{ include: typeof taskInclude }>;
+type TaskRecord = Prisma.Prisma.TaskGetPayload<{ include: typeof taskInclude }>;
 
 const followUpInclude = {
   company: {
@@ -448,20 +448,20 @@ const followUpInclude = {
     orderBy: { createdAt: "asc" },
     take: 1,
   },
-} satisfies Prisma.FollowUpInclude;
+} satisfies Prisma.Prisma.FollowUpInclude;
 
-type FollowUpRecord = Prisma.FollowUpGetPayload<{ include: typeof followUpInclude }>;
+type FollowUpRecord = Prisma.Prisma.FollowUpGetPayload<{ include: typeof followUpInclude }>;
 
 const communicationHistoryInclude = {
   user: true,
   company: true,
   lead: true,
   task: true,
-} satisfies Prisma.CommunicationLogInclude;
+} satisfies Prisma.Prisma.CommunicationLogInclude;
 
-type CommunicationHistoryRecord = Prisma.CommunicationLogGetPayload<{ include: typeof communicationHistoryInclude }>;
+type CommunicationHistoryRecord = Prisma.Prisma.CommunicationLogGetPayload<{ include: typeof communicationHistoryInclude }>;
 
-type ExistingCustomerRecord = Prisma.CustomerCompanyGetPayload<{
+type ExistingCustomerRecord = Prisma.Prisma.CustomerCompanyGetPayload<{
   include: {
     assignedTo: true;
     contacts: true;
@@ -516,9 +516,9 @@ const productInclude = {
       },
     },
   },
-} satisfies Prisma.ProductServiceInclude;
+} satisfies Prisma.Prisma.ProductServiceInclude;
 
-type ProductRecord = Prisma.ProductServiceGetPayload<{ include: typeof productInclude }>;
+type ProductRecord = Prisma.Prisma.ProductServiceGetPayload<{ include: typeof productInclude }>;
 type ProductLeadRecord = ProductRecord["leads"][number];
 type ProductCommunicationRecord = ProductLeadRecord["communications"][number];
 type ProductQuoteRecord = ProductRecord["quoteItems"][number]["quotation"];
@@ -625,7 +625,7 @@ function mapCommunicationHistoryRow(log: CommunicationHistoryRecord): Communicat
   };
 }
 
-function normalizeRawJson(value: Prisma.JsonValue): Record<string, unknown> {
+function normalizeRawJson(value: Prisma.Prisma.JsonValue): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
@@ -679,13 +679,13 @@ function readRawCsvField(raw: Record<string, unknown>, keys: string[]) {
   return value === undefined ? "-" : value;
 }
 
-function mapCompanyRow(company: ExistingCustomerRecord | Prisma.CustomerCompanyGetPayload<{ include: { assignedTo: true; contacts: true; phoneNumbers: true; leads: true; communications: true; } }>): CompanyRow {
+function mapCompanyRow(company: ExistingCustomerRecord | Prisma.Prisma.CustomerCompanyGetPayload<{ include: { assignedTo: true; contacts: true; phoneNumbers: true; leads: true; communications: true; } }>): CompanyRow {
   const primaryContact = company.contacts.find((contact) => contact.isPrimary) ?? company.contacts[0];
   const whatsapp = company.phoneNumbers.find((phone) => phone.whatsapp);
   const regular = company.phoneNumbers[0];
   const companyPhone2 = (company as { phone2?: string | null }).phone2;
   const companyCity = (company as { city?: string | null }).city;
-  const raw = normalizeRawJson((company as { rawData?: Prisma.JsonValue }).rawData ?? {});
+  const raw = normalizeRawJson((company as { rawData?: Prisma.Prisma.JsonValue }).rawData ?? {});
   const rawPrimaryEmail = readRawField(raw, ["Primary Email", "Email 1", "Email"]);
   const rawPrimaryPhone = readRawField(raw, ["Primary Phone", "Phone", "Phone 1", "phone"]);
   const rawPhone2 = readRawField(raw, ["Phone 2", "Contact Person 1 Phone 2", "Phone2", "Phone 2 (Contact 1)", "Secondary Phone"]);
@@ -711,7 +711,7 @@ function mapCompanyRow(company: ExistingCustomerRecord | Prisma.CustomerCompanyG
     totalLeads: Math.max(company.totalLeads, company.leads.length),
     lastCommunication: dateLabel(company.lastCommunication ?? company.communications[0]?.createdAt),
     notes: company.notes ?? "-",
-    rawData: (company as { rawData?: Prisma.JsonValue }).rawData ?? {},
+    rawData: (company as { rawData?: Prisma.Prisma.JsonValue }).rawData ?? {},
   };
 }
 
@@ -720,11 +720,11 @@ function combineWhere<T extends object>(...conditions: (T | undefined)[]): T {
   return (active.length ? { AND: active } : {}) as T;
 }
 
-function followUpScopeWhere(scopedUserIds: string[] | undefined): Prisma.FollowUpWhereInput {
+function followUpScopeWhere(scopedUserIds: string[] | undefined): Prisma.Prisma.FollowUpWhereInput {
   return scopedUserIds ? { assignedToId: { in: scopedUserIds } } : {};
 }
 
-function followUpSearchWhere(search?: string): Prisma.FollowUpWhereInput | undefined {
+function followUpSearchWhere(search?: string): Prisma.Prisma.FollowUpWhereInput | undefined {
   const query = search?.trim();
   if (!query) return undefined;
   const text = { contains: query, mode: "insensitive" } as const;
@@ -739,7 +739,7 @@ function followUpSearchWhere(search?: string): Prisma.FollowUpWhereInput | undef
   };
 }
 
-function dateRangeWhere(from?: Date, to?: Date): Prisma.FollowUpWhereInput | undefined {
+function dateRangeWhere(from?: Date, to?: Date): Prisma.Prisma.FollowUpWhereInput | undefined {
   if (!from && !to) return undefined;
   return {
     followUpDate: {
@@ -976,7 +976,7 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
   };
 }
 
-function followUpSummaryWhere(baseWhere: Prisma.FollowUpWhereInput, today = startOfDay(new Date())) {
+function followUpSummaryWhere(baseWhere: Prisma.Prisma.FollowUpWhereInput, today = startOfDay(new Date())) {
   const tomorrow = addDays(today, 1);
   return {
     overdue: combineWhere(baseWhere, { status: { not: "COMPLETED" }, OR: [{ status: "OVERDUE" }, { followUpDate: { lt: today } }] }),
@@ -986,7 +986,7 @@ function followUpSummaryWhere(baseWhere: Prisma.FollowUpWhereInput, today = star
   };
 }
 
-async function countFollowUpSummary(prisma: ReturnType<typeof getPrisma>, baseWhere: Prisma.FollowUpWhereInput) {
+async function countFollowUpSummary(prisma: ReturnType<typeof getPrisma>, baseWhere: Prisma.Prisma.FollowUpWhereInput) {
   const where = followUpSummaryWhere(baseWhere);
   const [overdue, today, upcoming, completed] = await Promise.all([
     prisma.followUp.count({ where: where.overdue }),
@@ -1123,9 +1123,9 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
       }
     : {};
 
-  const companyWhere: Prisma.CustomerCompanyWhereInput = {};
+  const companyWhere: Prisma.Prisma.CustomerCompanyWhereInput = {};
 
-  const taskWhere: Prisma.TaskWhereInput = scopedUserIds
+  const taskWhere: Prisma.Prisma.TaskWhereInput = scopedUserIds
     ? {
         OR: [
           { assignedToId: { in: scopedUserIds } },
@@ -1147,7 +1147,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
   const activityWhere = scopedUserIds ? { userId: { in: scopedUserIds } } : {};
   const planWidgetWhere = (planWhere
     ? { ...planWhere, status: { not: "COMPLETED" }, plannedAt: { lt: tomorrow } }
-    : { status: { not: "COMPLETED" }, plannedAt: { lt: tomorrow } }) as Prisma.TodayPlanWhereInput;
+    : { status: { not: "COMPLETED" }, plannedAt: { lt: tomorrow } }) as Prisma.Prisma.TodayPlanWhereInput;
   const activeTaskBadgeWhere = combineWhere(taskWhere, { status: { not: "COMPLETED" } });
   const todayTaskBadgeWhere = combineWhere(activeTaskBadgeWhere, { taskDate: { lt: tomorrow } });
   const followUpBadgeWhere = combineWhere(followUpWhere, {
@@ -1697,12 +1697,12 @@ function normalizeFollowUpQuery(query: FollowUpQuery | Record<string, unknown> =
   };
 }
 
-function followUpSections(baseWhere: Prisma.FollowUpWhereInput, query: ReturnType<typeof normalizeFollowUpQuery>) {
+function followUpSections(baseWhere: Prisma.Prisma.FollowUpWhereInput, query: ReturnType<typeof normalizeFollowUpQuery>) {
   const today = startOfDay(new Date());
   const tomorrow = addDays(today, 1);
-  const commonOrder: Prisma.FollowUpOrderByWithRelationInput[] = [{ followUpDate: "asc" }, { createdAt: "desc" }];
-  const completedOrder: Prisma.FollowUpOrderByWithRelationInput[] = [{ completedAt: "desc" }, { followUpDate: "desc" }];
-  const pending = { status: { not: "COMPLETED" } } satisfies Prisma.FollowUpWhereInput;
+  const commonOrder: Prisma.Prisma.FollowUpOrderByWithRelationInput[] = [{ followUpDate: "asc" }, { createdAt: "desc" }];
+  const completedOrder: Prisma.Prisma.FollowUpOrderByWithRelationInput[] = [{ completedAt: "desc" }, { followUpDate: "desc" }];
+  const pending = { status: { not: "COMPLETED" } } satisfies Prisma.Prisma.FollowUpWhereInput;
 
   if (query.dateFilter === "today") {
     return [{ where: combineWhere(baseWhere, pending, dateRangeWhere(today, tomorrow)), orderBy: commonOrder }];
@@ -1961,4 +1961,6 @@ export async function getQuotationDetail(id: string, role: Role, user: ShellUser
     quotation: workspace.quotations.find((item) => item.id === lookup || item.quoteNumber === lookup || slugify(item.quoteNumber) === lookupSlug),
   };
 }
+
+
 

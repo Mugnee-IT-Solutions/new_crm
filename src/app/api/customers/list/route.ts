@@ -1,4 +1,3 @@
-import type * as Prisma from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getPrisma } from "@/lib/prisma";
 import { requireRequestUser } from "@/lib/request-user";
@@ -23,14 +22,15 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const search = (searchParams.get("search") || searchParams.get("q") || "").trim();
     const limit = parseLimit(searchParams.get("limit"));
+    const queryMode = "insensitive" as const;
 
-    const where: Prisma.CustomerCompanyWhereInput = {
+    const where = {
       ...(search
         ? {
             OR: [
-              { name: { contains: search, mode: "insensitive" } },
-              { contactPerson: { contains: search, mode: "insensitive" } },
-              { phone: { contains: search, mode: "insensitive" } },
+              { name: { contains: search, mode: queryMode } },
+              { contactPerson: { contains: search, mode: queryMode } },
+              { phone: { contains: search, mode: queryMode } },
             ],
           }
         : {}),

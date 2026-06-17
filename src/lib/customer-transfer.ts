@@ -1,7 +1,7 @@
-import type * as Prisma from "@prisma/client";
 import * as XLSX from "xlsx";
 import { getPrisma } from "@/lib/prisma";
 import type { Role } from "@/lib/utils";
+import type * as Prisma from "@prisma/client";
 
 export const CUSTOMER_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
 
@@ -122,14 +122,41 @@ type ParsedCustomerRow = {
   lastCommunication?: Date;
 };
 
-type ExistingCustomerRecord = Prisma.CustomerCompanyGetPayload<{
-  include: {
-    contacts: { orderBy: { createdAt: "asc" } };
-    phoneNumbers: { orderBy: { createdAt: "asc" } };
-    leads: true;
-    communications: { orderBy: { communicationAt: "desc" }; take: 1 };
-  };
-}>;
+interface JsonLikeRecord {
+  [key: string]: JsonLike;
+}
+
+type JsonLike = string | number | boolean | null | JsonLike[] | JsonLikeRecord;
+type ExistingCustomerRecord = {
+  id: string;
+  name: string;
+  industry: string | null;
+  phone: string;
+  city?: string | null;
+  address?: string | null;
+  website?: string | null;
+  notes?: string | null;
+  contactPerson?: string | null;
+  phone2?: string | null;
+  rawData?: Prisma.Prisma.JsonValue | null;
+  contacts: Array<{
+    id: string;
+    name: string;
+    designation: string | null;
+    department?: string | null;
+    email: string | null;
+    mobile: string | null;
+    isPrimary: boolean | null;
+  }>;
+  phoneNumbers: Array<{
+    id: string;
+    label: string | null;
+    number: string;
+    whatsapp: boolean | null;
+  }>;
+  leads: Array<{ id: string }>;
+  communications: Array<{ createdAt: Date }>;
+};
 
 function normalizeCompanyKey(value: string) {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
@@ -165,7 +192,7 @@ function normalizePhone(value: unknown) {
   return String(value ?? "").replace(/\s+/g, "").trim();
 }
 
-function normalizeRawJson(value: Prisma.JsonValue | undefined | null): Record<string, unknown> {
+function normalizeRawJson(value: Prisma.Prisma.JsonValue | undefined | null): Record<string, unknown> {
   if (value === null || value === undefined) return {};
   if (typeof value === "object" && !Array.isArray(value) && value !== null) return value as Record<string, unknown>;
   return {};
@@ -260,8 +287,8 @@ function mapTemplateRow(rawRow: Record<string, unknown>, rowNumber: number): Par
   };
 }
 
-function buildContactCreates(row: ParsedCustomerRow): Prisma.ContactPersonCreateWithoutCompanyInput[] | undefined {
-  const contacts: Prisma.ContactPersonCreateWithoutCompanyInput[] = [];
+function buildContactCreates(row: ParsedCustomerRow): Prisma.Prisma.ContactPersonCreateWithoutCompanyInput[] | undefined {
+  const contacts: Prisma.Prisma.ContactPersonCreateWithoutCompanyInput[] = [];
 
   if (row.contactPerson || row.primaryPhone) {
     contacts.push({
@@ -286,7 +313,7 @@ function buildContactCreates(row: ParsedCustomerRow): Prisma.ContactPersonCreate
   return contacts.length ? contacts : undefined;
 }
 
-function buildPhoneCreates(row: ParsedCustomerRow): Prisma.PhoneNumberCreateWithoutCompanyInput[] {
+function buildPhoneCreates(row: ParsedCustomerRow): Prisma.Prisma.PhoneNumberCreateWithoutCompanyInput[] {
   return uniquePhones([row.primaryPhone, row.phone2, row.phone3, row.phone11, row.phone12, row.phone21, row.phone22]).map((number, index) => ({
     label: index === 0 ? "Primary" : `Phone ${index + 1}`,
     number,
@@ -310,7 +337,7 @@ function normalizedText(value: string) {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-function buildContactUpdateMutation(row: ParsedCustomerRow, existing: ExistingCustomerRecord): Prisma.ContactPersonUpdateManyWithoutCompanyNestedInput | undefined {
+function buildContactUpdateMutation(row: ParsedCustomerRow, existing: ExistingCustomerRecord): Prisma.Prisma.ContactPersonUpdateManyWithoutCompanyNestedInput | undefined {
   const primaryContact = existing.contacts.find((contact) => contact.isPrimary) ?? existing.contacts[0];
   const secondaryCreates = row.contactPerson2 && (!primaryContact || !hasMatchingContact(existing, row.contactPerson2))
     ? [{
@@ -319,7 +346,7 @@ function buildContactUpdateMutation(row: ParsedCustomerRow, existing: ExistingCu
       email: row.email21 ?? row.email22 ?? "",
       mobile: row.phone21 ?? row.phone22 ?? "",
       isPrimary: false,
-    } satisfies Prisma.ContactPersonCreateWithoutCompanyInput]
+    } satisfies Prisma.Prisma.ContactPersonCreateWithoutCompanyInput]
     : undefined;
 
   if (primaryContact) {
@@ -343,12 +370,12 @@ function buildContactUpdateMutation(row: ParsedCustomerRow, existing: ExistingCu
   return { create: contactCreates };
 }
 
-function buildContactCreateMutation(row: ParsedCustomerRow): Prisma.ContactPersonCreateNestedManyWithoutCompanyInput | undefined {
+function buildContactCreateMutation(row: ParsedCustomerRow): Prisma.Prisma.ContactPersonCreateNestedManyWithoutCompanyInput | undefined {
   const contactCreates = buildContactCreates(row);
   return contactCreates ? { create: contactCreates } : undefined;
 }
 
-function buildPhoneUpdateMutation(row: ParsedCustomerRow, existing: ExistingCustomerRecord): Prisma.PhoneNumberUpdateManyWithoutCompanyNestedInput {
+function buildPhoneUpdateMutation(row: ParsedCustomerRow, existing: ExistingCustomerRecord): Prisma.Prisma.PhoneNumberUpdateManyWithoutCompanyNestedInput {
   const primaryPhone = existing.phoneNumbers[0];
   const existingPhones = new Set(existing.phoneNumbers.map((item) => normalizePhone(item.number)).filter(Boolean));
   const createPhones = uniquePhones([row.phone2, row.phone3, row.phone11, row.phone12, row.phone21, row.phone22])
@@ -357,7 +384,7 @@ function buildPhoneUpdateMutation(row: ParsedCustomerRow, existing: ExistingCust
       label: `Phone ${index + 2}`,
       number: phone,
       whatsapp: false,
-    } satisfies Prisma.PhoneNumberCreateWithoutCompanyInput));
+    } satisfies Prisma.Prisma.PhoneNumberCreateWithoutCompanyInput));
 
   if (primaryPhone) {
     return {
@@ -366,7 +393,7 @@ function buildPhoneUpdateMutation(row: ParsedCustomerRow, existing: ExistingCust
         data: {
           label: primaryPhone.label || "Primary",
           number: row.primaryPhone,
-          whatsapp: primaryPhone.whatsapp,
+          whatsapp: primaryPhone.whatsapp ?? false,
         },
       }],
       ...(createPhones.length ? { create: createPhones } : {}),
@@ -376,7 +403,7 @@ function buildPhoneUpdateMutation(row: ParsedCustomerRow, existing: ExistingCust
   return { create: buildPhoneCreates(row) };
 }
 
-function buildPhoneCreateMutation(row: ParsedCustomerRow): Prisma.PhoneNumberCreateNestedManyWithoutCompanyInput {
+function buildPhoneCreateMutation(row: ParsedCustomerRow): Prisma.Prisma.PhoneNumberCreateNestedManyWithoutCompanyInput {
   return {
     create: buildPhoneCreates(row),
   };
@@ -468,7 +495,7 @@ function readTemplateField(rawData: Record<string, unknown>, candidates: string[
 }
 
 function buildTemplateRaw(company: ExistingCustomerRecord): Record<string, unknown> {
-  const raw = normalizeRawJson((company as { rawData?: Prisma.JsonValue }).rawData);
+  const raw = normalizeRawJson((company as { rawData?: Prisma.Prisma.JsonValue }).rawData);
   const primaryContact = company.contacts.find((contact) => contact.isPrimary) ?? company.contacts[0];
   const companyCity = (company as { city?: string | null }).city;
 
@@ -504,7 +531,7 @@ function buildTemplateRaw(company: ExistingCustomerRecord): Record<string, unkno
 }
 
 function mapExportRow(company: ExistingCustomerRecord) {
-  const baseRaw = normalizeRawJson((company as { rawData?: Prisma.JsonValue }).rawData);
+  const baseRaw = normalizeRawJson((company as { rawData?: Prisma.Prisma.JsonValue }).rawData);
   const primaryContact = company.contacts.find((contact) => contact.isPrimary) ?? company.contacts[0];
   const rawData = buildTemplateRaw({
     ...company,
@@ -577,11 +604,11 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
     existingByName.set(key, company);
   }
 
-  const operations: Prisma.PrismaPromise<unknown>[] = [];
+  const operations: Prisma.Prisma.PrismaPromise<unknown>[] = [];
   let inserted = 0;
   let updated = 0;
 
-  const mergeRawData = (existing: Prisma.JsonValue | null | undefined, incoming: Record<string, unknown>) => {
+  const mergeRawData = (existing: Prisma.Prisma.JsonValue | null | undefined, incoming: Record<string, unknown>) => {
     const base = normalizeRawJson(existing);
     const merged = { ...base };
     const templateEntries = Object.entries(incoming);
@@ -618,7 +645,7 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
       : undefined;
 
     const mergedRawData = existing
-      ? mergeRawData((existing as { rawData?: Prisma.JsonValue }).rawData, row.rawData)
+      ? mergeRawData((existing as { rawData?: Prisma.Prisma.JsonValue }).rawData, row.rawData)
       : row.rawData;
 
     const companyPayload = {
@@ -635,7 +662,7 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
       lastCommunication: row.lastCommunication ?? undefined,
       rawData: mergedRawData,
       ...(assignedRelation ? assignedRelation : {}),
-    } as Prisma.CustomerCompanyUpdateInput & { rawData?: Prisma.JsonValue };
+    } as Prisma.Prisma.CustomerCompanyUpdateInput & { rawData?: Prisma.Prisma.JsonValue };
 
     if (existing) {
       updated += 1;
@@ -733,3 +760,5 @@ export async function exportCustomers(actor: CustomerTransferActor, format: Cust
       : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   };
 }
+
+

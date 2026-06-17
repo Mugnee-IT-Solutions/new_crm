@@ -171,7 +171,7 @@ function buildCustomerCreateContacts(raw: ReturnType<typeof buildCustomerTemplat
     email: normalizeCustomerContactName(raw["Contact Person 1 Email 1"]) || normalizeCustomerContactName(raw["Contact Person 1 Email 2"]) || normalizeCustomerContactName(raw["Primary Email"]) || undefined,
     mobile: normalizeCustomerContactName(raw["Contact Person 1 Phone 1"]) || normalizeCustomerContactName(raw["Contact Person 1 Phone 2"]) || normalizeCustomerContactName(raw["Primary Phone"]) || undefined,
     isPrimary: true,
-  } satisfies Prisma.ContactPersonCreateWithoutCompanyInput;
+} satisfies Prisma.Prisma.ContactPersonCreateWithoutCompanyInput;
 
   if (primaryContact.mobile || primaryContact.email || primaryContact.designation || primaryContact.name !== "Primary Contact") {
     contacts.push(primaryContact);
@@ -185,7 +185,7 @@ function buildCustomerCreateContacts(raw: ReturnType<typeof buildCustomerTemplat
       email: normalizeCustomerContactName(raw["Contact Person 2 Email 1"]) || normalizeCustomerContactName(raw["Contact Person 2 Email 2"]) || undefined,
       mobile: normalizeCustomerContactName(raw["Contact Person 2 Phone 1"]) || normalizeCustomerContactName(raw["Contact Person 2 Phone 2"]) || undefined,
       isPrimary: false,
-    } satisfies Prisma.ContactPersonCreateWithoutCompanyInput);
+    } satisfies Prisma.Prisma.ContactPersonCreateWithoutCompanyInput);
   }
 
   return contacts;
@@ -203,7 +203,7 @@ function buildCustomerCreatePhoneNumbers(raw: ReturnType<typeof buildCustomerTem
   ];
 
   const seen = new Set<string>();
-  const creates: Prisma.PhoneNumberCreateWithoutCompanyInput[] = [];
+  const creates: Prisma.Prisma.PhoneNumberCreateWithoutCompanyInput[] = [];
 
   for (let index = 0; index < ordered.length; index += 1) {
     const [label, rawValue] = ordered[index] ?? [];
@@ -1153,7 +1153,7 @@ export async function createFollowUpAction(formData: FormData) {
     return { ok: false, message: "Linked task was not found." };
   }
 
-  const followUpData: Prisma.FollowUpCreateInput = {
+  const followUpData: Prisma.Prisma.FollowUpCreateInput = {
     method,
     note,
     nextDiscussionPlan,
@@ -1345,9 +1345,9 @@ export async function createUserAction(formData: FormData) {
     });
     revalidatePath("/");
     return { ok: true, id: created.id };
-  } catch (error) {
+    } catch (error) {
     try {
-      const { PrismaClientKnownRequestError } = await import("@prisma/client/runtime");
+      const { PrismaClientKnownRequestError } = await import("@prisma/client/runtime/client");
       if (error instanceof PrismaClientKnownRequestError && error.code === "P2002") {
         const target = Array.isArray(error.meta?.target) ? error.meta.target.join(", ") : "mobile or email";
         return { ok: false, message: `A user with this ${target} already exists.` };

@@ -1,7 +1,7 @@
 import * as XLSX from "xlsx";
+import type * as PrismaTypes from "@prisma/client";
 import { getPrisma } from "@/lib/prisma";
 import { type Role } from "@/lib/utils";
-import type * as Prisma from "@prisma/client";
 import { CUSTOMER_TEMPLATE_RAW_KEYS } from "@/lib/customer-transfer";
 
 export type FullExportActor = {
@@ -18,21 +18,38 @@ type FullExportResult = {
   contentType: string;
 };
 
-const CUSTOMER_EXPORT_TEMPLATE_KEYS = CUSTOMER_TEMPLATE_RAW_KEYS.map((column) => column as string);
+interface JsonLikeRecord {
+  [key: string]: JsonLike;
+}
 
-type FullExportCustomerRecord = Prisma.CustomerCompanyGetPayload<{
-  include: {
-    assignedTo: { select: { name: true } };
-    contacts: true;
-    phoneNumbers: true;
-    leads: true;
-    communications: { orderBy: { communicationAt: "desc" }; take: 1 };
-  };
-}> & {
-  rawData?: Prisma.JsonValue | null;
-  city?: string | null;
+type JsonLike = string | number | boolean | null | JsonLike[] | JsonLikeRecord;
+
+type FullExportCustomerRecord = {
+  id: string;
+  name: string;
+  industry: string | null;
+  phone: string;
+  city: string | null;
+  address: string | null;
+  website: string | null;
+  notes: string | null;
+  contactPerson?: string | null;
   phone2?: string | null;
+  status?: string | null;
+  assignedTo?: { name: string } | null;
+  contacts: Array<{
+    name: string;
+    isPrimary: boolean | null;
+    mobile: string | null;
+    email: string | null;
+    designation?: string | null;
+    department?: string | null;
+  }>;
+  phoneNumbers: Array<{ number: string | null }>;
+  rawData?: PrismaTypes.Prisma.JsonValue | null;
 };
+
+const CUSTOMER_EXPORT_TEMPLATE_KEYS = CUSTOMER_TEMPLATE_RAW_KEYS.map((column) => column as string);
 
 function normalizeText(value: string | null | undefined) {
   return (value ?? "").toString();
