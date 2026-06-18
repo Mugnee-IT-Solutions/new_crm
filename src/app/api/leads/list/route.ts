@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { getPrisma } from "@/lib/prisma";
 import { requireRequestUser } from "@/lib/request-user";
+import { getPrisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,19 +9,6 @@ function parseLimit(value: string | null) {
   const parsed = Number.parseInt(value ?? "", 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return 20;
   return Math.min(parsed, 100);
-}
-
-async function resolveScopedUserIds(role: string, userId: string) {
-  if (role === "ADMIN") return undefined;
-  if (role === "MARKETER") return [userId];
-
-  const prisma = getPrisma();
-  const team = await prisma.user.findMany({
-    where: { supervisorId: userId, status: "ACTIVE" },
-    select: { id: true },
-  });
-
-  return [userId, ...team.map((item) => item.id)];
 }
 
 export async function GET(request: Request) {
@@ -35,10 +22,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const search = (searchParams.get("search") || searchParams.get("q") || "").trim();
     const limit = parseLimit(searchParams.get("limit"));
-    const scopedUserIds = await resolveScopedUserIds(auth.user.role, auth.user.id);
-
     const searchFilters: Record<string, unknown>[] = [];
-    const roleFilters: Record<string, unknown>[] = [];
 
     if (search) {
       searchFilters.push({
@@ -46,23 +30,15 @@ export async function GET(request: Request) {
           { title: { contains: search, mode: "insensitive" } },
           { customerName: { contains: search, mode: "insensitive" } },
           { phone: { contains: search, mode: "insensitive" } },
-        ],
-      });
-    }
-
-    if (scopedUserIds) {
-      roleFilters.push({
-        OR: [
-          { assignedToId: { in: scopedUserIds } },
-          { createdById: { in: scopedUserIds } },
+          { email: { contains: search, mode: "insensitive" } },
         ],
       });
     }
 
     const where: Record<string, unknown> = {
-      ...(searchFilters.length || roleFilters.length
+      ...(searchFilters.length
         ? {
-            AND: [...searchFilters, ...roleFilters],
+            AND: [...searchFilters],
           }
         : {}),
     };
@@ -72,6 +48,8 @@ export async function GET(request: Request) {
       select: {
         id: true,
         title: true,
+        customerName: true,
+        email: true,
         phone: true,
         company: {
           select: { name: true },
@@ -85,7 +63,7 @@ export async function GET(request: Request) {
       success: true,
       rows: rows.map((row) => ({
         id: row.id,
-        name: row.title,
+        name: row.customerName || row.title,
         phone: row.phone,
         companyName: row.company?.name ?? null,
       })),

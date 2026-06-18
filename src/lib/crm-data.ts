@@ -1,6 +1,7 @@
 import type * as Prisma from "@prisma/client";
 import { addDays, endOfMonth, endOfWeek, format, isBefore, isSameDay, startOfDay, startOfMonth, startOfWeek } from "date-fns";
 import { getPrisma } from "@/lib/prisma";
+import { getTodayWorkQueue } from "@/lib/task-center";
 import { type Role, type ShellUser } from "@/lib/utils";
 
 export type CrmStat = {
@@ -14,19 +15,27 @@ export type LeadRow = {
   id: string;
   companyId?: string | null;
   title: string;
+  customerName: string;
   company: string;
   phone: string;
+  phones: string[];
   email: string;
+  emails: string[];
+  productInterestId?: string | null;
   productInterest: string;
   status: string;
   score: number;
   priority: string;
+  assignedToId?: string | null;
   assignedTo: string;
   followUpDate: string;
+  followUpDateValue?: string;
   purchaseProbability: number;
   communicationCount: number;
   followUpCount: number;
   salesProgress: string;
+  notes: string;
+  createdAt: string;
 };
 
 export type CompanyRow = {
@@ -113,13 +122,17 @@ export type TodayWorkItem = {
   id: string;
   sourceId: string;
   source: "Follow-up" | "Task" | "Plan";
+  queueType?: "TASK" | "DUE_FOLLOW_UP" | "OVERDUE" | "CARRY_FORWARD";
+  queueLabel?: "Task" | "Follow-up" | "Overdue" | "Carry Forward";
   companyId?: string | null;
   leadId?: string | null;
   assignedToId?: string | null;
   href?: string;
   title: string;
+  method: string;
   relatedTo: string;
   date: string;
+  dateTimeValue: string;
   time: string;
   priority: string;
   status: string;
@@ -180,6 +193,9 @@ export type ProductEngagementRow = {
   companyName: string;
   leadName: string;
   communicationType: string;
+  summary: string;
+  discussionTopic: string;
+  nextFollowUpDate: string;
   lastContactDate: string;
   status: string;
   assignedMarketer: string;
@@ -286,7 +302,12 @@ export type EmployeeRow = {
   role: string;
   status: string;
   leads: number;
+  calls: number;
+  whatsapp: number;
+  meetings: number;
   followUps: number;
+  pendingTasks: number;
+  overdueFollowUps: number;
   sales: number;
   rewardPoints: number;
   conversionRate: string;
@@ -298,6 +319,7 @@ export type RewardRuleRow = {
   trigger: string;
   points: number;
   active: boolean;
+  createdAt: string;
 };
 
 export type ImportExportRow = {
@@ -609,6 +631,11 @@ const productInclude = {
               id: true,
               leadId: true,
               method: true,
+              note: true,
+              discussionTopic: true,
+              productDiscussed: true,
+              followUpNote: true,
+              nextFollowUpDate: true,
               communicationAt: true,
               userId: true,
             },
@@ -653,6 +680,11 @@ const productInclude = {
               id: true,
               leadId: true,
               method: true,
+              note: true,
+              discussionTopic: true,
+              productDiscussed: true,
+              followUpNote: true,
+              nextFollowUpDate: true,
               communicationAt: true,
               userId: true,
             },
@@ -665,6 +697,11 @@ const productInclude = {
           id: true,
           leadId: true,
           method: true,
+          note: true,
+          discussionTopic: true,
+          productDiscussed: true,
+          followUpNote: true,
+          nextFollowUpDate: true,
           communicationAt: true,
           userId: true,
         },
@@ -708,6 +745,18 @@ function linkedEntityHref({ entity, entityId, leadId, companyId, quotationId }: 
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+function splitLeadContacts(value?: string | null) {
+  if (!value) return [];
+  return value
+    .split("|")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function primaryLeadContact(value?: string | null) {
+  return splitLeadContacts(value)[0] ?? "-";
 }
 
 function lastCommunicationType(followUp: FollowUpRecord) {
@@ -1067,6 +1116,9 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
         companyName: lead.company?.name ?? lead.customerName,
         leadName: lead.title,
         communicationType: lastContact?.method ?? "-",
+        summary: lastContact?.note ?? "-",
+        discussionTopic: lastContact?.discussionTopic ?? lastContact?.productDiscussed ?? "-",
+        nextFollowUpDate: dateLabel(lastContact?.nextFollowUpDate, "dd/MM/yyyy hh:mm a"),
         lastContactDate: dateLabel(lastContact?.communicationAt),
         status: leadStatusGroup(lead.status),
         assignedMarketer: lead.assignedTo?.name ?? "-",
@@ -1097,6 +1149,9 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
         companyName: interest.company?.name ?? "-",
         leadName: "-",
         communicationType: lastContact?.method ?? "-",
+        summary: lastContact?.note ?? "-",
+        discussionTopic: lastContact?.discussionTopic ?? lastContact?.productDiscussed ?? "-",
+        nextFollowUpDate: dateLabel(lastContact?.nextFollowUpDate, "dd/MM/yyyy hh:mm a"),
         lastContactDate: dateLabel(lastContact?.communicationAt),
         status: "Interested",
         assignedMarketer: interest.user?.name ?? interest.company?.assignedTo?.name ?? "-",
@@ -1117,6 +1172,9 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
       companyName: item.companyName,
       leadName: item.leadName,
       communicationType: item.communicationType,
+      summary: item.summary,
+      discussionTopic: item.discussionTopic,
+      nextFollowUpDate: item.nextFollowUpDate,
       lastContactDate: item.lastContactDate,
       status: item.status,
       assignedMarketer: item.assignedMarketer,
@@ -1316,8 +1374,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
   const planWidgetWhere = (planWhere
     ? { ...planWhere, status: { not: "COMPLETED" }, plannedAt: { lt: tomorrow } }
     : { status: { not: "COMPLETED" }, plannedAt: { lt: tomorrow } }) as Prisma.Prisma.TodayPlanWhereInput;
-  const activeTaskBadgeWhere = combineWhere(taskWhere, { status: { not: "COMPLETED" } });
-  const todayTaskBadgeWhere = combineWhere(activeTaskBadgeWhere, { taskDate: { lt: tomorrow } });
+  const todayTaskBadgeWhere = combineWhere(taskWhere, { status: { not: "COMPLETED" }, taskDate: { lt: tomorrow } });
   const followUpBadgeWhere = combineWhere(followUpWhere, {
     status: { not: "COMPLETED" },
     OR: [
@@ -1345,7 +1402,6 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     leadCount,
     customerCount,
     todaysPlanCount,
-    activeTaskBadgeCount,
     todayTaskBadgeCount,
     followUpBadgeCount,
     activeProductCount,
@@ -1443,7 +1499,13 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     }),
     prisma.user.findMany({
       where: role === "ADMIN" ? {} : scopedUserIds ? { id: { in: scopedUserIds } } : {},
-      include: { assignedLeads: true, followUps: true, rewards: true },
+      include: {
+        assignedLeads: true,
+        followUps: true,
+        rewards: true,
+        communications: { select: { method: true } },
+        tasksAssigned: { select: { status: true } },
+      },
       orderBy: { createdAt: "asc" },
       take: 100,
     }),
@@ -1453,7 +1515,6 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     prisma.lead.count({ where: leadWhere }),
     prisma.customerCompany.count({ where: companyWhere }),
     prisma.todayPlan.count({ where: planWidgetWhere }),
-    prisma.task.count({ where: activeTaskBadgeWhere }),
     prisma.task.count({ where: todayTaskBadgeWhere }),
     prisma.followUp.count({ where: followUpBadgeWhere }),
     prisma.productService.count({ where: { status: "ACTIVE" } }),
@@ -1489,20 +1550,28 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
   const leadRows: LeadRow[] = leads.map((lead) => ({
     id: lead.id,
     companyId: lead.companyId,
-    title: lead.title,
+    title: lead.title || lead.customerName,
+    customerName: lead.customerName,
     company: lead.company?.name ?? lead.customerName,
-    phone: lead.phone,
-    email: lead.email ?? "-",
+    phone: primaryLeadContact(lead.phone),
+    phones: splitLeadContacts(lead.phone),
+    email: primaryLeadContact(lead.email),
+    emails: splitLeadContacts(lead.email),
+    productInterestId: lead.productInterestId,
     productInterest: lead.interestedProduct?.name ?? "-",
     status: leadStatusLabels[lead.status] ?? labelize(lead.status),
     score: lead.score,
     priority: labelize(lead.priority),
+    assignedToId: lead.assignedToId,
     assignedTo: lead.assignedTo?.name ?? "-",
     followUpDate: dateLabel(lead.followUpDate),
+    followUpDateValue: lead.followUpDate?.toISOString() ?? "",
     purchaseProbability: lead.purchaseProbability,
     communicationCount: lead.communications.length,
     followUpCount: lead.followUps.length,
     salesProgress: progressFromLead(lead.status),
+    notes: lead.notes ?? "-",
+    createdAt: dateLabel(lead.createdAt, "dd/MM/yyyy hh:mm a"),
   }));
 
   const companyRows: CompanyRow[] = companies.map(mapCompanyRow);
@@ -1529,111 +1598,31 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
   });
 
   const followUpRows: FollowUpRow[] = followUps.map(mapFollowUpRow);
-  const todayWorkWithSort = [
-    ...followUps
-      .filter((followUp) => followUp.status !== "COMPLETED" && (followUp.status === "OVERDUE" || isBefore(followUp.followUpDate, tomorrow)))
-      .map((followUp) => {
-        const targetDay = startOfDay(followUp.followUpDate);
-        const overdue = followUp.status === "OVERDUE" || isBefore(targetDay, today);
-
-        return {
-          id: `follow-up-${followUp.id}`,
-          sourceId: followUp.id,
-          source: "Follow-up" as const,
-    companyId: followUp.companyId,
-        leadId: followUp.leadId,
-          assignedToId: followUp.assignedToId,
-          href: linkedEntityHref({ leadId: followUp.leadId, companyId: followUp.companyId }),
-          title: followUp.note ?? `${followUp.method} follow-up`,
-          relatedTo: followUp.company?.name ?? followUp.lead?.title ?? followUp.lead?.customerName ?? "-",
-          date: dateLabel(followUp.followUpDate),
-          time: dateLabel(followUp.followUpDate, "hh:mm a"),
-          priority: labelize((followUp as { priority?: string }).priority ?? "MEDIUM"),
-          status: overdue ? "Overdue" : "Due Today",
-          note: followUp.nextDiscussionPlan ?? followUp.note ?? "-",
-          assignedTo: followUp.assignedTo?.name ?? "-",
-          overdue,
-          sortRank: overdue ? 0 : 1,
-          sortDate: followUp.followUpDate,
-        };
-      }),
-    ...tasks
-      .filter((task) => {
-        const taskDate = (task as { taskDate?: Date | null }).taskDate ?? task.dueDate ?? task.updatedAt;
-        return task.status !== "COMPLETED" && (task.status === "OVERDUE" || isBefore(taskDate, tomorrow));
-      })
-      .map((task) => {
-        const dueDate = (task as { taskDate?: Date | null }).taskDate ?? task.dueDate ?? task.updatedAt;
-        const overdue = task.status === "OVERDUE" || (((task as { isPrevious?: boolean | null }).isPrevious) ?? false) || isBefore(startOfDay(dueDate), today);
-
-        return {
-          id: `task-${task.id}`,
-          sourceId: task.id,
-          source: "Task" as const,
-          companyId: task.companyId,
-          leadId: task.leadId,
-          assignedToId: task.assignedToId,
-          href: linkedEntityHref({ leadId: task.leadId, companyId: task.companyId }),
-          title: task.title,
-          relatedTo: task.company?.name ?? task.lead?.title ?? (task as { companyName?: string | null }).companyName ?? (task as { leadName?: string | null }).leadName ?? "-",
-          date: dateLabel(dueDate),
-          time: dateLabel(task.taskTime ?? dueDate, "hh:mm a"),
-          priority: labelize(task.priority),
-          status: overdue ? "Overdue" : labelize(task.status),
-          note: task.description ?? task.notes ?? "-",
-          assignedTo: task.assignedTo?.name ?? "-",
-          overdue,
-          sortRank: overdue ? 0 : 2,
-          sortDate: dueDate,
-        };
-      }),
-    ...todayPlans
-      .filter((plan) => plan.status !== "COMPLETED" && isBefore(plan.plannedAt, tomorrow))
-      .map((plan) => {
-        const overdue = plan.status === "OVERDUE" || isBefore(startOfDay(plan.plannedAt), today) || plan.carryForward;
-
-        return {
-          id: `plan-${plan.id}`,
-          sourceId: plan.id,
-          source: "Plan" as const,
-          companyId: plan.companyId,
-          leadId: plan.leadId,
-          assignedToId: plan.userId,
-          href: linkedEntityHref({ leadId: plan.leadId, companyId: plan.companyId }),
-          title: plan.title,
-          relatedTo: plan.company?.name ?? plan.lead?.title ?? plan.product?.name ?? "-",
-          date: dateLabel(plan.plannedAt),
-          time: dateLabel(plan.plannedAt, "hh:mm a"),
-          priority: labelize(plan.priority),
-          status: overdue ? "Overdue" : labelize(plan.status),
-          note: plan.note ?? "-",
-          assignedTo: plan.user?.name ?? "-",
-          overdue,
-          sortRank: overdue ? 0 : 3,
-          sortDate: plan.plannedAt,
-        };
-      }),
-  ];
-  const todayWorkItems: TodayWorkItem[] = todayWorkWithSort
-    .sort((a, b) => a.sortRank - b.sortRank || a.sortDate.getTime() - b.sortDate.getTime())
-    .map((item) => ({
-      id: item.id,
-      sourceId: item.sourceId,
-      source: item.source,
-      companyId: item.companyId,
-      leadId: item.leadId,
-      assignedToId: item.assignedToId,
-      href: item.href,
-      title: item.title,
-      relatedTo: item.relatedTo,
-      date: item.date,
-      time: item.time,
-      priority: item.priority,
-      status: item.status,
-      note: item.note,
-      assignedTo: item.assignedTo,
-      overdue: item.overdue,
-    }));
+  const todayWorkQueue = user.id
+    ? await getTodayWorkQueue({ id: user.id, role, name: user.name })
+    : [];
+  const todayWorkItems: TodayWorkItem[] = todayWorkQueue.map((item) => ({
+    id: item.id,
+    sourceId: item.sourceId,
+    source: item.sourceType === "FOLLOW_UP" ? "Follow-up" : "Task",
+    queueType: item.queueType,
+    queueLabel: item.queueLabel,
+    companyId: item.companyId,
+    leadId: item.leadId,
+    assignedToId: item.assignedToId,
+    href: item.companyHref ?? (item.leadId ? `/leads/${item.leadId}` : undefined),
+    title: item.title,
+    method: item.method,
+    relatedTo: item.companyName,
+    date: item.taskDateLabel,
+    dateTimeValue: item.taskDateIso,
+    time: item.timeLabel,
+    priority: item.priority,
+    status: item.queueLabel,
+    note: item.description,
+    assignedTo: item.assignedTo,
+    overdue: item.isOverdue,
+  }));
 
   const quotationRows: QuotationRow[] = quotations.map((quotation) => ({
     id: quotation.id,
@@ -1714,6 +1703,17 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
   const employeeRows: EmployeeRow[] = employees.map((employee) => {
     const won = employee.assignedLeads.filter((lead) => lead.status === "WON_SALE").length;
     const total = employee.assignedLeads.length;
+    const calls =
+      employee.communications.filter((log) => containsAnyMethod(log.method, ["phone", "call"])).length +
+      employee.followUps.filter((followUp) => containsAnyMethod(followUp.method, ["phone", "call"])).length;
+    const whatsapp =
+      employee.communications.filter((log) => containsAnyMethod(log.method, ["whatsapp"])).length +
+      employee.followUps.filter((followUp) => containsAnyMethod(followUp.method, ["whatsapp"])).length;
+    const meetings =
+      employee.communications.filter((log) => containsAnyMethod(log.method, ["meeting"])).length +
+      employee.followUps.filter((followUp) => containsAnyMethod(followUp.method, ["meeting"])).length;
+    const pendingTasks = employee.tasksAssigned.filter((task) => task.status !== "COMPLETED").length;
+    const overdueFollowUps = employee.followUps.filter((followUp) => followUp.status !== "COMPLETED" && isBefore(startOfDay(followUp.followUpDate), today)).length;
 
     return {
       id: employee.id,
@@ -1723,7 +1723,12 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
       role: labelize(employee.role),
       status: labelize(employee.status),
       leads: total,
+      calls,
+      whatsapp,
+      meetings,
       followUps: employee.followUps.length,
+      pendingTasks,
+      overdueFollowUps,
       sales: won,
       rewardPoints: rewardByUser.get(employee.id) ?? employee.rewards.reduce((sum, reward) => sum + reward.points, 0),
       conversionRate: total ? `${Math.round((won / total) * 100)}%` : "0%",
@@ -1809,6 +1814,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
       trigger: rule.trigger,
       points: rule.points,
       active: rule.active,
+      createdAt: dateLabel(rule.createdAt),
     })),
     importExportLogs: importLogs.map((item) => ({
       id: item.id,
@@ -1847,7 +1853,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
       followUps: followUpBadgeCount,
       leads: leadCount,
       customers: customerCount,
-      tasks: activeTaskBadgeCount,
+      tasks: todayWorkItems.length,
       todaysPlan: todaysPlanCount + todayTaskBadgeCount + followUpBadgeCount,
       products: activeProductCount,
       rewards: rewardAggregate._sum.points ?? 0,
@@ -1860,6 +1866,19 @@ const followUpDateFilters: FollowUpDateFilter[] = ["all", "today", "tomorrow", "
 function queryValue(value: unknown) {
   if (Array.isArray(value)) return typeof value[0] === "string" ? value[0] : undefined;
   return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
+}
+
+function containsAnyMethod(value: string | null | undefined, needles: string[]) {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return false;
+  return needles.some((needle) => normalized.includes(needle));
+}
+
+function inferTaskMethod(...values: (string | null | undefined)[]) {
+  if (values.some((value) => containsAnyMethod(value, ["whatsapp"]))) return "WhatsApp";
+  if (values.some((value) => containsAnyMethod(value, ["meeting"]))) return "Meeting";
+  if (values.some((value) => containsAnyMethod(value, ["phone", "call"]))) return "Phone Call";
+  return "Task";
 }
 
 function normalizeFollowUpQuery(query: FollowUpQuery | Record<string, unknown> = {}) {
@@ -1975,10 +1994,68 @@ export async function getFollowUpPageData(role: Role, user: ShellUser, query?: F
 }
 
 export async function getLeadDetail(id: string, role: Role, user: ShellUser) {
+  const prisma = getPrisma();
   const workspace = await getCrmWorkspace(role, user);
   const lookup = decodeURIComponent(id);
   const lookupSlug = slugify(lookup);
-  const lead = workspace.leads.find((item) => item.id === lookup || slugify(item.title) === lookupSlug);
+  const record = await prisma.lead.findFirst({
+    where: {
+      OR: [
+        { id: lookup },
+        { title: { equals: lookup, mode: "insensitive" } },
+        { customerName: { equals: lookup, mode: "insensitive" } },
+      ],
+    },
+    include: {
+      company: {
+        select: {
+          id: true,
+          name: true,
+          contacts: {
+            select: {
+              id: true,
+              name: true,
+              mobile: true,
+              email: true,
+              isPrimary: true,
+              whatsapp: true,
+            },
+          },
+        },
+      },
+      interestedProduct: true,
+      assignedTo: true,
+      communications: true,
+      followUps: true,
+      quotations: true,
+    },
+  });
+  const lead = record ? {
+    id: record.id,
+    companyId: record.companyId,
+    title: record.title || record.customerName,
+    customerName: record.customerName,
+    company: record.company?.name ?? record.customerName,
+    phone: primaryLeadContact(record.phone),
+    phones: splitLeadContacts(record.phone),
+    email: primaryLeadContact(record.email),
+    emails: splitLeadContacts(record.email),
+    productInterestId: record.productInterestId,
+    productInterest: record.interestedProduct?.name ?? "-",
+    status: leadStatusLabels[record.status] ?? labelize(record.status),
+    score: record.score,
+    priority: labelize(record.priority),
+    assignedToId: record.assignedToId,
+    assignedTo: record.assignedTo?.name ?? "-",
+    followUpDate: dateLabel(record.followUpDate),
+    followUpDateValue: record.followUpDate?.toISOString() ?? "",
+    purchaseProbability: record.purchaseProbability,
+    communicationCount: record.communications.length,
+    followUpCount: record.followUps.length,
+    salesProgress: progressFromLead(record.status),
+    notes: record.notes ?? "-",
+    createdAt: dateLabel(record.createdAt, "dd/MM/yyyy hh:mm a"),
+  } satisfies LeadRow : workspace.leads.find((item) => item.id === lookup || slugify(item.title) === lookupSlug || slugify(item.customerName) === lookupSlug);
   return {
     workspace,
     lead,

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCompletedTasks, type TaskPriorityFilter } from "@/lib/task-center";
+import { getCompletedWorkItems, type TaskPriorityFilter } from "@/lib/task-center";
 import { requireRequestUser } from "@/lib/request-user";
 
 export const runtime = "nodejs";
@@ -19,7 +19,7 @@ export async function GET(request: Request) {
       ? rawPriority as TaskPriorityFilter
       : "ALL";
 
-    const rows = await getCompletedTasks(
+    const rows = await getCompletedWorkItems(
       {
         id: auth.user.id,
         role: auth.user.role,

@@ -1,4 +1,4 @@
-import { Priority, TaskStatus } from "@prisma/client";
+import { FollowUpStatus, Priority, TaskStatus } from "@prisma/client";
 import { format } from "date-fns";
 import { getPrisma } from "@/lib/prisma";
 import type { Role } from "@/lib/utils";
@@ -43,6 +43,76 @@ export type TaskListItem = {
   completedBy: string;
 };
 
+export type TodayWorkQueueType = "TASK" | "DUE_FOLLOW_UP" | "OVERDUE" | "CARRY_FORWARD";
+
+export type TodayWorkQueueItem = {
+  id: string;
+  sourceId: string;
+  sourceType: "TASK" | "FOLLOW_UP";
+  queueType: TodayWorkQueueType;
+  queueLabel: "Task" | "Follow-up" | "Overdue" | "Carry Forward";
+  title: string;
+  companyName: string;
+  companyId?: string | null;
+  companyHref?: string | null;
+  leadId?: string | null;
+  leadName?: string | null;
+  description: string;
+  method: string;
+  assignedToId: string;
+  assignedTo: string;
+  assignedById: string;
+  assignedBy: string;
+  assignedByRole: string;
+  assignedAtIso: string;
+  assignedAtLabel: string;
+  priority: "Important" | "High" | "Medium" | "Low";
+  priorityKey: "IMPORTANT" | "HIGH" | "MEDIUM" | "LOW";
+  status: "Pending";
+  statusKey: "PENDING";
+  taskDateIso: string;
+  taskDateLabel: string;
+  timeLabel: string;
+  isPrevious: boolean;
+  isOverdue: boolean;
+  isDueFollowUp: boolean;
+  completedAtIso?: string | null;
+  completedAtLabel: string;
+  completedBy: string;
+};
+
+export type CompletedWorkItem = {
+  id: string;
+  sourceId: string;
+  sourceType: "TASK" | "FOLLOW_UP";
+  taskId?: string | null;
+  title: string;
+  companyName: string;
+  companyId?: string | null;
+  companyHref?: string | null;
+  leadId?: string | null;
+  leadName?: string | null;
+  description: string;
+  method: string;
+  assignedToId: string;
+  assignedTo: string;
+  assignedById: string;
+  assignedBy: string;
+  assignedByRole: string;
+  assignedAtIso: string;
+  assignedAtLabel: string;
+  priority: "Important" | "High" | "Medium" | "Low";
+  priorityKey: "IMPORTANT" | "HIGH" | "MEDIUM" | "LOW";
+  status: "Completed";
+  statusKey: "COMPLETED";
+  taskDateIso: string;
+  taskDateLabel: string;
+  timeLabel: string;
+  completedAtIso: string;
+  completedAtLabel: string;
+  completedBy: string;
+};
+
 const taskQueryInclude = {
   company: true,
   assignedTo: true,
@@ -71,6 +141,30 @@ type TaskQueryRecord = {
   assignedTo: { name: string; role: string | null } | null;
   assignedBy: { name: string; role: string | null } | null;
   completedBy: { name: string } | null;
+};
+
+type FollowUpQueryRecord = {
+  id: string;
+  leadId: string | null;
+  companyId: string | null;
+  assignedToId: string | null;
+  method: string;
+  note: string | null;
+  nextDiscussionPlan: string | null;
+  status: FollowUpStatus;
+  priority: Priority;
+  followUpDate: Date;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+  company: { name: string } | null;
+  lead: {
+    id: string;
+    title: string | null;
+    customerName: string | null;
+    company: { id: string; name: string } | null;
+  } | null;
+  assignedTo: { name: string; role: string | null } | null;
 };
 
 export class TaskInputError extends Error {
@@ -141,8 +235,18 @@ function taskStatusKey(status: TaskStatus): TaskListItem["statusKey"] {
   return status === "COMPLETED" ? "COMPLETED" : "PENDING";
 }
 
-function effectiveTaskDate(task: Pick<TaskQueryRecord, "taskDate" | "dueDate" | "createdAt">) {
-  return task.taskDate ?? task.dueDate ?? task.createdAt;
+function getEffectiveTaskDateTime(task: Pick<TaskQueryRecord, "taskTime" | "taskDate">) {
+  return task.taskTime ?? task.taskDate;
+}
+
+function startOfDay(date: Date) {
+  const value = new Date(date);
+  value.setHours(0, 0, 0, 0);
+  return value;
+}
+
+function effectiveTaskDate(task: Pick<TaskQueryRecord, "taskDate" | "dueDate" | "createdAt" | "taskTime">) {
+  return getEffectiveTaskDateTime(task);
 }
 
 function companyDisplayName(task: TaskQueryRecord) {
@@ -155,6 +259,20 @@ function roleLabel(role: string | null | undefined) {
     .replace(/_/g, " ")
     .toLowerCase()
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function cleanQueueText(value: string | null | undefined) {
+  const normalized = value?.trim();
+  return normalized && normalized.length ? normalized : "";
+}
+
+function inferTaskMethod(title: string | null | undefined, description: string | null | undefined) {
+  const haystack = `${title ?? ""} ${description ?? ""}`.toLowerCase();
+  if (haystack.includes("whatsapp")) return "WhatsApp";
+  if (haystack.includes("meeting")) return "Meeting";
+  if (haystack.includes("email")) return "Email";
+  if (haystack.includes("call") || haystack.includes("phone")) return "Phone Call";
+  return "Task";
 }
 
 function mapTaskRecord(task: TaskQueryRecord): TaskListItem {
@@ -206,8 +324,18 @@ export function parseTaskDateInput(value: string) {
   const normalized = value.trim();
   if (!normalized) return null;
 
-  const parsed = new Date(`${normalized}T00:00:00`);
+  const parsed = normalized.includes("T") ? new Date(normalized) : new Date(`${normalized}T00:00:00`);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export function parseTaskDateTimeInput(value: string) {
+  return parseTaskDateInput(value);
+}
+
+function isTaskVisibleInTodayList(task: TaskQueryRecord, now = new Date()) {
+  if (task.status === "COMPLETED") return false;
+  if (task.isPrevious) return true;
+  return getEffectiveTaskDateTime(task).getTime() <= now.getTime();
 }
 
 async function getTaskScopeUserIds(prisma: ReturnType<typeof getPrisma>, actor: TaskActor) {
@@ -235,28 +363,48 @@ async function scopedTaskWhere(prisma: ReturnType<typeof getPrisma>, actor: Task
     };
 }
 
-async function resolveAssignedMarketer(prisma: ReturnType<typeof getPrisma>, actor: TaskActor, assignedToId?: string) {
+async function scopedFollowUpWhere(prisma: ReturnType<typeof getPrisma>, actor: TaskActor) {
+  if (actor.role === "ADMIN") return {};
+  if (actor.role === "MARKETER") return { assignedToId: actor.id };
+
+  const scopedIds = await getTaskScopeUserIds(prisma, actor);
+  return { assignedToId: { in: scopedIds } };
+}
+
+async function resolveAssignedTaskUser(prisma: ReturnType<typeof getPrisma>, actor: TaskActor, assignedToId?: string) {
   if (actor.role === "MARKETER") {
     return actor.id;
   }
 
+  if (actor.role === "SUPERVISOR" && (!assignedToId || assignedToId === actor.id)) {
+    return actor.id;
+  }
+
   if (!assignedToId) {
-    throw new TaskInputError("Assigned marketer is required.");
+    throw new TaskInputError("Assigned user is required.");
   }
 
   const assignee = await prisma.user.findFirst({
     where: {
       id: assignedToId,
-      role: "MARKETER",
       status: "ACTIVE",
-      ...(actor.role === "SUPERVISOR" ? { supervisorId: actor.id } : {}),
+      ...(actor.role === "SUPERVISOR"
+        ? {
+            role: "MARKETER",
+            supervisorId: actor.id,
+          }
+        : {
+            role: { in: ["SUPERVISOR", "MARKETER"] },
+          }),
     },
-    select: { id: true },
+    select: { id: true, role: true },
   });
 
   if (!assignee) {
     throw new TaskInputError(
-      actor.role === "SUPERVISOR" ? "Selected marketer is not in your team." : "Selected marketer was not found.",
+      actor.role === "SUPERVISOR"
+        ? "Selected user must be you or a marketer from your team."
+        : "Selected assignee must be an active supervisor or marketer.",
       403,
     );
   }
@@ -343,11 +491,181 @@ export async function getTodayTasks(actor: TaskActor, filters: TaskFilters = {})
     orderBy: [
       { isPrevious: "desc" },
       { taskDate: "asc" },
+      { taskTime: "asc" },
       { updatedAt: "desc" },
     ],
   });
 
-  return tasks.map(mapTaskRecord);
+  const now = new Date();
+  return tasks.filter((task) => isTaskVisibleInTodayList(task, now)).map(mapTaskRecord);
+}
+
+export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters = {}) {
+  const prisma = getPrisma();
+  await syncPreviousTaskFlags();
+
+  const today = startOfToday();
+  const tomorrow = startOfTomorrow();
+  const now = new Date();
+  const priorityFilter = filters.priority ? toPrismaPriority(filters.priority) : undefined;
+  const companyQuery = filters.company?.trim().toLowerCase() ?? "";
+
+  const [taskRows, followUpRows] = await Promise.all([
+    prisma.task.findMany({
+      where: {
+        AND: [
+          await scopedTaskWhere(prisma, actor),
+          { status: "PENDING" },
+          { taskDate: { lt: tomorrow } },
+          ...(priorityFilter ? [{ priority: priorityFilter }] : []),
+        ],
+      },
+      include: taskQueryInclude,
+      orderBy: [
+        { isPrevious: "desc" },
+        { taskDate: "asc" },
+        { taskTime: "asc" },
+        { updatedAt: "desc" },
+      ],
+    }),
+    prisma.followUp.findMany({
+      where: {
+        AND: [
+          await scopedFollowUpWhere(prisma, actor),
+          { status: { not: "COMPLETED" } },
+          { followUpDate: { lte: now } },
+          ...(priorityFilter ? [{ priority: priorityFilter }] : []),
+        ],
+      },
+      include: {
+        company: { select: { id: true, name: true } },
+        lead: {
+          select: {
+            id: true,
+            title: true,
+            customerName: true,
+            company: { select: { id: true, name: true } },
+          },
+        },
+        assignedTo: { select: { name: true, role: true } },
+      },
+      orderBy: [
+        { followUpDate: "asc" },
+        { updatedAt: "desc" },
+      ],
+    }),
+  ]);
+
+  const mappedTasks: TodayWorkQueueItem[] = taskRows
+    .filter((task) => task.status !== "COMPLETED")
+    .map((task) => {
+      const mapped = mapTaskRecord(task);
+      const baseDate = new Date(mapped.taskDateIso);
+      const isCarryForward = baseDate.getTime() < today.getTime();
+
+      return {
+        id: `task-${mapped.id}`,
+        sourceId: mapped.id,
+        sourceType: "TASK",
+        queueType: isCarryForward ? "CARRY_FORWARD" : "TASK",
+        queueLabel: isCarryForward ? "Carry Forward" : "Task",
+        title: mapped.title,
+        companyName: mapped.companyName,
+        companyId: mapped.companyId,
+        companyHref: mapped.companyHref,
+        leadId: null,
+        leadName: null,
+        description: mapped.description,
+        method: inferTaskMethod(task.title, task.description),
+        assignedToId: mapped.assignedToId,
+        assignedTo: mapped.assignedTo,
+        assignedById: mapped.assignedById,
+        assignedBy: mapped.assignedBy,
+        assignedByRole: mapped.assignedByRole,
+        assignedAtIso: mapped.assignedAtIso,
+        assignedAtLabel: mapped.assignedAtLabel,
+        priority: mapped.priority,
+        priorityKey: mapped.priorityKey,
+        status: "Pending",
+        statusKey: "PENDING",
+        taskDateIso: mapped.taskDateIso,
+        taskDateLabel: mapped.taskDateLabel,
+        timeLabel: mapped.timeLabel,
+        isPrevious: isCarryForward,
+        isOverdue: isCarryForward,
+        isDueFollowUp: false,
+        completedAtIso: null,
+        completedAtLabel: "",
+        completedBy: "-",
+      };
+    });
+
+  const mappedFollowUps: TodayWorkQueueItem[] = followUpRows.map((followUp) => {
+    const followUpDate = followUp.followUpDate;
+    const isOverdue = followUp.status === "OVERDUE" || followUpDate.getTime() < today.getTime();
+    const company = followUp.company ?? followUp.lead?.company ?? null;
+    const companyName = company?.name ?? followUp.lead?.customerName ?? "Unknown Company";
+    const companyId = company?.id ?? followUp.companyId ?? followUp.lead?.company?.id ?? null;
+    const note = cleanQueueText(followUp.note);
+    const nextPlan = cleanQueueText(followUp.nextDiscussionPlan);
+    const leadName = cleanQueueText(followUp.lead?.title);
+
+    return {
+      id: `follow-up-${followUp.id}`,
+      sourceId: followUp.id,
+      sourceType: "FOLLOW_UP",
+      queueType: isOverdue ? "OVERDUE" : "DUE_FOLLOW_UP",
+      queueLabel: isOverdue ? "Overdue" : "Follow-up",
+      title: note || nextPlan || `${followUp.method} follow-up`,
+      companyName,
+      companyId,
+      companyHref: companyId ? `/customers/${companyId}` : followUp.leadId ? `/leads/${followUp.leadId}` : null,
+      leadId: followUp.leadId,
+      leadName: leadName || null,
+      description: note || nextPlan || followUp.method,
+      method: cleanQueueText(followUp.method) || "Follow-up",
+      assignedToId: followUp.assignedToId ?? "",
+      assignedTo: followUp.assignedTo?.name ?? "-",
+      assignedById: "",
+      assignedBy: "-",
+      assignedByRole: "-",
+      assignedAtIso: followUp.createdAt.toISOString(),
+      assignedAtLabel: formatDateTime(followUp.createdAt),
+      priority: toPriorityLabel(followUp.priority),
+      priorityKey: toPriorityKey(followUp.priority),
+      status: "Pending",
+      statusKey: "PENDING",
+      taskDateIso: followUpDate.toISOString(),
+      taskDateLabel: formatDate(followUpDate),
+      timeLabel: formatTime(followUpDate),
+      isPrevious: false,
+      isOverdue,
+      isDueFollowUp: !isOverdue,
+      completedAtIso: null,
+      completedAtLabel: "",
+      completedBy: "-",
+    };
+  });
+
+  const filteredRows = [...mappedTasks, ...mappedFollowUps].filter((item) => {
+    if (!companyQuery) return true;
+
+    const haystack = [
+      item.title,
+      item.companyName,
+      item.description,
+      item.method,
+      item.leadName ?? "",
+    ].join(" ").toLowerCase();
+    return haystack.includes(companyQuery);
+  });
+
+  return filteredRows.sort((left, right) => {
+    const leftTime = new Date(left.taskDateIso).getTime();
+    const rightTime = new Date(right.taskDateIso).getTime();
+    if (leftTime !== rightTime) return leftTime - rightTime;
+    return left.title.localeCompare(right.title);
+  });
 }
 
 export async function getCompletedTasks(actor: TaskActor, filters: TaskFilters = {}) {
@@ -375,40 +693,226 @@ export async function getCompletedTasks(actor: TaskActor, filters: TaskFilters =
   return tasks.map(mapTaskRecord);
 }
 
+export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilters = {}) {
+  const prisma = getPrisma();
+  await syncPreviousTaskFlags();
+
+  const priorityFilter = filters.priority ? toPrismaPriority(filters.priority) : undefined;
+  const companyQuery = filters.company?.trim().toLowerCase() ?? "";
+
+  const [tasks, followUps] = await Promise.all([
+    prisma.task.findMany({
+      where: {
+        AND: [
+          await scopedTaskWhere(prisma, actor),
+          { status: "COMPLETED" },
+          ...(priorityFilter ? [{ priority: priorityFilter }] : []),
+        ],
+      },
+      include: taskQueryInclude,
+      orderBy: [
+        { completedAt: "desc" },
+        { updatedAt: "desc" },
+      ],
+    }),
+    prisma.followUp.findMany({
+      where: {
+        AND: [
+          await scopedFollowUpWhere(prisma, actor),
+          { status: "COMPLETED" },
+          ...(priorityFilter ? [{ priority: priorityFilter }] : []),
+        ],
+      },
+      include: {
+        company: { select: { id: true, name: true } },
+        lead: {
+          select: {
+            id: true,
+            title: true,
+            customerName: true,
+            company: { select: { id: true, name: true } },
+          },
+        },
+        assignedTo: { select: { name: true, role: true } },
+        task: {
+          select: {
+            id: true,
+            title: true,
+            assignedById: true,
+            assignedBy: { select: { name: true, role: true } },
+            createdAt: true,
+          },
+        },
+        timelineItems: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          include: { user: { select: { name: true } } },
+        },
+      },
+      orderBy: [
+        { completedAt: "desc" },
+        { updatedAt: "desc" },
+      ],
+    }),
+  ]);
+
+  const taskItems: CompletedWorkItem[] = tasks.map((task) => {
+    const mapped = mapTaskRecord(task);
+    return {
+      id: `task-${mapped.id}`,
+      sourceId: mapped.id,
+      sourceType: "TASK",
+      taskId: mapped.id,
+      title: mapped.title,
+      companyName: mapped.companyName,
+      companyId: mapped.companyId,
+      companyHref: mapped.companyHref,
+      leadId: null,
+      leadName: null,
+      description: mapped.description,
+      method: inferTaskMethod(task.title, task.description),
+      assignedToId: mapped.assignedToId,
+      assignedTo: mapped.assignedTo,
+      assignedById: mapped.assignedById,
+      assignedBy: mapped.assignedBy,
+      assignedByRole: mapped.assignedByRole,
+      assignedAtIso: mapped.assignedAtIso,
+      assignedAtLabel: mapped.assignedAtLabel,
+      priority: mapped.priority,
+      priorityKey: mapped.priorityKey,
+      status: "Completed",
+      statusKey: "COMPLETED",
+      taskDateIso: mapped.taskDateIso,
+      taskDateLabel: mapped.taskDateLabel,
+      timeLabel: mapped.timeLabel,
+      completedAtIso: mapped.completedAtIso ?? mapped.assignedAtIso,
+      completedAtLabel: mapped.completedAtLabel,
+      completedBy: mapped.completedBy,
+    };
+  });
+
+  const followUpItems: CompletedWorkItem[] = followUps.map((followUp) => {
+    const company = followUp.company ?? followUp.lead?.company ?? null;
+    const companyName = company?.name ?? followUp.lead?.customerName ?? "Unknown Company";
+    const companyId = company?.id ?? followUp.companyId ?? followUp.lead?.company?.id ?? null;
+    const leadName = cleanQueueText(followUp.lead?.title) || cleanQueueText(followUp.lead?.customerName) || null;
+    const title = cleanQueueText(followUp.note) || cleanQueueText(followUp.nextDiscussionPlan) || `${followUp.method} follow-up`;
+    const description = cleanQueueText(followUp.nextDiscussionPlan) || cleanQueueText(followUp.note) || followUp.method;
+    const completedAt = followUp.completedAt ?? followUp.updatedAt;
+    const completedBy = followUp.timelineItems[0]?.user?.name ?? followUp.assignedTo?.name ?? "-";
+
+    return {
+      id: `follow-up-${followUp.id}`,
+      sourceId: followUp.id,
+      sourceType: "FOLLOW_UP",
+      taskId: followUp.task?.id ?? null,
+      title,
+      companyName,
+      companyId,
+      companyHref: companyId ? `/customers/${companyId}` : followUp.leadId ? `/leads/${followUp.leadId}` : null,
+      leadId: followUp.leadId,
+      leadName,
+      description,
+      method: cleanQueueText(followUp.method) || "Follow-up",
+      assignedToId: followUp.assignedToId ?? "",
+      assignedTo: followUp.assignedTo?.name ?? "-",
+      assignedById: followUp.task?.assignedById ?? "",
+      assignedBy: followUp.task?.assignedBy?.name ?? "-",
+      assignedByRole: roleLabel(followUp.task?.assignedBy?.role),
+      assignedAtIso: followUp.createdAt.toISOString(),
+      assignedAtLabel: formatDateTime(followUp.createdAt),
+      priority: toPriorityLabel(followUp.priority),
+      priorityKey: toPriorityKey(followUp.priority),
+      status: "Completed",
+      statusKey: "COMPLETED",
+      taskDateIso: followUp.followUpDate.toISOString(),
+      taskDateLabel: formatDate(followUp.followUpDate),
+      timeLabel: formatTime(followUp.followUpDate),
+      completedAtIso: completedAt.toISOString(),
+      completedAtLabel: formatDateTime(completedAt),
+      completedBy,
+    };
+  });
+
+  const rows = [...taskItems, ...followUpItems].filter((item) => {
+    if (!companyQuery) return true;
+    const haystack = [
+      item.title,
+      item.companyName,
+      item.description,
+      item.method,
+      item.leadName ?? "",
+      item.completedBy,
+    ].join(" ").toLowerCase();
+    return haystack.includes(companyQuery);
+  });
+
+  return rows.sort((left, right) => new Date(right.completedAtIso).getTime() - new Date(left.completedAtIso).getTime());
+}
+
 export async function createTaskEntry(actor: TaskActor, input: {
   title: string;
-  companyName: string;
+  companyId?: string;
+  companyName?: string;
   description?: string;
   priority: TaskPriorityFilter;
-  taskDate: Date;
+  taskDateTime: Date;
   assignedToId?: string;
 }) {
   const prisma = getPrisma();
   const today = startOfToday();
   const normalizedTitle = normalizeText(input.title);
-  const normalizedCompany = normalizeText(input.companyName);
-  const taskDate = new Date(input.taskDate);
-  taskDate.setHours(0, 0, 0, 0);
-  const assignedToId = await resolveAssignedMarketer(prisma, actor, input.assignedToId);
+  const taskDateTime = new Date(input.taskDateTime);
+  const taskDate = startOfDay(taskDateTime);
+  const assignedToId = await resolveAssignedTaskUser(prisma, actor, input.assignedToId);
 
-  const matchedCompany = await prisma.customerCompany.findFirst({
-    where: { name: { equals: normalizedCompany, mode: "insensitive" } },
-    select: { id: true },
-  });
+  let companyId = input.companyId?.trim();
+  let companyName = input.companyName?.trim();
+
+  if (companyId) {
+    const company = await prisma.customerCompany.findUnique({
+      where: { id: companyId },
+      select: { id: true, name: true },
+    });
+
+    if (!company) {
+      throw new TaskInputError("Selected company was not found.");
+    }
+
+    companyId = company.id;
+    companyName = company.name;
+  } else if (companyName) {
+    const matchedCompany = await prisma.customerCompany.findFirst({
+      where: { name: { equals: normalizeText(companyName), mode: "insensitive" } },
+      select: { id: true, name: true },
+    });
+
+    if (matchedCompany) {
+      companyId = matchedCompany.id;
+      companyName = matchedCompany.name;
+    }
+  } else {
+    throw new TaskInputError("Company is required.");
+  }
+
+  if (!companyName) {
+    throw new TaskInputError("Company is required.");
+  }
 
   const task = await prisma.task.create({
     data: {
       title: normalizedTitle,
       description: input.description ? normalizeText(input.description) : undefined,
-      companyName: normalizedCompany,
+      companyName: normalizeText(companyName),
       priority: toPrismaPriority(input.priority) ?? "MEDIUM",
       status: "PENDING",
       taskDate,
-      dueDate: taskDate,
+      taskTime: taskDateTime,
+      dueDate: taskDateTime,
       isPrevious: taskDate < today,
       assignedBy: { connect: { id: actor.id } },
       assignedTo: { connect: { id: assignedToId } },
-      ...(matchedCompany ? { company: { connect: { id: matchedCompany.id } } } : {}),
+      ...(companyId ? { company: { connect: { id: companyId } } } : {}),
     },
     include: taskQueryInclude,
   });

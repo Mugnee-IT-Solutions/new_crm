@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { motion } from "framer-motion";
 import { ChevronLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { isActiveRoute, sidebarMenus } from "@/lib/navigation";
@@ -95,6 +96,7 @@ export function AppSidebar({
       )}
     >
       <div className="flex h-20 items-center gap-2 px-4">
+        <motion.div whileHover={{ y: -1 }} transition={{ duration: 0.16 }}>
         <Link href={sidebarMenus[role][0].href} className="flex min-w-0 items-center gap-3" onClick={onNavigate}>
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white text-blue-700 shadow-lg">
             <span className="text-sm font-black">M</span>
@@ -106,6 +108,7 @@ export function AppSidebar({
             </div>
           ) : null}
         </Link>
+        </motion.div>
       </div>
 
       <Button
@@ -151,72 +154,74 @@ export function AppSidebar({
                   const isRewards = item.label === "Rewards";
 
                   return (
-                    <Link
-                      href={item.href}
-                      key={item.href}
-                      title={tooltip}
-                      onClick={onNavigate}
-                      className={cn(
-                        "group relative flex items-center gap-3 overflow-hidden rounded-xl border border-transparent px-3 py-2.5 text-sm font-semibold text-blue-100 transition duration-300",
-                        active && !isRewards
-                          ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-950/30"
-                          : "",
-                        active && isRewards
-                          ? "border-amber-200/30 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-lg shadow-orange-950/30"
-                          : "",
-                        !active && !isRewards ? "hover:bg-white/10 hover:text-white" : "",
-                        !active && isRewards
-                          ? "border-amber-300/20 bg-amber-400/10 text-amber-100 hover:bg-amber-400/20 hover:text-amber-50"
-                          : "",
-                        collapsed ? "justify-center px-2" : "",
-                      )}
-                    >
-                      {active ? (
-                        <span
+                    <motion.div key={item.href} whileHover={{ x: 3 }} whileTap={{ scale: 0.99 }} transition={{ duration: 0.16 }}>
+                      <Link
+                        href={item.href}
+                        title={tooltip}
+                        onClick={onNavigate}
+                        className={cn(
+                          "group relative flex items-center gap-3 overflow-hidden rounded-xl border border-transparent px-3 py-2.5 text-sm font-semibold text-blue-100 transition duration-300",
+                          active && !isRewards
+                            ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-950/30"
+                            : "",
+                          active && isRewards
+                            ? "border-amber-200/30 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-lg shadow-orange-950/30"
+                            : "",
+                          !active && !isRewards ? "hover:bg-white/10 hover:text-white" : "",
+                          !active && isRewards
+                            ? "border-amber-300/20 bg-amber-400/10 text-amber-100 hover:bg-amber-400/20 hover:text-amber-50"
+                            : "",
+                          collapsed ? "justify-center px-2" : "",
+                        )}
+                      >
+                        {active ? (
+                          <motion.span
+                            layoutId={`sidebar-indicator-${role}`}
+                            className={cn(
+                              "absolute left-0 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full",
+                              isRewards ? "bg-amber-100" : "bg-white",
+                            )}
+                          />
+                        ) : null}
+
+                        <Icon
                           className={cn(
-                            "absolute left-0 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full",
-                            isRewards ? "bg-amber-100" : "bg-white",
+                            "h-4 w-4 shrink-0 transition-colors",
+                            !active && isRewards ? "text-amber-200" : "",
                           )}
                         />
-                      ) : null}
-
-                      <Icon
-                        className={cn(
-                          "h-4 w-4 shrink-0 transition-colors",
-                          !active && isRewards ? "text-amber-200" : "",
-                        )}
-                      />
-                      {!collapsed ? (
-                        <>
-                          <span className="truncate">{item.label}</span>
-                          {showBadge ? (
-                            <span
-                              className={cn(
-                                "ml-auto inline-flex min-w-8 items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-black",
-                                active && !isRewards ? "bg-white text-blue-700" : "",
-                                active && isRewards ? "bg-white text-orange-700" : "",
-                                !active && !isRewards ? "bg-blue-500/95 text-white" : "",
-                                !active && isRewards ? "bg-amber-300 text-slate-950" : "",
-                              )}
-                            >
-                              {badgeText}
-                            </span>
-                          ) : null}
-                        </>
-                      ) : showBadge ? (
-                        <span
-                          className={cn(
-                            "absolute right-1 top-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-black",
-                            active && !isRewards ? "bg-white/90 text-blue-700" : "",
-                            active && isRewards ? "bg-white/90 text-orange-700" : "",
-                            !active && !isRewards ? "bg-blue-500/95 text-white" : "",
-                            !active && isRewards ? "bg-amber-300 text-slate-950" : "",
-                          )}
-                        >
-                          <span className="inline-flex min-w-5 items-center justify-center">{badgeText}</span>
-                        </span>
-                      ) : null}
-                    </Link>
+                        {!collapsed ? (
+                          <>
+                            <span className="truncate">{item.label}</span>
+                            {showBadge ? (
+                              <span
+                                className={cn(
+                                  "ml-auto inline-flex min-w-8 items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-black",
+                                  active && !isRewards ? "bg-white text-blue-700" : "",
+                                  active && isRewards ? "bg-white text-orange-700" : "",
+                                  !active && !isRewards ? "bg-blue-500/95 text-white" : "",
+                                  !active && isRewards ? "bg-amber-300 text-slate-950" : "",
+                                )}
+                              >
+                                {badgeText}
+                              </span>
+                            ) : null}
+                          </>
+                        ) : showBadge ? (
+                          <span
+                            className={cn(
+                              "absolute right-1 top-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-black",
+                              active && !isRewards ? "bg-white/90 text-blue-700" : "",
+                              active && isRewards ? "bg-white/90 text-orange-700" : "",
+                              !active && !isRewards ? "bg-blue-500/95 text-white" : "",
+                              !active && isRewards ? "bg-amber-300 text-slate-950" : "",
+                            )}
+                          >
+                            <span className="inline-flex min-w-5 items-center justify-center">{badgeText}</span>
+                          </span>
+                        ) : null}
+                      </Link>
+                    </motion.div>
                   );
                 })}
               </div>

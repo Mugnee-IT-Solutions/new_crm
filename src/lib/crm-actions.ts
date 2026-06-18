@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import type * as Prisma from "@prisma/client";
 import { getCurrentSession } from "@/lib/auth";
+import { createProductEntry, deleteProductEntry, updateProductEntry } from "@/lib/product-center";
 import { getPrisma } from "@/lib/prisma";
 import { roleHome, type Role } from "@/lib/utils";
 
@@ -277,25 +278,87 @@ function canManage(role: Role) {
   return role === "ADMIN" || role === "SUPERVISOR";
 }
 
+const REWARD_TRIGGER_OPTIONS = ["LEAD_CREATED", "FOLLOW_UP_COMPLETED", "MEETING_SCHEDULED", "WON_SALE", "TASK_COMPLETED", "MANUAL_ADJUSTMENT"] as const;
+
+function normalizeRewardTrigger(value?: string) {
+  if (!value) return undefined;
+
+  const nextValue = value.trim();
+  return REWARD_TRIGGER_OPTIONS.includes(nextValue as (typeof REWARD_TRIGGER_OPTIONS)[number]) ? nextValue : undefined;
+}
+
+function formatRewardRuleDate(value: Date) {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(value);
+}
+
+function revalidateRewardViews() {
+  [
+    "/admin/rewards",
+    "/supervisor/rewards",
+    "/marketer/rewards",
+    "/admin/dashboard",
+    "/supervisor/dashboard",
+    "/marketer/dashboard",
+    "/admin/team",
+    "/supervisor/team",
+  ].forEach((path) => revalidatePath(path));
+}
+
+function revalidateProductViews(productId?: string) {
+  [
+    "/admin/products",
+    "/supervisor/products",
+    "/marketer/products",
+    "/admin/dashboard",
+    "/supervisor/dashboard",
+    "/marketer/dashboard",
+    "/admin/leads",
+    "/supervisor/leads",
+    "/marketer/leads",
+  ].forEach((path) => revalidatePath(path));
+
+  if (productId) {
+    revalidatePath(`/products/${productId}`);
+  }
+}
+
 async function resolveTaskAssignee(prisma: ReturnType<typeof getPrisma>, user: { id: string; role: Role }, requestedAssignedToId?: string) {
   if (!canManage(user.role)) return user.id;
 
+  if (user.role === "SUPERVISOR" && (!requestedAssignedToId || requestedAssignedToId === user.id)) {
+    return user.id;
+  }
+
   if (!requestedAssignedToId) {
-    throw new Error("Assigned marketer is required.");
+    throw new Error("Assigned user is required.");
   }
 
   const assignee = await prisma.user.findFirst({
     where: {
       id: requestedAssignedToId,
-      role: "MARKETER",
       status: "ACTIVE",
-      ...(user.role === "SUPERVISOR" ? { supervisorId: user.id } : {}),
+      ...(user.role === "SUPERVISOR"
+        ? {
+            role: "MARKETER",
+            supervisorId: user.id,
+          }
+        : {
+            role: { in: ["SUPERVISOR", "MARKETER"] },
+          }),
     },
-    select: { id: true },
+    select: { id: true, role: true },
   });
 
   if (!assignee) {
-    throw new Error(user.role === "SUPERVISOR" ? "Selected marketer is not in your team." : "Selected marketer was not found.");
+    throw new Error(
+      user.role === "SUPERVISOR"
+        ? "Selected user must be you or a marketer from your team."
+        : "Selected assignee must be an active supervisor or marketer.",
+    );
   }
 
   return assignee.id;
@@ -304,19 +367,30 @@ async function resolveTaskAssignee(prisma: ReturnType<typeof getPrisma>, user: {
 async function resolveOptionalMarketerAssignee(prisma: ReturnType<typeof getPrisma>, user: { id: string; role: Role }, requestedAssignedToId?: string) {
   if (user.role === "MARKETER") return user.id;
   if (!requestedAssignedToId) return undefined;
+  if (user.role === "SUPERVISOR" && requestedAssignedToId === user.id) return user.id;
 
   const assignee = await prisma.user.findFirst({
     where: {
       id: requestedAssignedToId,
-      role: "MARKETER",
       status: "ACTIVE",
-      ...(user.role === "SUPERVISOR" ? { supervisorId: user.id } : {}),
+      ...(user.role === "SUPERVISOR"
+        ? {
+            role: "MARKETER",
+            supervisorId: user.id,
+          }
+        : {
+            role: { in: ["SUPERVISOR", "MARKETER"] },
+          }),
     },
     select: { id: true },
   });
 
   if (!assignee) {
-    throw new Error(user.role === "SUPERVISOR" ? "Selected marketer is not in your team." : "Selected marketer was not found.");
+    throw new Error(
+      user.role === "SUPERVISOR"
+        ? "Selected user must be you or a marketer from your team."
+        : "Selected assignee must be an active supervisor or marketer.",
+    );
   }
 
   return assignee.id;
@@ -350,6 +424,25 @@ async function hasTaskAccess(prisma: ReturnType<typeof getPrisma>, user: { id: s
   if (!scopeIds) return false;
 
   return scopeIds.includes(task.assignedToId ?? "") || scopeIds.includes(task.assignedById ?? "");
+}
+
+async function hasFollowUpAccess(prisma: ReturnType<typeof getPrisma>, user: { id: string; role: Role }, followUpId: string) {
+  const followUp = await prisma.followUp.findUnique({
+    where: { id: followUpId },
+    select: { assignedToId: true, task: { select: { assignedToId: true, assignedById: true } } },
+  });
+  if (!followUp) return false;
+
+  if (user.role === "ADMIN") return true;
+
+  const scopeIds = await getTaskScopeUserIds(prisma, user);
+  if (!scopeIds) return false;
+
+  return (
+    scopeIds.includes(followUp.assignedToId ?? "") ||
+    scopeIds.includes(followUp.task?.assignedToId ?? "") ||
+    scopeIds.includes(followUp.task?.assignedById ?? "")
+  );
 }
 
 async function addTimeline(input: {
@@ -691,9 +784,6 @@ export async function createCustomerAction(formData: FormData) {
 
 export async function createProductAction(formData: FormData) {
   const user = await actionUser();
-  if (user.role !== "ADMIN") return { ok: false, message: "Only Admin can create products." };
-
-  const prisma = getPrisma();
   const name = text(formData, "name");
   const category = text(formData, "category");
   const price = Number(formData.get("price"));
@@ -702,8 +792,9 @@ export async function createProductAction(formData: FormData) {
   if (!category) return { ok: false, message: "Category is required." };
   if (!Number.isFinite(price) || price < 0) return { ok: false, message: "Valid price is required." };
 
-  const product = await prisma.productService.create({
-    data: {
+  const created = await createProductEntry(
+    { id: user.id, role: user.role as Role, name: user.name ?? undefined },
+    {
       name,
       category,
       brand: text(formData, "brand"),
@@ -711,19 +802,56 @@ export async function createProductAction(formData: FormData) {
       imageUrl: text(formData, "imageUrl"),
       description: text(formData, "description"),
       specification: text(formData, "specification"),
-      status: "ACTIVE",
     },
-  });
+  );
 
-  await addTimeline({
-    title: "Product Created",
-    description: product.name,
-    entity: "ProductService",
-    entityId: product.id,
-    userId: user.id,
-  });
-  revalidatePath("/");
-  return { ok: true, id: product.id };
+  revalidateProductViews(created.product.id);
+  return { ok: true, id: created.product.id, row: created.row };
+}
+
+export async function updateProductAction(formData: FormData) {
+  const user = await actionUser();
+  const id = text(formData, "id");
+  const name = text(formData, "name");
+  const category = text(formData, "category");
+  const price = Number(formData.get("price"));
+
+  if (!id) return { ok: false, message: "Product id is required." };
+  if (!name) return { ok: false, message: "Product name is required." };
+  if (!category) return { ok: false, message: "Category is required." };
+  if (!Number.isFinite(price) || price < 0) return { ok: false, message: "Valid price is required." };
+
+  const updated = await updateProductEntry(
+    { id: user.id, role: user.role as Role, name: user.name ?? undefined },
+    id,
+    {
+      name,
+      category,
+      brand: text(formData, "brand"),
+      price,
+      imageUrl: text(formData, "imageUrl"),
+      description: text(formData, "description"),
+      specification: text(formData, "specification"),
+      status: (text(formData, "status") as "ACTIVE" | "INACTIVE" | undefined) ?? "ACTIVE",
+    },
+  );
+
+  revalidateProductViews(updated.product.id);
+  return { ok: true, id: updated.product.id, row: updated.row };
+}
+
+export async function deleteProductAction(formData: FormData) {
+  const user = await actionUser();
+  const id = text(formData, "id");
+  if (!id) return { ok: false, message: "Product id is required." };
+
+  const deleted = await deleteProductEntry(
+    { id: user.id, role: user.role as Role, name: user.name ?? undefined },
+    id,
+  );
+
+  revalidateProductViews(deleted.id);
+  return { ok: true, id: deleted.id };
 }
 
 export async function createTaskAction(formData: FormData) {
@@ -847,7 +975,7 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
   const user = await actionUser();
   const prisma = getPrisma();
   const id = text(formData, "id");
-  const followUpDone = text(formData, "followUpDone");
+  const method = text(formData, "method") ?? "Phone Call";
   const conversationSummary = text(formData, "conversationSummary");
   const discussionTopic = text(formData, "discussionTopic");
   const productDiscussed = text(formData, "productDiscussed");
@@ -855,6 +983,7 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
   const notes = text(formData, "notes");
   const nextFollowUpDate = validDate(dateValue(formData, "nextFollowUpDate"));
   const rating = formData.has("rating") ? clampEngagementRating(formData.get("rating")) : undefined;
+  const followUpDone = text(formData, "followUpDone") ?? (nextFollowUpDate ? "NO" : "YES");
 
   if (!id) {
     return { ok: false, message: "Task reference is missing." };
@@ -942,7 +1071,7 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
         ...(resolvedLead ? { lead: { connect: { id: resolvedLead.id } } } : {}),
         task: { connect: { id: task.id } },
         user: { connect: { id: user.id } },
-        method: "Task Completion",
+        method,
         note: conversationSummary,
         discussionTopic,
         productDiscussed: productDiscussed ?? task.product?.name ?? undefined,
@@ -1027,6 +1156,151 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
     ok: true,
     taskId: result.updatedTask.id,
     followUpId: result.followUp?.id,
+    nextFollowUpDate: result.followUp?.followUpDate.toISOString(),
+    communicationId: result.communication.id,
+  };
+}
+
+export async function completeFollowUpWithCommunicationAction(formData: FormData) {
+  const user = await actionUser();
+  const prisma = getPrisma();
+  const id = text(formData, "id");
+  const method = text(formData, "method") ?? "Phone Call";
+  const conversationSummary = text(formData, "conversationSummary");
+  const discussionTopic = text(formData, "discussionTopic");
+  const productDiscussed = text(formData, "productDiscussed");
+  const outcome = text(formData, "outcome");
+  const notes = text(formData, "notes");
+  const nextFollowUpDate = validDate(dateValue(formData, "nextFollowUpDate"));
+  const rating = formData.has("rating") ? clampEngagementRating(formData.get("rating")) : undefined;
+
+  if (!id) {
+    return { ok: false, message: "Follow-up reference is missing." };
+  }
+
+  if (!conversationSummary) {
+    return { ok: false, message: "Conversation summary is required." };
+  }
+
+  if (!(await hasFollowUpAccess(prisma, user, id))) {
+    return { ok: false, message: "You are not allowed to complete this follow-up." };
+  }
+
+  const followUp = await prisma.followUp.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      status: true,
+      completedAt: true,
+      companyId: true,
+      leadId: true,
+      assignedToId: true,
+      taskId: true,
+      method: true,
+      priority: true,
+    },
+  });
+
+  if (!followUp) {
+    return { ok: false, message: "Follow-up not found." };
+  }
+
+  if (followUp.status === "COMPLETED" || followUp.completedAt) {
+    return { ok: false, message: "This follow-up has already been completed." };
+  }
+
+  const completedAt = new Date();
+
+  const result = await prisma.$transaction(async (tx) => {
+    const updatedFollowUp = await tx.followUp.update({
+      where: { id: followUp.id },
+      data: {
+        status: "COMPLETED",
+        completedAt,
+      },
+    });
+
+    const communication = await tx.communicationLog.create({
+      data: {
+        ...(followUp.companyId ? { company: { connect: { id: followUp.companyId } } } : {}),
+        ...(followUp.leadId ? { lead: { connect: { id: followUp.leadId } } } : {}),
+        ...(followUp.taskId ? { task: { connect: { id: followUp.taskId } } } : {}),
+        user: { connect: { id: user.id } },
+        method,
+        note: conversationSummary,
+        discussionTopic,
+        productDiscussed,
+        communicationAt: completedAt,
+        outcome,
+        ...(typeof rating === "number" ? { rating } : {}),
+        nextFollowUpDate,
+        followUpNote: notes,
+      },
+    });
+
+    const nextFollowUp = nextFollowUpDate
+      ? await tx.followUp.create({
+          data: {
+            ...(followUp.companyId ? { company: { connect: { id: followUp.companyId } } } : {}),
+            ...(followUp.leadId ? { lead: { connect: { id: followUp.leadId } } } : {}),
+            ...(followUp.assignedToId ? { assignedTo: { connect: { id: followUp.assignedToId } } } : {}),
+            ...(followUp.taskId ? { task: { connect: { id: followUp.taskId } } } : {}),
+            method,
+            note: notes ?? conversationSummary,
+            nextDiscussionPlan: discussionTopic ?? notes,
+            priority: followUp.priority,
+            followUpDate: nextFollowUpDate,
+            status: followUpStatusForDate(nextFollowUpDate),
+            ...(typeof rating === "number" ? { rating } : {}),
+          },
+        })
+      : null;
+
+    await tx.activityTimeline.create({
+      data: {
+        title: "Follow-up Completed",
+        description: "Follow-up completed with communication details",
+        entity: "FollowUp",
+        entityId: updatedFollowUp.id,
+        userId: user.id,
+        companyId: updatedFollowUp.companyId ?? undefined,
+        leadId: updatedFollowUp.leadId ?? undefined,
+        taskId: updatedFollowUp.taskId ?? undefined,
+        followUpId: updatedFollowUp.id,
+        communicationLogId: communication.id,
+      },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId: user.id,
+        action: "Follow-up Completed",
+        entity: "FollowUp",
+        entityId: updatedFollowUp.id,
+      },
+    });
+
+    return { updatedFollowUp, communication, nextFollowUp };
+  });
+
+  if (followUp.leadId && typeof rating === "number" && rating > 0) {
+    await prisma.lead.update({
+      where: { id: followUp.leadId },
+      data: { score: { increment: rating } },
+    });
+  }
+
+  await applyReward("FOLLOW_UP_COMPLETED", followUp.assignedToId ?? user.id, "FollowUp", followUp.id);
+
+  revalidatePath("/");
+  if (followUp.companyId) revalidatePath(`/customers/${followUp.companyId}`);
+  if (followUp.leadId) revalidatePath(`/leads/${followUp.leadId}`);
+
+  return {
+    ok: true,
+    followUpId: result.updatedFollowUp.id,
+    nextFollowUpId: result.nextFollowUp?.id,
+    nextFollowUpDate: result.nextFollowUp?.followUpDate.toISOString(),
     communicationId: result.communication.id,
   };
 }
@@ -1198,15 +1472,11 @@ export async function createFollowUpAction(formData: FormData) {
     await prisma.lead.update({ where: { id: followUp.leadId }, data: { score: { increment: rating } } });
   }
   revalidatePath("/");
-  return { ok: true, id: followUp.id };
+  return { ok: true, id: followUp.id, followUpDate: followUp.followUpDate.toISOString() };
 }
 
-export async function updateFollowUpStatusAction(formData: FormData) {
-  const user = await actionUser();
+export async function updateFollowUpStatusById(user: { id: string; role: Role }, id: string, status: string) {
   const prisma = getPrisma();
-  const id = text(formData, "id");
-  const status = text(formData, "status");
-  if (!id || !status) return;
 
   const followUp = await prisma.followUp.update({
     where: { id },
@@ -1215,6 +1485,7 @@ export async function updateFollowUpStatusAction(formData: FormData) {
       completedAt: status === "COMPLETED" ? new Date() : undefined,
     },
   });
+
   await addTimeline({
     title: "Follow-up Updated",
     description: `Marked ${status.replace(/_/g, " ")}`,
@@ -1225,8 +1496,21 @@ export async function updateFollowUpStatusAction(formData: FormData) {
     leadId: followUp.leadId ?? undefined,
     followUpId: followUp.id,
   });
-  if (status === "COMPLETED") await applyReward("FOLLOW_UP_COMPLETED", followUp.assignedToId ?? user.id, "FollowUp", followUp.id);
+
+  if (status === "COMPLETED") {
+    await applyReward("FOLLOW_UP_COMPLETED", followUp.assignedToId ?? user.id, "FollowUp", followUp.id);
+  }
+
   revalidatePath("/");
+  return followUp;
+}
+
+export async function updateFollowUpStatusAction(formData: FormData) {
+  const user = await actionUser();
+  const id = text(formData, "id");
+  const status = text(formData, "status");
+  if (!id || !status) return;
+  await updateFollowUpStatusById({ id: user.id, role: user.role as Role }, id, status);
 }
 
 export async function createCommunicationAction(formData: FormData) {
@@ -1392,7 +1676,7 @@ export async function saveSettingsAction(formData: FormData) {
 
 export async function giveManualRewardAction(formData: FormData) {
   const user = await actionUser();
-  if (!canManage(user.role as Role)) return { ok: false, message: "Only Admin or Supervisor can give rewards." };
+  if (user.role !== "ADMIN") return { ok: false, status: 403, message: "Forbidden: Only Admin can give rewards." };
 
   const prisma = getPrisma();
   const userId = text(formData, "userId");
@@ -1416,24 +1700,128 @@ export async function giveManualRewardAction(formData: FormData) {
       entityId: reward.id,
     },
   });
-  revalidatePath("/");
+  revalidateRewardViews();
   return { ok: true, id: reward.id };
 }
 
 export async function createRewardRuleAction(formData: FormData) {
   const user = await actionUser();
-  if (user.role !== "ADMIN") return { ok: false, message: "Only Admin can manage reward rules." };
+  if (user.role !== "ADMIN") return { ok: false, status: 403, message: "Forbidden: Only Admin can manage reward rules." };
   const prisma = getPrisma();
+  const name = text(formData, "name");
+  const trigger = normalizeRewardTrigger(text(formData, "trigger"));
+  const points = intValue(formData, "points", 0);
+
+  if (!name) return { ok: false, message: "Rule name is required." };
+  if (!trigger) return { ok: false, message: "Trigger/Event is required." };
+  if (!Number.isFinite(points) || !Number.isInteger(points) || points <= 0) return { ok: false, message: "Points must be a positive integer." };
+
   const rule = await prisma.rewardRule.create({
     data: {
-      name: text(formData, "name") ?? "Reward Rule",
-      trigger: text(formData, "trigger") ?? "LEAD_CREATED",
-      points: intValue(formData, "points", 0),
+      name,
+      trigger,
+      points,
       active: formData.get("active") !== "false",
     },
   });
-  revalidatePath("/");
-  return { ok: true, id: rule.id };
+  revalidateRewardViews();
+  return {
+    ok: true,
+    id: rule.id,
+    rule: {
+      id: rule.id,
+      name: rule.name,
+      trigger: rule.trigger,
+      points: rule.points,
+      active: rule.active,
+      createdAt: formatRewardRuleDate(rule.createdAt),
+    },
+  };
+}
+
+export async function updateRewardRuleAction(formData: FormData) {
+  const user = await actionUser();
+  if (user.role !== "ADMIN") return { ok: false, status: 403, message: "Forbidden: Only Admin can manage reward rules." };
+
+  const prisma = getPrisma();
+  const ruleId = text(formData, "id");
+  const name = text(formData, "name");
+  const trigger = normalizeRewardTrigger(text(formData, "trigger"));
+  const points = intValue(formData, "points", 0);
+  const active = formData.get("active") !== "false";
+
+  if (!ruleId) return { ok: false, message: "Rule id is required." };
+  if (!name) return { ok: false, message: "Rule name is required." };
+  if (!trigger) return { ok: false, message: "Trigger/Event is required." };
+  if (!Number.isFinite(points) || !Number.isInteger(points) || points <= 0) return { ok: false, message: "Points must be a positive integer." };
+
+  const updated = await prisma.rewardRule.update({
+    where: { id: ruleId },
+    data: { name, trigger, points, active },
+  });
+
+  revalidateRewardViews();
+  return {
+    ok: true,
+    id: updated.id,
+    rule: {
+      id: updated.id,
+      name: updated.name,
+      trigger: updated.trigger,
+      points: updated.points,
+      active: updated.active,
+      createdAt: formatRewardRuleDate(updated.createdAt),
+    },
+  };
+}
+
+export async function deleteRewardRuleAction(formData: FormData) {
+  const user = await actionUser();
+  if (user.role !== "ADMIN") return { ok: false, status: 403, message: "Forbidden: Only Admin can manage reward rules." };
+
+  const prisma = getPrisma();
+  const ruleId = text(formData, "id");
+  if (!ruleId) return { ok: false, message: "Rule id is required." };
+
+  await prisma.rewardRule.delete({ where: { id: ruleId } });
+  revalidateRewardViews();
+  return { ok: true, id: ruleId };
+}
+
+export async function toggleRewardRuleStatusAction(formData: FormData) {
+  const user = await actionUser();
+  if (user.role !== "ADMIN") {
+    return { ok: false, status: 403, message: "Forbidden: Only Admin can manage reward rules." };
+  }
+  const prisma = getPrisma();
+  const ruleId = text(formData, "id");
+  if (!ruleId) {
+    return { ok: false, message: "Rule id is required." };
+  }
+
+  const rule = await prisma.rewardRule.findUnique({ where: { id: ruleId } });
+  if (!rule) {
+    return { ok: false, message: "Reward rule not found." };
+  }
+
+  const updated = await prisma.rewardRule.update({
+    where: { id: ruleId },
+    data: { active: !rule.active },
+  });
+
+  revalidateRewardViews();
+  return {
+    ok: true,
+    id: updated.id,
+    rule: {
+      id: updated.id,
+      name: updated.name,
+      trigger: updated.trigger,
+      points: updated.points,
+      active: updated.active,
+      createdAt: formatRewardRuleDate(updated.createdAt),
+    },
+  };
 }
 
 export async function createImportExportLogAction(formData: FormData) {

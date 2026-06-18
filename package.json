@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "predev": "node -e \"const fs=require('fs');fs.rmSync('.next',{recursive:true,force:true})\"",
+    "dev": "next dev --webpack",
+    "dev:turbo": "next dev",
     "build": "next build",
     "vercel-build": "node prisma/pre-deploy.js && next build",
     "start": "next start",

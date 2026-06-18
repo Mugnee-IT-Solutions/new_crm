@@ -1,7 +1,9 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import {
+  ArrowRight,
   AlertTriangle,
   Award,
   Bell,
@@ -9,14 +11,19 @@ import {
   CalendarClock,
   CheckCircle2,
   ClipboardCheck,
+  Clock3,
+  Eye,
+  MessageCircleMore,
   MessageSquarePlus,
   Pencil,
+  PhoneCall,
   PhoneForwarded,
   Plus,
   Target,
   Trophy,
   Users,
   WalletCards,
+  XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -462,57 +469,340 @@ function CompactActivityFeed({ workspace }: { workspace: CrmWorkspace }) {
 }
 
 function TeamPerformanceTable({ workspace }: { workspace: CrmWorkspace }) {
+  const teamRows = workspace.employees.filter((row) => row.role === "Marketer");
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="text-left text-xs uppercase text-slate-500">
           <tr>
-            {["Employee", "Leads", "Follow-ups", "Sales", "Conversion"].map((heading) => (
+            {["Employee", "Leads", "Calls", "WhatsApp", "Meetings", "Follow-ups", "Pending Tasks", "Overdue Follow-ups", "Sales", "Conversion"].map((heading) => (
               <th className="px-3 py-2 font-bold" key={heading}>{heading}</th>
             ))}
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {workspace.employees.map((row) => (
+          {teamRows.map((row) => (
             <tr key={row.id}>
               <td className="px-3 py-3 font-semibold text-slate-800">{row.name}</td>
               <td className="px-3 py-3">{row.leads}</td>
+              <td className="px-3 py-3">{row.calls}</td>
+              <td className="px-3 py-3">{row.whatsapp}</td>
+              <td className="px-3 py-3">{row.meetings}</td>
               <td className="px-3 py-3">{row.followUps}</td>
+              <td className="px-3 py-3">{row.pendingTasks}</td>
+              <td className="px-3 py-3">{row.overdueFollowUps}</td>
               <td className="px-3 py-3">{row.sales}</td>
               <td className="px-3 py-3">{row.conversionRate}</td>
             </tr>
           ))}
+          {!teamRows.length ? (
+            <tr>
+              <td colSpan={10} className="px-3 py-6 text-center text-sm font-semibold text-slate-500">No team members found.</td>
+            </tr>
+          ) : null}
         </tbody>
       </table>
     </div>
   );
 }
 
+type MarketerTaskFilter = "all" | "tasks" | "due-follow-ups" | "overdue" | "carry-forward";
+
+const marketerKpiIcons = [ClipboardCheck, AlertTriangle, PhoneForwarded, Target, CalendarClock, Award] as const;
+const marketerKpiIconTones = [
+  "bg-blue-50 text-blue-700",
+  "bg-amber-50 text-amber-700",
+  "bg-violet-50 text-violet-700",
+  "bg-emerald-50 text-emerald-700",
+  "bg-rose-50 text-rose-700",
+  "bg-orange-50 text-orange-700",
+] as const;
+
+function marketerTaskIcon(method: string, source: CrmWorkspace["todayWorkItems"][number]["source"]) {
+  if (method.toLowerCase().includes("whatsapp")) return MessageCircleMore;
+  if (method.toLowerCase().includes("meeting")) return CalendarClock;
+  if (method.toLowerCase().includes("phone") || method.toLowerCase().includes("call")) return PhoneCall;
+  if (source === "Follow-up") return PhoneForwarded;
+  return ClipboardCheck;
+}
+
+function marketerTaskAccent(method: string, source: CrmWorkspace["todayWorkItems"][number]["source"], overdue: boolean) {
+  if (overdue) return "border-red-200 bg-red-50/80";
+  if (method.toLowerCase().includes("whatsapp")) return "border-emerald-200 bg-emerald-50/70";
+  if (method.toLowerCase().includes("meeting")) return "border-violet-200 bg-violet-50/70";
+  if (method.toLowerCase().includes("phone") || method.toLowerCase().includes("call")) return "border-blue-200 bg-blue-50/70";
+  if (source === "Follow-up") return "border-amber-200 bg-amber-50/70";
+  return "border-slate-200 bg-slate-50";
+}
+
+function marketerActivityIcon(title: string, detail: string) {
+  const haystack = `${title} ${detail}`.toLowerCase();
+  if (haystack.includes("follow-up")) return { icon: PhoneForwarded, tone: "bg-emerald-50 text-emerald-700" };
+  if (haystack.includes("task")) return { icon: ClipboardCheck, tone: "bg-blue-50 text-blue-700" };
+  if (haystack.includes("meeting")) return { icon: CalendarClock, tone: "bg-amber-50 text-amber-700" };
+  if (haystack.includes("lead")) return { icon: Target, tone: "bg-violet-50 text-violet-700" };
+  return { icon: CheckCircle2, tone: "bg-slate-100 text-slate-700" };
+}
+
+function MarketerKpiGrid({ workspace, tasks }: { workspace: CrmWorkspace; tasks: CrmWorkspace["todayWorkItems"] }) {
+  const pendingTasks = workspace.tasks.filter((task) => task.status !== "COMPLETED").length;
+  const newLeads = workspace.leads.filter((lead) => lead.status === "New Lead").length;
+  const meetingsToday = Number(workspace.stats.find((item) => item.title === "Meetings Today")?.value ?? 0);
+  const rewardPoints = Number(workspace.stats.find((item) => item.title === "Reward Points")?.value ?? 0);
+  const cards = [
+    { title: "Today's Tasks", value: String(tasks.length), helper: "Unified work queue" },
+    { title: "Pending Tasks", value: String(pendingTasks), helper: "Need your action" },
+    { title: "Follow-ups Due", value: String(workspace.followUpSummary.overdue + workspace.followUpSummary.today), helper: "Overdue & today" },
+    { title: "New Leads", value: String(newLeads), helper: "Assigned leads" },
+    { title: "Meetings Today", value: String(meetingsToday), helper: "Scheduled meeting" },
+    { title: "Reward Points", value: String(rewardPoints), helper: "This month" },
+  ];
+
+  return (
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+      {cards.map((item, index) => {
+        const Icon = marketerKpiIcons[index];
+        return (
+          <Card key={item.title} className="border-slate-200 shadow-sm">
+            <div className="space-y-4 p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className={cn("flex h-11 w-11 items-center justify-center rounded-2xl", marketerKpiIconTones[index])}>
+                  <Icon className="h-5 w-5" />
+                </div>
+                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{item.title}</p>
+              </div>
+              <div>
+                <p className="text-3xl font-black text-slate-950">{item.value}</p>
+                <p className="mt-2 text-sm text-slate-500">{item.helper}</p>
+              </div>
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function MarketerTodayTasksPanel({ workspace }: { workspace: CrmWorkspace }) {
+  const [filter, setFilter] = React.useState<MarketerTaskFilter>("all");
+  const items = workspace.todayWorkItems.filter((item) => item.source !== "Plan");
+
+  const counts = React.useMemo(() => ({
+    all: items.length,
+    tasks: items.filter((item) => item.queueType === "TASK").length,
+    "due-follow-ups": items.filter((item) => item.queueType === "DUE_FOLLOW_UP").length,
+    overdue: items.filter((item) => item.queueType === "OVERDUE").length,
+    "carry-forward": items.filter((item) => item.queueType === "CARRY_FORWARD").length,
+  }), [items]);
+
+  const filteredItems = React.useMemo(() => {
+    if (filter === "tasks") return items.filter((item) => item.queueType === "TASK");
+    if (filter === "due-follow-ups") return items.filter((item) => item.queueType === "DUE_FOLLOW_UP");
+    if (filter === "overdue") return items.filter((item) => item.queueType === "OVERDUE");
+    if (filter === "carry-forward") return items.filter((item) => item.queueType === "CARRY_FORWARD");
+    return items;
+  }, [filter, items]);
+
+  const chips: { key: MarketerTaskFilter; label: string }[] = [
+    { key: "all", label: "All" },
+    { key: "tasks", label: "Tasks" },
+    { key: "due-follow-ups", label: "Due Follow-ups" },
+    { key: "overdue", label: "Overdue" },
+    { key: "carry-forward", label: "Carry Forward" },
+  ];
+
+  return (
+    <DashboardCard title="Today's Tasks" className="h-full">
+      <div className="space-y-4">
+        <div className="flex flex-wrap gap-2">
+          {chips.map((chip) => {
+            const active = filter === chip.key;
+            return (
+              <button
+                key={chip.key}
+                type="button"
+                onClick={() => setFilter(chip.key)}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-bold transition",
+                  active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:border-blue-100 hover:text-slate-700",
+                )}
+              >
+                {chip.label}
+                <span className={cn("rounded-full px-1.5 py-0.5 text-[11px]", active ? "bg-white text-blue-700" : "bg-slate-100 text-slate-500")}>{counts[chip.key]}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="space-y-3">
+          {filteredItems.length ? filteredItems.slice(0, 6).map((item) => {
+            const Icon = marketerTaskIcon(item.method, item.source);
+            return (
+              <Link
+                key={item.id}
+                href={rolePath("MARKETER", "tasks")}
+                className={cn("block rounded-2xl border px-3 py-2.5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md", marketerTaskAccent(item.method, item.source, item.overdue))}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white shadow-sm", item.overdue ? "text-red-600" : "text-blue-700")}>
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="truncate text-sm font-black text-slate-950">
+                        {item.title}
+                        {item.relatedTo !== "-" ? <span className="font-semibold text-slate-500"> - {item.relatedTo}</span> : null}
+                      </p>
+                      <p className="shrink-0 text-sm font-bold text-slate-700">{item.time}</p>
+                    </div>
+                    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="truncate text-xs font-semibold text-slate-500">{item.method}</span>
+                      <Badge variant={item.queueType === "OVERDUE" ? "danger" : item.queueType === "DUE_FOLLOW_UP" ? "warning" : "default"}>
+                        {item.queueLabel ?? item.status}
+                      </Badge>
+                      <Badge variant={item.priority === "Urgent" || item.priority === "High" ? "danger" : item.priority === "Medium" ? "warning" : "neutral"}>{item.priority}</Badge>
+                    </div>
+                  </div>
+                </div>
+              </Link>
+            );
+          }) : <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No work items in this view.</p>}
+        </div>
+
+        <div className="pt-1 text-center">
+          <Link href={rolePath("MARKETER", "tasks")} className="inline-flex items-center gap-2 text-sm font-bold text-slate-700 transition hover:text-blue-700">
+            View all tasks
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+        </div>
+      </div>
+    </DashboardCard>
+  );
+}
+
+function MarketerLeadPipelinePanel({ workspace }: { workspace: CrmWorkspace }) {
+  const cards = [
+    { label: "New Lead", match: "New Lead", tone: "border-blue-200 bg-blue-50/60 text-blue-700" },
+    { label: "Contacted", match: "Contacted", tone: "border-emerald-200 bg-emerald-50/60 text-emerald-700" },
+    { label: "Interested", match: "Interested", tone: "border-violet-200 bg-violet-50/60 text-violet-700" },
+    { label: "Quotation Sent", match: "Quotation Sent", tone: "border-amber-200 bg-amber-50/60 text-amber-700" },
+    { label: "Won", match: "Won Sale", tone: "border-green-200 bg-green-50/60 text-green-700" },
+    { label: "Lost", match: "Lost Sale", tone: "border-red-200 bg-red-50/60 text-red-700" },
+  ].map((item) => ({
+    ...item,
+    value: workspace.pipeline.find((pipeline) => pipeline.label === item.match)?.value ?? 0,
+  }));
+
+  return (
+    <DashboardCard title="Lead Pipeline" className="h-full">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {cards.map((card) => (
+          <div key={card.label} className={cn("rounded-2xl border p-4 shadow-sm", card.tone)}>
+            <p className="text-xs font-bold uppercase tracking-wide">{card.label}</p>
+            <p className="mt-3 text-3xl font-black text-slate-950">{card.value}</p>
+          </div>
+        ))}
+      </div>
+    </DashboardCard>
+  );
+}
+
+function MarketerFollowUpCenter({ workspace }: { workspace: CrmWorkspace }) {
+  const groups = [
+    { title: "Overdue", rows: workspace.followUps.filter((item) => item.bucket === "Overdue"), tone: "text-red-600" },
+    { title: "Due Today", rows: workspace.followUps.filter((item) => item.bucket === "Due Today"), tone: "text-amber-600" },
+    { title: "Upcoming", rows: workspace.followUps.filter((item) => item.bucket === "Upcoming"), tone: "text-blue-600" },
+    { title: "Completed", rows: workspace.followUps.filter((item) => item.bucket === "Completed"), tone: "text-emerald-600" },
+  ] as const;
+
+  return (
+    <DashboardCard
+      title="Follow-up Center"
+      action={<Link href={rolePath("MARKETER", "follow-ups")} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-50">View All <ArrowRight className="h-4 w-4" /></Link>}
+    >
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {groups.map((group) => (
+          <div key={group.title} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h3 className={cn("text-sm font-black", group.tone)}>{group.title}</h3>
+              <span className="inline-flex min-w-7 items-center justify-center rounded-full bg-white px-2 py-0.5 text-xs font-black text-slate-700 shadow-sm">{group.rows.length}</span>
+            </div>
+            <div className="space-y-3">
+              {group.rows.slice(0, 3).map((item) => (
+                <div key={item.id} className="rounded-xl bg-white px-3 py-3 shadow-sm">
+                  <p className="truncate text-sm font-black text-slate-900">
+                    <EntityLink href={item.href} className="font-black">{item.customer}</EntityLink>
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">{item.method}</p>
+                  <p className="mt-1 text-xs text-slate-400">{item.followUpDate}</p>
+                </div>
+              ))}
+              {!group.rows.length ? <p className="rounded-xl bg-white p-3 text-xs font-semibold text-slate-400">No follow-ups here.</p> : null}
+            </div>
+          </div>
+        ))}
+      </div>
+    </DashboardCard>
+  );
+}
+
+function MarketerRecentActivities({ workspace }: { workspace: CrmWorkspace }) {
+  return (
+    <DashboardCard
+      title="Recent Activities"
+      action={<Link href={rolePath("MARKETER", "communication")} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-50">View All <Eye className="h-4 w-4" /></Link>}
+    >
+      <div className="space-y-2">
+        {workspace.activities.slice(0, 5).map((item) => {
+          const activity = marketerActivityIcon(item.title, item.detail);
+          const Icon = activity.icon;
+
+          return (
+            <div key={item.id} className="flex items-start justify-between gap-4 rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-sm">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl", activity.tone)}>
+                  <Icon className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-black text-slate-950">
+                    <EntityLink href={item.href} className="font-black">{item.title}</EntityLink>
+                  </p>
+                  <p className="mt-1 truncate text-sm text-slate-500">{item.detail}</p>
+                </div>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-xs font-semibold text-slate-500">{item.time}</p>
+                <p className="mt-1 text-xs text-slate-400">by You</p>
+              </div>
+            </div>
+          );
+        })}
+        {!workspace.activities.length ? <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No recent activities yet.</p> : null}
+      </div>
+    </DashboardCard>
+  );
+}
+
 export function MarketerDashboard({ workspace }: { workspace: CrmWorkspace }) {
+  const marketerTasks = workspace.todayWorkItems.filter((item) => item.source !== "Plan");
+
   return (
     <>
       <PageHeader
-        eyebrow="Employee Dashboard"
-        title={`Good Morning, ${workspace.user.name}`}
-        description="Your practical sales execution workspace for today."
-        actions={<Badge variant="neutral">{new Date().toLocaleDateString()}</Badge>}
+        title={`Good Morning, ${workspace.user.name} 👋`}
+        description="Here’s what’s happening with your sales today."
       />
-      <StatsGrid items={workspace.stats} />
 
-      <QuickActions role="MARKETER" />
-      <TodaysPlanCard workspace={workspace} role="MARKETER" />
-      <PendingFromPreviousDay workspace={workspace} />
+      <MarketerKpiGrid workspace={workspace} tasks={marketerTasks} />
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <TodaysTasksCard workspace={workspace} role="MARKETER" />
-        <MyTasksCard workspace={workspace} role="MARKETER" />
+      <div className="grid gap-5 xl:grid-cols-[1.35fr_0.9fr]">
+        <MarketerTodayTasksPanel workspace={workspace} />
+        <MarketerLeadPipelinePanel workspace={workspace} />
       </div>
 
-      <FollowUpSummary workspace={workspace} />
-      <FollowUpRemindersCard workspace={workspace} />
-      <PipelineBar workspace={workspace} role="MARKETER" />
-      <ProductIntelligenceWidget workspace={workspace} />
-      <CompactActivityFeed workspace={workspace} />
+      <MarketerFollowUpCenter workspace={workspace} />
+      <MarketerRecentActivities workspace={workspace} />
     </>
   );
 }
@@ -638,3 +928,4 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
     </>
   );
 }
+

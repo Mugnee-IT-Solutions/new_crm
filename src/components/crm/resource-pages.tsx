@@ -24,6 +24,7 @@ import {
   Printer,
   Send,
   Settings,
+  SlidersHorizontal,
   Target,
   Upload,
   UserPlus,
@@ -45,15 +46,16 @@ import { FormModal } from "@/components/shared/form-modal";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { StatCard } from "@/components/shared/stat-card";
+import { useTaskCounterContext } from "@/components/app/app-shell";
 import {
+  completeFollowUpWithCommunicationAction,
+  completeTaskWithFollowUpAction,
   createCommunicationAction,
   createCustomerAction,
   createFollowUpAction,
   createImportExportLogAction,
   createLeadAction,
-  createProductAction,
   createReportLogAction,
-  createRewardRuleAction,
   createTaskAction,
   createUserAction,
   giveManualRewardAction,
@@ -74,9 +76,12 @@ import type {
   QuotationRow,
   TaskRow,
 } from "@/lib/crm-data";
-import { cn, formatCurrency, rolePath, type Role } from "@/lib/utils";
+import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
+import { cn, formatCurrency, initials, rolePath, type Role } from "@/lib/utils";
 
-type ServerAction = (formData: FormData) => Promise<{ ok?: boolean; message?: string } | unknown>;
+type ActionResult = { ok?: boolean; message?: string; [key: string]: unknown } | unknown;
+
+type ServerAction = (formData: FormData) => Promise<ActionResult>;
 
 function pageActions(items: { label: string; icon: typeof Plus; variant?: "default" | "outline"; onClick?: () => void; href?: string }[]) {
   return items.map(({ label, icon: Icon, variant = "outline", onClick, href }) => {
@@ -140,7 +145,12 @@ type LeadListRow = {
 function buildSearchLabel(scope: SearchableScope, raw: SearchableRow) {
   const fallbackLabel = "name" in raw && typeof raw.name === "string" ? raw.name.trim() : "";
   if (scope === "companies") {
-    const name = typeof raw.companyName === "string" && raw.companyName.trim() ? raw.companyName : "";
+    const name =
+      typeof raw.companyName === "string" && raw.companyName.trim()
+        ? raw.companyName
+        : typeof raw.name === "string" && raw.name.trim()
+          ? raw.name
+          : "";
     return name || fallbackLabel || "Unnamed company";
   }
 
@@ -169,23 +179,29 @@ function SearchableEntitySelect({
   options,
   defaultValue = "",
   defaultLabel,
+  value,
+  onValueChange,
   searchScope,
   required = false,
   placeholder,
   compact = false,
 }: {
   label: string;
-  name: string;
+  name?: string;
   options: SearchableOption[];
   defaultValue?: string;
   defaultLabel?: string;
+  value?: string;
+  onValueChange?: (value: string, label: string) => void;
   searchScope?: SearchableScope;
   required?: boolean;
   placeholder?: string;
   compact?: boolean;
 }) {
+  const isControlled = onValueChange !== undefined;
   const [query, setQuery] = React.useState("");
-  const [selectedValue, setSelectedValue] = React.useState(defaultValue);
+  const [internalValue, setInternalValue] = React.useState(defaultValue);
+  const selectedValue = isControlled ? (value ?? "") : internalValue;
   const [remoteOptions, setRemoteOptions] = React.useState<SearchableOption[]>([]);
   const [open, setOpen] = React.useState(false);
   const [activeIndex, setActiveIndex] = React.useState(0);
@@ -205,16 +221,26 @@ function SearchableEntitySelect({
   }, [normalizedQuery, searchScope, sourceOptions]);
 
   React.useEffect(() => {
+    if (isControlled) {
+      const baseLabel = sourceOptions.find((item) => item.value === selectedValue)?.label ?? defaultLabel ?? "";
+      if (selectedValue && baseLabel) {
+        setQuery(baseLabel);
+      } else if (!selectedValue && !open) {
+        setQuery("");
+      }
+      return;
+    }
+
     if (defaultValue) {
       const baseLabel = sourceOptions.find((item) => item.value === defaultValue)?.label ?? defaultLabel ?? "";
-      setSelectedValue(defaultValue);
+      setInternalValue(defaultValue);
       setQuery(baseLabel);
       return;
     }
 
-    setSelectedValue("");
+    setInternalValue("");
     setQuery("");
-  }, [defaultValue, defaultLabel, sourceOptions]);
+  }, [defaultValue, defaultLabel, isControlled, open, selectedValue, sourceOptions]);
 
   React.useEffect(() => {
     if (!searchScope) {
@@ -223,15 +249,15 @@ function SearchableEntitySelect({
       return;
     }
 
-    if (!open && !defaultValue) return;
+    if (!open && !defaultValue && !selectedValue) return;
 
-    const endpoint = searchScope === "companies" ? "/api/customers/list" : "/api/leads/list";
+    const endpoint = searchScope === "companies" ? "/api/companies" : "/api/leads/list";
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setIsLoading(true);
       const params = new URLSearchParams();
       if (normalizedQuery) {
-        params.set("search", normalizedQuery);
+        params.set(searchScope === "companies" ? "q" : "search", normalizedQuery);
       }
       params.set("limit", "20");
 
@@ -260,13 +286,13 @@ function SearchableEntitySelect({
           setIsLoading(false);
         }
       }
-    }, 200);
+    }, 300);
 
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [open, normalizedQuery, searchScope, defaultValue]);
+  }, [open, normalizedQuery, searchScope, defaultValue, selectedValue]);
 
   React.useEffect(() => {
     setActiveIndex(0);
@@ -284,10 +310,14 @@ function SearchableEntitySelect({
   }, []);
 
   const selectOption = React.useCallback((option: SearchableOption) => {
-    setSelectedValue(option.value);
+    if (isControlled) {
+      onValueChange?.(option.value, option.label);
+    } else {
+      setInternalValue(option.value);
+    }
     setQuery(option.label);
     setOpen(false);
-  }, []);
+  }, [isControlled, onValueChange]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const nextQuery = event.target.value;
@@ -295,7 +325,12 @@ function SearchableEntitySelect({
     setOpen(true);
 
     const exactMatch = sourceOptions.find((option) => option.label.toLowerCase() === nextQuery.trim().toLowerCase());
-    setSelectedValue(exactMatch ? exactMatch.value : "");
+    const nextValue = exactMatch ? exactMatch.value : "";
+    if (isControlled) {
+      onValueChange?.(nextValue, exactMatch?.label ?? nextQuery);
+    } else {
+      setInternalValue(nextValue);
+    }
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -371,7 +406,7 @@ function SearchableEntitySelect({
           </div>
         ) : null}
       </div>
-      <input type="hidden" name={name} value={selectedValue} />
+      {name ? <input type="hidden" name={name} value={selectedValue} /> : null}
     </label>
   );
 }
@@ -414,7 +449,7 @@ function TextField({
   );
 }
 
-function TextAreaField({ label, name, placeholder, required = false, compact = false }: { label: string; name: string; placeholder?: string; required?: boolean; compact?: boolean }) {
+function TextAreaField({ label, name, placeholder, required = false, compact = false, defaultValue }: { label: string; name: string; placeholder?: string; required?: boolean; compact?: boolean; defaultValue?: string }) {
   return (
     <label className={cn("block space-y-1.5", compact && "space-y-1")}>
       <span className={cn("text-sm font-semibold text-slate-700", compact && "text-xs leading-4")}>{label}</span>
@@ -422,6 +457,7 @@ function TextAreaField({ label, name, placeholder, required = false, compact = f
         name={name}
         required={required}
         placeholder={placeholder}
+        defaultValue={defaultValue}
         className={cn("min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100", compact && "min-h-16 px-2.5 py-1.5 text-[13px]")}
       />
     </label>
@@ -432,18 +468,24 @@ function ActionForm({
   action,
   children,
   onDone,
+  onSuccess,
   submitLabel = "Save",
   className,
   bodyClassName,
   footerClassName,
+  refreshOnSuccess = true,
+  resetOnSuccess = true,
 }: {
   action: ServerAction;
   children: React.ReactNode;
   onDone?: () => void;
+  onSuccess?: (result: ActionResult, formData: FormData) => void;
   submitLabel?: string;
   className?: string;
   bodyClassName?: string;
   footerClassName?: string;
+  refreshOnSuccess?: boolean;
+  resetOnSuccess?: boolean;
 }) {
   const [pending, startTransition] = React.useTransition();
   const [message, setMessage] = React.useState("");
@@ -463,9 +505,14 @@ function ActionForm({
               setMessage("message" in result && typeof result.message === "string" ? result.message : "Action failed.");
               return;
             }
-            form.reset();
+            if (resetOnSuccess) {
+              form.reset();
+            }
             setMessage("");
-            router.refresh();
+            onSuccess?.(result, formData);
+            if (refreshOnSuccess) {
+              router.refresh();
+            }
             onDone?.();
           } catch (error) {
             setMessage(error instanceof Error ? error.message : "Action failed.");
@@ -531,6 +578,43 @@ function EntityOptions({ workspace, type }: { workspace: CrmWorkspace; type: "us
       {rows.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
     </>
   );
+}
+
+type AssigneeOption = {
+  id: string;
+  label: string;
+};
+
+function getAssignableUserOptions(workspace: CrmWorkspace, role: Role, mode: "task" | "follow-up"): AssigneeOption[] {
+  const options = new Map<string, AssigneeOption>();
+  const addOption = (id: string | undefined, label: string | undefined) => {
+    const normalizedId = id?.trim();
+    const normalizedLabel = label?.trim();
+    if (!normalizedId || !normalizedLabel || options.has(normalizedId)) return;
+    options.set(normalizedId, { id: normalizedId, label: normalizedLabel });
+  };
+
+  const selfId = workspace.user.id?.trim();
+  const selfLabel = workspace.user.name?.trim();
+
+  if (mode === "follow-up" && role === "MARKETER") {
+    addOption(selfId, selfLabel ? `${selfLabel} (Me)` : undefined);
+    return Array.from(options.values());
+  }
+
+  if (role === "SUPERVISOR") {
+    addOption(selfId, selfLabel ? `${selfLabel} (Me)` : undefined);
+  }
+
+  for (const employee of workspace.employees) {
+    const employeeRole = employee.role.trim().toUpperCase();
+    if (role === "SUPERVISOR" && employeeRole !== "MARKETER") continue;
+    if (role === "ADMIN" && !["SUPERVISOR", "MARKETER"].includes(employeeRole)) continue;
+    if (role === "MARKETER") continue;
+    addOption(employee.id, `${employee.name} (${employee.role})`);
+  }
+
+  return Array.from(options.values());
 }
 
 function InfoLine({ label, value, progress }: { label: string; value: React.ReactNode; progress?: number }) {
@@ -683,28 +767,279 @@ function CommunicationHistoryList({ rows }: { rows: CommunicationHistoryRow[] })
   ) : <EmptyState title="No communication history" description="Task and customer conversation logs will appear here." />;
 }
 
-function LeadForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: () => void }) {
+type LeadFormValues = {
+  customerName: string;
+  companyId: string;
+  phoneNumbers: string[];
+  emails: string[];
+  productInterestId: string;
+  assignedToId: string;
+  priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+  score: string;
+  purchaseProbability: string;
+  followUpDate: string;
+  notes: string;
+};
+
+const EMPTY_LEAD_FORM_VALUES: LeadFormValues = {
+  customerName: "",
+  companyId: "",
+  phoneNumbers: [""],
+  emails: [""],
+  productInterestId: "",
+  assignedToId: "",
+  priority: "MEDIUM",
+  score: "10",
+  purchaseProbability: "10",
+  followUpDate: "",
+  notes: "",
+};
+
+function toDateTimeLocalValue(value?: string) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const offset = parsed.getTimezoneOffset();
+  const local = new Date(parsed.getTime() - offset * 60 * 1000);
+  return local.toISOString().slice(0, 16);
+}
+
+function toLeadFormValues(lead?: LeadRow | null): LeadFormValues {
+  if (!lead) return EMPTY_LEAD_FORM_VALUES;
+
+  return {
+    customerName: lead.customerName ?? lead.title ?? "",
+    companyId: lead.companyId ?? "",
+    phoneNumbers: lead.phones.length ? lead.phones : [lead.phone !== "-" ? lead.phone : ""],
+    emails: lead.emails.length ? lead.emails : [lead.email !== "-" ? lead.email : ""],
+    productInterestId: lead.productInterestId ?? "",
+    assignedToId: lead.assignedToId ?? "",
+    priority: lead.priority.toUpperCase() === "LOW" || lead.priority.toUpperCase() === "HIGH" || lead.priority.toUpperCase() === "URGENT" ? lead.priority.toUpperCase() as LeadFormValues["priority"] : "MEDIUM",
+    score: String(lead.score ?? 0),
+    purchaseProbability: String(lead.purchaseProbability ?? 0),
+    followUpDate: toDateTimeLocalValue(lead.followUpDateValue),
+    notes: lead.notes !== "-" ? lead.notes : "",
+  };
+}
+
+function LeadForm({
+  workspace,
+  lead,
+  onSuccess,
+  onDone,
+}: {
+  workspace: CrmWorkspace;
+  lead?: LeadRow | null;
+  onSuccess?: (row: LeadRow) => void;
+  onDone: () => void;
+}) {
+  const [values, setValues] = React.useState<LeadFormValues>(() => toLeadFormValues(lead));
+  const [pending, startTransition] = React.useTransition();
+  const [message, setMessage] = React.useState("");
+
+  React.useEffect(() => {
+    setValues(toLeadFormValues(lead));
+    setMessage("");
+  }, [lead]);
+
+  const updateValue = React.useCallback((field: keyof LeadFormValues, nextValue: string) => {
+    setValues((current) => ({ ...current, [field]: nextValue }));
+  }, []);
+
+  const updateListValue = React.useCallback((field: "phoneNumbers" | "emails", index: number, nextValue: string) => {
+    setValues((current) => ({
+      ...current,
+      [field]: current[field].map((item, itemIndex) => (itemIndex === index ? nextValue : item)),
+    }));
+  }, []);
+
+  const addListValue = React.useCallback((field: "phoneNumbers" | "emails") => {
+    setValues((current) => ({ ...current, [field]: [...current[field], ""] }));
+  }, []);
+
+  const removeListValue = React.useCallback((field: "phoneNumbers" | "emails", index: number) => {
+    setValues((current) => {
+      const next = current[field].filter((_, itemIndex) => itemIndex !== index);
+      return { ...current, [field]: next.length ? next : [""] };
+    });
+  }, []);
+
+  const companyOptions = React.useMemo(() => workspace.companies.map((item) => ({ value: item.id, label: item.name })), [workspace.companies]);
+  const marketers = React.useMemo(() => workspace.employees.filter((item) => item.role === "Marketer"), [workspace.employees]);
+
   return (
-    <ActionForm action={createLeadAction} onDone={onDone} submitLabel="Save Lead">
-      <TextField label="Lead Title" name="title" />
-      <TextField label="Customer Name" name="customerName" />
-      <TextField label="Phone" name="phone" />
-      <TextField label="Email" name="email" type="email" />
-      <SelectBox label="Company" name="companyId"><EntityOptions workspace={workspace} type="companies" /></SelectBox>
-      <SelectBox label="Interested Product" name="productId"><EntityOptions workspace={workspace} type="products" /></SelectBox>
-      <SelectBox label="Assigned Marketer" name="assignedToId"><EntityOptions workspace={workspace} type="marketers" /></SelectBox>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <SelectBox label="Priority" name="priority"><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option><option value="URGENT">Urgent</option></SelectBox>
-        <TextField label="Lead Score" name="score" type="number" defaultValue={10} />
-        <TextField label="Probability %" name="purchaseProbability" type="number" defaultValue={10} />
+    <form
+      className="space-y-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        startTransition(async () => {
+          setMessage("");
+          try {
+            const payload = {
+              customerName: values.customerName,
+              companyId: values.companyId,
+              phoneNumbers: values.phoneNumbers,
+              emails: values.emails,
+              productInterestId: values.productInterestId,
+              assignedToId: values.assignedToId,
+              priority: values.priority,
+              score: Number(values.score),
+              purchaseProbability: Number(values.purchaseProbability),
+              followUpDate: values.followUpDate ? new Date(values.followUpDate).toISOString() : null,
+              notes: values.notes,
+            };
+
+            const response = await fetch(lead ? `/api/leads/${lead.id}` : "/api/leads", {
+              method: lead ? "PATCH" : "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success || !result.row) {
+              setMessage(result.message ?? "Lead save failed.");
+              return;
+            }
+
+            onSuccess?.(result.row as LeadRow);
+            onDone();
+          } catch (error) {
+            setMessage(error instanceof Error ? error.message : "Lead save failed.");
+          }
+        });
+      }}
+    >
+      <div className="space-y-1">
+        <h3 className="text-sm font-black text-slate-900">Customer Information</h3>
+        <p className="text-xs text-slate-500">Use company and product interest to build the lead record.</p>
       </div>
-      <TextField label="Follow-up Date" name="followUpDate" type="datetime-local" />
-      <TextAreaField label="Notes" name="notes" />
-    </ActionForm>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="space-y-1.5">
+          <span className="text-sm font-semibold text-slate-700">Customer Name</span>
+          <Input value={values.customerName} onChange={(event) => updateValue("customerName", event.target.value)} required className="h-10" />
+        </label>
+        <div>
+          <SearchableEntitySelect
+            label="Company"
+            options={companyOptions}
+            value={values.companyId}
+            onValueChange={(nextValue) => updateValue("companyId", nextValue)}
+            placeholder="Search company"
+          />
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        <h3 className="text-sm font-black text-slate-900">Contact Information</h3>
+        <p className="text-xs text-slate-500">Add one or more phone numbers and email addresses.</p>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold text-slate-700">Phone Numbers</span>
+            <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => addListValue("phoneNumbers")}>
+              <Plus className="h-3.5 w-3.5" />
+              Add Number
+            </Button>
+          </div>
+          {values.phoneNumbers.map((phone, index) => (
+            <div key={`lead-phone-${index}`} className="flex items-center gap-2">
+              <Input value={phone} onChange={(event) => updateListValue("phoneNumbers", index, event.target.value)} placeholder={index === 0 ? "Primary phone" : "Additional phone"} className="h-10" />
+              {values.phoneNumbers.length > 1 ? (
+                <Button type="button" variant="ghost" size="icon" className="h-10 w-10 text-red-600 hover:bg-red-50 hover:text-red-700" onClick={() => removeListValue("phoneNumbers", index)}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold text-slate-700">Email Addresses</span>
+            <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => addListValue("emails")}>
+              <Plus className="h-3.5 w-3.5" />
+              Add Email
+            </Button>
+          </div>
+          {values.emails.map((email, index) => (
+            <div key={`lead-email-${index}`} className="flex items-center gap-2">
+              <Input value={email} onChange={(event) => updateListValue("emails", index, event.target.value)} placeholder={index === 0 ? "Primary email" : "Additional email"} className="h-10" />
+              {values.emails.length > 1 ? (
+                <Button type="button" variant="ghost" size="icon" className="h-10 w-10 text-red-600 hover:bg-red-50 hover:text-red-700" onClick={() => removeListValue("emails", index)}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        <h3 className="text-sm font-black text-slate-900">Lead Details</h3>
+        <p className="text-xs text-slate-500">Capture ownership, product interest, and scoring.</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="space-y-1.5">
+          <span className="text-sm font-semibold text-slate-700">Interested Product</span>
+          <select value={values.productInterestId} onChange={(event) => updateValue("productInterestId", event.target.value)} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+            <EntityOptions workspace={workspace} type="products" />
+          </select>
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-sm font-semibold text-slate-700">Assigned Marketer</span>
+          <select value={values.assignedToId} onChange={(event) => updateValue("assignedToId", event.target.value)} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+            <option value="">Auto assign</option>
+            {marketers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-sm font-semibold text-slate-700">Priority</span>
+          <select value={values.priority} onChange={(event) => updateValue("priority", event.target.value)} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+            <option value="LOW">Low</option>
+            <option value="MEDIUM">Medium</option>
+            <option value="HIGH">High</option>
+            <option value="URGENT">Important</option>
+          </select>
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-sm font-semibold text-slate-700">Lead Score</span>
+          <Input value={values.score} type="number" onChange={(event) => updateValue("score", event.target.value)} className="h-10" />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-sm font-semibold text-slate-700">Probability %</span>
+          <Input value={values.purchaseProbability} type="number" onChange={(event) => updateValue("purchaseProbability", event.target.value)} className="h-10" />
+        </label>
+      </div>
+
+      <div className="space-y-1">
+        <h3 className="text-sm font-black text-slate-900">Follow-up & Notes</h3>
+        <p className="text-xs text-slate-500">Add optional follow-up timing and context.</p>
+      </div>
+      <label className="space-y-1.5">
+        <span className="text-sm font-semibold text-slate-700">Follow-up Date</span>
+        <Input value={values.followUpDate} type="datetime-local" onChange={(event) => updateValue("followUpDate", event.target.value)} className="h-10" />
+      </label>
+      <label className="space-y-1.5">
+        <span className="text-sm font-semibold text-slate-700">Notes</span>
+        <textarea value={values.notes} onChange={(event) => updateValue("notes", event.target.value)} className="min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100" />
+      </label>
+      {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
+      <div className="flex gap-2">
+        <Button className="flex-1" disabled={pending} type="submit">
+          {pending ? "Saving..." : lead ? "Update Lead" : "Save Lead"}
+        </Button>
+        <Button type="button" variant="outline" className="flex-1" disabled={pending} onClick={onDone}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }
 
 function TaskForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: () => void }) {
+  const role = workspace.user.role;
+  const assigneeOptions = React.useMemo(() => getAssignableUserOptions(workspace, role, "task"), [role, workspace]);
+  const defaultAssigneeId = role === "SUPERVISOR" ? (workspace.user.id ?? "") : "";
+
   return (
     <ActionForm
       action={createTaskAction}
@@ -716,7 +1051,10 @@ function TaskForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: () =
     >
       <div className="grid gap-2.5 sm:grid-cols-2">
         <TextField label="Task Title" name="title" compact />
-        <SelectBox label="Assign To" name="assignedToId" compact><EntityOptions workspace={workspace} type="marketers" /></SelectBox>
+        <SelectBox label="Assign To" name="assignedToId" compact defaultValue={defaultAssigneeId}>
+          <option value="">Select assignee</option>
+          {assigneeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </SelectBox>
         <TextField label="Company Name" name="companyName" compact />
         <TextField label="Lead Name" name="leadName" compact />
         <SelectBox label="Related Product" name="productId" compact><EntityOptions workspace={workspace} type="products" /></SelectBox>
@@ -755,6 +1093,8 @@ function CommunicationForm({ workspace, onDone }: { workspace: CrmWorkspace; onD
 }
 
 function FollowUpForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: () => void }) {
+  const assigneeOptions = React.useMemo(() => getAssignableUserOptions(workspace, workspace.user.role, "follow-up"), [workspace]);
+
   return (
     <ActionForm action={createFollowUpAction} onDone={onDone} submitLabel="Save Follow-up">
       <div className="grid gap-3 sm:grid-cols-2">
@@ -772,7 +1112,10 @@ function FollowUpForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
           searchScope="leads"
           placeholder="Search lead"
         />
-        <SelectBox label="Assigned To" name="assignedToId"><EntityOptions workspace={workspace} type="marketers" /></SelectBox>
+        <SelectBox label="Assigned To" name="assignedToId">
+          <option value="">Select assignee</option>
+          {assigneeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </SelectBox>
         <SelectBox label="Method" name="method"><option>Phone Call</option><option>WhatsApp</option><option>Email</option><option>Physical Visit</option><option>Meeting</option></SelectBox>
       </div>
       <TextField label="Follow-up Date" name="followUpDate" type="datetime-local" />
@@ -1350,38 +1693,283 @@ function CustomerEditModal({
   );
 }
 
-function ProductForm({ onDone }: { onDone: () => void }) {
+function ProductForm({
+  onDone,
+  product,
+  onSuccess,
+}: {
+  onDone: () => void;
+  product?: ProductRow | null;
+  onSuccess?: (row: ProductRow) => void;
+}) {
+  const [pending, startTransition] = React.useTransition();
+  const [message, setMessage] = React.useState("");
+
   return (
-    <ActionForm action={createProductAction} onDone={onDone} submitLabel="Save Product">
-      <TextField label="Product / Service Name" name="name" required />
+    <form
+      className="space-y-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const formData = new FormData(form);
+        const payload = {
+          name: String(formData.get("name") ?? "").trim(),
+          category: String(formData.get("category") ?? "").trim(),
+          brand: String(formData.get("brand") ?? "").trim(),
+          price: Number(formData.get("price")),
+          imageUrl: String(formData.get("imageUrl") ?? "").trim(),
+          description: String(formData.get("description") ?? "").trim(),
+          specification: String(formData.get("specification") ?? "").trim(),
+        };
+
+        startTransition(async () => {
+          setMessage("");
+          try {
+            const response = await fetch(product ? `/api/products/${product.id}` : "/api/products", {
+              method: product ? "PATCH" : "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success || !result.row) {
+              setMessage(result.message ?? "Product save failed.");
+              return;
+            }
+
+            if (!product) {
+              form.reset();
+            }
+            onSuccess?.(result.row as ProductRow);
+            onDone();
+          } catch (error) {
+            setMessage(error instanceof Error ? error.message : "Product save failed.");
+          }
+        });
+      }}
+    >
+      <TextField label="Product / Service Name" name="name" required defaultValue={product?.name ?? ""} />
       <div className="grid gap-3 sm:grid-cols-2">
-        <TextField label="Category" name="category" required />
-        <TextField label="Brand" name="brand" />
-        <TextField label="Price" name="price" type="number" defaultValue={0} required />
-        <TextField label="Image URL" name="imageUrl" />
+        <TextField label="Category" name="category" required defaultValue={product?.category ?? ""} />
+        <TextField label="Brand" name="brand" defaultValue={product && product.brand !== "-" ? product.brand : ""} />
+        <TextField label="Price" name="price" type="number" defaultValue={product ? product.price : 0} required />
+        <TextField label="Image URL" name="imageUrl" defaultValue={product?.imageUrl ?? ""} />
       </div>
-      <TextAreaField label="Description" name="description" />
-      <TextAreaField label="Specification" name="specification" />
-    </ActionForm>
+      <TextAreaField label="Description" name="description" defaultValue={product && product.description !== "-" ? product.description : ""} />
+      <TextAreaField label="Specification" name="specification" defaultValue={product && product.specification !== "-" ? product.specification : ""} />
+      {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
+      <div>
+        <Button className="w-full" disabled={pending} type="submit">
+          {pending ? "Saving..." : product ? "Update Product" : "Save Product"}
+        </Button>
+      </div>
+    </form>
   );
 }
 
-export function LeadsPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
-  const [open, setOpen] = React.useState(false);
-  const columns = React.useMemo<ColumnDef<LeadRow>[]>(
-    () => [
-      { accessorKey: "title", header: "Lead Name", cell: ({ row }) => <EntityLink href={`/leads/${row.original.id}`} className="font-bold">{row.original.title}</EntityLink> },
-      { accessorKey: "company", header: "Company", cell: ({ row }) => <EntityLink href={row.original.companyId ? `/customers/${row.original.companyId}` : undefined} className="font-semibold">{row.original.company}</EntityLink> },
-      { accessorKey: "phone", header: "Phone" },
-      { accessorKey: "productInterest", header: "Product Interest" },
-      { accessorKey: "status", header: "Status", cell: ({ row }) => <StatusBadge value={row.original.status} /> },
-      { accessorKey: "score", header: "Lead Score" },
-      { accessorKey: "assignedTo", header: "Assigned To" },
-      { accessorKey: "followUpDate", header: "Follow-up Date" },
-      { id: "Action", header: "Action", cell: ({ row }) => <RowActions detailHref={`/leads/${row.original.id}`} /> },
-    ],
-    [],
+type LeadColumnKey =
+  | "customerName"
+  | "company"
+  | "phone"
+  | "email"
+  | "productInterest"
+  | "status"
+  | "score"
+  | "purchaseProbability"
+  | "assignedTo"
+  | "priority"
+  | "followUpDate"
+  | "createdAt"
+  | "action";
+
+const LEAD_COLUMN_OPTIONS: Array<{ key: LeadColumnKey; label: string }> = [
+  { key: "customerName", label: "Lead Name / Customer Name" },
+  { key: "company", label: "Company" },
+  { key: "phone", label: "Phone" },
+  { key: "email", label: "Email" },
+  { key: "productInterest", label: "Product Interest" },
+  { key: "status", label: "Status" },
+  { key: "score", label: "Lead Score" },
+  { key: "purchaseProbability", label: "Probability" },
+  { key: "assignedTo", label: "Assigned To" },
+  { key: "priority", label: "Priority" },
+  { key: "followUpDate", label: "Follow-up Date" },
+  { key: "createdAt", label: "Created At" },
+  { key: "action", label: "Action" },
+];
+
+function LeadRowActions({
+  lead,
+  onEdit,
+  onDelete,
+}: {
+  lead: LeadRow;
+  onEdit: (lead: LeadRow) => void;
+  onDelete: (lead: LeadRow) => void;
+}) {
+  return (
+    <div className="flex items-center justify-end gap-1">
+      <Link href={`/leads/${lead.id}`} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:scale-110 hover:bg-blue-50 hover:text-blue-700" aria-label="View lead">
+        <Eye className="h-4 w-4" />
+      </Link>
+      <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-slate-500 transition duration-150 hover:scale-110 hover:bg-slate-100 hover:text-slate-900" onClick={() => onEdit(lead)} aria-label="Edit lead">
+        <Edit className="h-4 w-4" />
+      </Button>
+      <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-600 transition duration-150 hover:scale-110 hover:bg-red-50 hover:text-red-700" onClick={() => onDelete(lead)} aria-label="Delete lead">
+        <Trash2 className="h-4 w-4" />
+      </Button>
+    </div>
   );
+}
+
+export function LeadsPage({ workspace }: { role: Role; workspace: CrmWorkspace }) {
+  const { refreshLeadCount } = useTaskCounterContext();
+  const [open, setOpen] = React.useState(false);
+  const [editLead, setEditLead] = React.useState<LeadRow | null>(null);
+  const [deleteLead, setDeleteLead] = React.useState<LeadRow | null>(null);
+  const [leads, setLeads] = React.useState<LeadRow[]>(() => workspace.leads);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const [feedback, setFeedback] = React.useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [search, setSearch] = React.useState("");
+  const [statusFilter, setStatusFilter] = React.useState("all");
+  const [priorityFilter, setPriorityFilter] = React.useState("all");
+  const [assignedToId, setAssignedToId] = React.useState("all");
+  const [page, setPage] = React.useState(1);
+  const [totalPages, setTotalPages] = React.useState(1);
+  const [total, setTotal] = React.useState(workspace.leads.length);
+  const [columnMenuOpen, setColumnMenuOpen] = React.useState(false);
+  const [visibleColumns, setVisibleColumns] = React.useState<Record<LeadColumnKey, boolean>>({
+    customerName: true,
+    company: true,
+    phone: true,
+    email: true,
+    productInterest: true,
+    status: true,
+    score: true,
+    purchaseProbability: true,
+    assignedTo: true,
+    priority: true,
+    followUpDate: true,
+    createdAt: true,
+    action: true,
+  });
+  const [deletePending, setDeletePending] = React.useState(false);
+  const [deleteError, setDeleteError] = React.useState("");
+  const [importing, setImporting] = React.useState(false);
+  const [exporting, setExporting] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const columnMenuRef = React.useRef<HTMLDivElement>(null);
+  const marketers = React.useMemo(() => workspace.employees.filter((item) => item.role === "Marketer"), [workspace.employees]);
+
+  const refreshLeads = React.useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: "10",
+      });
+      if (search.trim()) params.set("search", search.trim());
+      if (statusFilter !== "all") params.set("status", statusFilter);
+      if (priorityFilter !== "all") params.set("priority", priorityFilter);
+      if (assignedToId !== "all") params.set("assignedToId", assignedToId);
+
+      const response = await fetch(`/api/leads?${params.toString()}`, { cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(typeof result.message === "string" ? result.message : "Failed to load leads.");
+      }
+
+      setLeads(Array.isArray(result.rows) ? (result.rows as LeadRow[]) : []);
+      setPage(Number(result.page ?? 1));
+      setTotalPages(Number(result.totalPages ?? 1));
+      setTotal(Number(result.total ?? 0));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to load leads.");
+    } finally {
+      setLoading(false);
+    }
+  }, [assignedToId, page, priorityFilter, search, statusFilter]);
+
+  React.useEffect(() => {
+    void refreshLeads();
+  }, [refreshLeads]);
+
+  React.useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!columnMenuRef.current?.contains(event.target as Node)) {
+        setColumnMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
+  React.useEffect(() => {
+    if (!feedback) return undefined;
+    const timer = window.setTimeout(() => setFeedback(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
+
+  const visibleKeys = React.useMemo(() => LEAD_COLUMN_OPTIONS.filter((item) => visibleColumns[item.key]).map((item) => item.key), [visibleColumns]);
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const params = new URLSearchParams({
+        format: "xlsx",
+        columns: visibleKeys.join(","),
+      });
+      const response = await fetch(`/api/leads/export?${params.toString()}`);
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        throw new Error(result?.message ?? "Lead export failed.");
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `leads-export-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+      setFeedback({ type: "success", message: "Leads exported successfully." });
+    } catch (nextError) {
+      setFeedback({ type: "error", message: nextError instanceof Error ? nextError.message : "Lead export failed." });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setImporting(true);
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      const response = await fetch("/api/leads/import", { method: "POST", body: formData });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(typeof result.message === "string" ? result.message : "Lead import failed.");
+      }
+
+      await refreshLeads();
+      await refreshLeadCount();
+      setFeedback({
+        type: "success",
+        message: `${result.inserted} inserted, ${result.updated} updated, ${result.failed.length} failed.${result.failed.length ? ` First issue: row ${result.failed[0].row} - ${result.failed[0].reason}` : ""}`,
+      });
+    } catch (nextError) {
+      setFeedback({ type: "error", message: nextError instanceof Error ? nextError.message : "Lead import failed." });
+    } finally {
+      setImporting(false);
+    }
+  };
 
   return (
     <>
@@ -1389,34 +1977,195 @@ export function LeadsPage({ role, workspace }: { role: Role; workspace: CrmWorks
         title="Leads"
         description="Manage opportunities with score, priority, ownership, communication count, and follow-up tracking."
         actions={pageActions([
-          { label: "Add Lead", icon: Plus, variant: "default", onClick: () => setOpen(true) },
-          { label: "Import CSV", icon: Upload, href: rolePath(role, "import-export") },
-          { label: "Export", icon: Download, href: rolePath(role, "reports") },
+          { label: "Add Lead", icon: Plus, variant: "default", onClick: () => { setEditLead(null); setOpen(true); } },
+          { label: importing ? "Importing..." : "Import CSV", icon: Upload, variant: "outline", onClick: () => fileInputRef.current?.click() },
+          { label: exporting ? "Exporting..." : "Export", icon: Download, variant: "outline", onClick: () => void handleExport() },
         ])}
       />
+      <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleImportFile} />
+      {feedback ? <div className={cn("rounded-xl border px-4 py-3 text-sm font-semibold", feedback.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}>{feedback.message}</div> : null}
       <FilterBar>
-        <SelectBox label="Status"><option>All Status</option><option>Interested</option><option>Negotiation</option></SelectBox>
-        <SelectBox label="Priority"><option>All</option><option>High</option><option>Medium</option></SelectBox>
-        <SelectBox label="Assigned To"><option>All</option>{workspace.employees.map((item) => <option key={item.id}>{item.name}</option>)}</SelectBox>
-        <SelectBox label="Date Range"><option>Current Month</option></SelectBox>
+        <label className="space-y-1.5">
+          <span className="text-xs font-bold uppercase text-slate-500">Status</span>
+          <select value={statusFilter} onChange={(event) => { setPage(1); setStatusFilter(event.target.value); }} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+            <option value="all">All Status</option>
+            <option value="NEW_LEAD">New</option>
+            <option value="CONTACTED">Contacted</option>
+            <option value="INTERESTED">Interested</option>
+            <option value="QUOTATION_SENT">Quotation Sent</option>
+            <option value="NEGOTIATION">Negotiation</option>
+            <option value="WON_SALE">Won</option>
+            <option value="LOST">Lost</option>
+          </select>
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-bold uppercase text-slate-500">Priority</span>
+          <select value={priorityFilter} onChange={(event) => { setPage(1); setPriorityFilter(event.target.value); }} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+            <option value="all">All Priority</option>
+            <option value="LOW">Low</option>
+            <option value="MEDIUM">Medium</option>
+            <option value="HIGH">High</option>
+            <option value="URGENT">Important</option>
+          </select>
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-bold uppercase text-slate-500">Assigned To</span>
+          <select value={assignedToId} onChange={(event) => { setPage(1); setAssignedToId(event.target.value); }} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+            <option value="all">All Marketers</option>
+            {marketers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </label>
         <label className="space-y-1.5">
           <span className="text-xs font-bold uppercase text-slate-500">Search</span>
-          <Input placeholder="Search lead..." />
+          <Input value={search} onChange={(event) => { setPage(1); setSearch(event.target.value); }} placeholder="Search lead, company, phone, email..." />
         </label>
+        <div className="relative" ref={columnMenuRef}>
+          <span className="text-xs font-bold uppercase text-slate-500">Columns</span>
+          <Button type="button" variant="outline" className="mt-1 h-10 w-full justify-between" onClick={() => setColumnMenuOpen((current) => !current)}>
+            <span className="inline-flex items-center gap-2"><SlidersHorizontal className="h-4 w-4" /> Columns</span>
+            <ChevronDown className="h-4 w-4" />
+          </Button>
+          {columnMenuOpen ? (
+            <div className="absolute right-0 z-20 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+              {LEAD_COLUMN_OPTIONS.map((column) => (
+                <label key={column.key} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    checked={visibleColumns[column.key]}
+                    onChange={() => setVisibleColumns((current) => ({ ...current, [column.key]: !current[column.key] }))}
+                  />
+                  {column.label}
+                </label>
+              ))}
+            </div>
+          ) : null}
+        </div>
       </FilterBar>
-      <DataTable data={workspace.leads} columns={columns} searchPlaceholder="Search leads..." />
-      <FormModal open={open} title="Create Lead" onClose={() => setOpen(false)}>
-        <LeadForm workspace={workspace} onDone={() => setOpen(false)} />
+
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+              <tr>
+                {visibleColumns.customerName ? <th className="px-4 py-3 font-bold">Lead Name / Customer Name</th> : null}
+                {visibleColumns.company ? <th className="px-4 py-3 font-bold">Company</th> : null}
+                {visibleColumns.phone ? <th className="px-4 py-3 font-bold">Phone</th> : null}
+                {visibleColumns.email ? <th className="px-4 py-3 font-bold">Email</th> : null}
+                {visibleColumns.productInterest ? <th className="px-4 py-3 font-bold">Product Interest</th> : null}
+                {visibleColumns.status ? <th className="px-4 py-3 font-bold">Status</th> : null}
+                {visibleColumns.score ? <th className="px-4 py-3 font-bold">Lead Score</th> : null}
+                {visibleColumns.purchaseProbability ? <th className="px-4 py-3 font-bold">Probability</th> : null}
+                {visibleColumns.assignedTo ? <th className="px-4 py-3 font-bold">Assigned To</th> : null}
+                {visibleColumns.priority ? <th className="px-4 py-3 font-bold">Priority</th> : null}
+                {visibleColumns.followUpDate ? <th className="px-4 py-3 font-bold">Follow-up Date</th> : null}
+                {visibleColumns.createdAt ? <th className="px-4 py-3 font-bold">Created At</th> : null}
+                {visibleColumns.action ? <th className="px-4 py-3 text-right font-bold">Action</th> : null}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {loading ? (
+                <tr><td colSpan={visibleKeys.length || 1} className="px-4 py-8 text-center font-semibold text-slate-500">Loading leads...</td></tr>
+              ) : error ? (
+                <tr><td colSpan={visibleKeys.length || 1} className="px-4 py-8 text-center font-semibold text-red-600">{error}</td></tr>
+              ) : leads.length ? leads.map((lead) => (
+                <tr key={lead.id} className="transition hover:bg-slate-50">
+                  {visibleColumns.customerName ? <td className="px-4 py-3"><EntityLink href={`/leads/${lead.id}`} className="font-bold">{lead.customerName}</EntityLink></td> : null}
+                  {visibleColumns.company ? <td className="px-4 py-3"><EntityLink href={lead.companyId ? `/customers/${lead.companyId}` : undefined} className="font-semibold">{lead.company}</EntityLink></td> : null}
+                  {visibleColumns.phone ? <td className="px-4 py-3 text-slate-700">{lead.phone}</td> : null}
+                  {visibleColumns.email ? <td className="px-4 py-3 text-slate-700">{lead.email}</td> : null}
+                  {visibleColumns.productInterest ? <td className="px-4 py-3 text-slate-700">{lead.productInterest}</td> : null}
+                  {visibleColumns.status ? <td className="px-4 py-3"><StatusBadge value={lead.status} /></td> : null}
+                  {visibleColumns.score ? <td className="px-4 py-3 font-semibold text-slate-700">{lead.score}</td> : null}
+                  {visibleColumns.purchaseProbability ? <td className="px-4 py-3 font-semibold text-slate-700">{lead.purchaseProbability}%</td> : null}
+                  {visibleColumns.assignedTo ? <td className="px-4 py-3 text-slate-700">{lead.assignedTo}</td> : null}
+                  {visibleColumns.priority ? <td className="px-4 py-3"><StatusBadge value={lead.priority} /></td> : null}
+                  {visibleColumns.followUpDate ? <td className="px-4 py-3 text-slate-700">{lead.followUpDate}</td> : null}
+                  {visibleColumns.createdAt ? <td className="px-4 py-3 text-slate-700">{lead.createdAt}</td> : null}
+                  {visibleColumns.action ? <td className="px-4 py-3"><LeadRowActions lead={lead} onEdit={(row) => { setEditLead(row); setOpen(true); }} onDelete={(row) => { setDeleteError(""); setDeleteLead(row); }} /></td> : null}
+                </tr>
+              )) : (
+                <tr><td colSpan={visibleKeys.length || 1} className="px-4 py-8 text-center font-semibold text-slate-500">No leads found.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 text-sm text-slate-500 md:flex-row md:items-center md:justify-between">
+        <span>Showing {leads.length} of {total} leads</span>
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1 || loading}>Previous</Button>
+          <span className="font-semibold text-slate-700">Page {page} of {totalPages}</span>
+          <Button type="button" variant="outline" size="sm" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={page >= totalPages || loading}>Next</Button>
+        </div>
+      </div>
+
+      <FormModal open={open} title={editLead ? "Edit Lead" : "Create Lead"} onClose={() => { setOpen(false); setEditLead(null); }}>
+        <LeadForm
+          workspace={workspace}
+          lead={editLead}
+          onSuccess={async () => {
+            await refreshLeads();
+            await refreshLeadCount();
+            setFeedback({ type: "success", message: editLead ? "Lead updated successfully." : "Lead created successfully." });
+          }}
+          onDone={() => {
+            setOpen(false);
+            setEditLead(null);
+          }}
+        />
+      </FormModal>
+
+      <FormModal open={Boolean(deleteLead)} title="Delete Lead" onClose={() => setDeleteLead(null)} panelClassName="max-w-md">
+        {deleteLead ? (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-700">Are you sure you want to delete <span className="font-black">{deleteLead.customerName}</span>?</p>
+            {deleteError ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{deleteError}</p> : null}
+            <div className="flex flex-col gap-2">
+              <Button
+                type="button"
+                variant="destructive"
+                className="w-full"
+                disabled={deletePending}
+                onClick={async () => {
+                  setDeletePending(true);
+                  setDeleteError("");
+                  try {
+                    const response = await fetch(`/api/leads/${deleteLead.id}`, { method: "DELETE" });
+                    const result = await response.json();
+                    if (!response.ok || !result.success) {
+                      throw new Error(typeof result.message === "string" ? result.message : "Lead delete failed.");
+                    }
+                    setDeleteLead(null);
+                    await refreshLeads();
+                    await refreshLeadCount();
+                    setFeedback({ type: "success", message: "Lead deleted successfully." });
+                  } catch (nextError) {
+                    setDeleteError(nextError instanceof Error ? nextError.message : "Lead delete failed.");
+                  } finally {
+                    setDeletePending(false);
+                  }
+                }}
+              >
+                {deletePending ? "Deleting..." : "Delete Lead"}
+              </Button>
+              <Button type="button" variant="outline" className="w-full" disabled={deletePending} onClick={() => setDeleteLead(null)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </FormModal>
     </>
   );
 }
 
 export function LeadDetailsPage({ role, workspace, lead }: { role: Role; workspace: CrmWorkspace; lead?: LeadRow }) {
-  const activeLead = lead;
+  const [activeLead, setActiveLead] = React.useState(lead);
   const companySummary = activeLead?.companyId ? workspace.companies.find((item) => item.id === activeLead.companyId) : undefined;
   const [communicationOpen, setCommunicationOpen] = React.useState(false);
   const [followUpOpen, setFollowUpOpen] = React.useState(false);
+  const [editOpen, setEditOpen] = React.useState(false);
 
   if (!activeLead) return <EmptyState title="Lead not found" description="The requested lead is not available in your CRM scope." />;
 
@@ -1435,12 +2184,12 @@ export function LeadDetailsPage({ role, workspace, lead }: { role: Role; workspa
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-2xl font-black text-slate-950">
-                  <EntityLink href={activeLead.companyId ? `/customers/${activeLead.companyId}` : undefined} className="font-black">{activeLead.company}</EntityLink>
+                  <EntityLink href={activeLead.companyId ? `/customers/${activeLead.companyId}` : undefined} className="font-black">{activeLead.customerName}</EntityLink>
                 </h1>
                 <StatusBadge value={activeLead.status} />
               </div>
               <p className="mt-1 text-sm font-bold text-slate-700">
-                Lead: <EntityLink href={`/leads/${activeLead.id}`} className="font-bold">{activeLead.title}</EntityLink>
+                Company: <EntityLink href={activeLead.companyId ? `/customers/${activeLead.companyId}` : undefined} className="font-bold">{activeLead.company}</EntityLink>
               </p>
               <div className="mt-3 grid gap-2 text-sm text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
                 <span>Lead Score: <b className="text-slate-800">{activeLead.score}</b></span>
@@ -1450,7 +2199,7 @@ export function LeadDetailsPage({ role, workspace, lead }: { role: Role; workspa
               </div>
             </div>
           </div>
-          <Button type="button">Edit Lead</Button>
+          <Button type="button" onClick={() => setEditOpen(true)}>Edit Lead</Button>
         </div>
       </Card>
 
@@ -1485,6 +2234,10 @@ export function LeadDetailsPage({ role, workspace, lead }: { role: Role; workspa
                     <InfoLine label="Purchase Probability" value={`${activeLead.purchaseProbability}%`} progress={activeLead.purchaseProbability} />
                     <InfoLine label="Communication Count" value={activeLead.communicationCount} />
                     <InfoLine label="Follow-up Count" value={activeLead.followUpCount} />
+                    <InfoLine label="Phone Numbers" value={activeLead.phones.length ? activeLead.phones.join(", ") : "-"} />
+                    <InfoLine label="Email Addresses" value={activeLead.emails.length ? activeLead.emails.join(", ") : "-"} />
+                    <InfoLine label="Notes" value={activeLead.notes} />
+                    <InfoLine label="Created At" value={activeLead.createdAt} />
                   </div>
                   <ChartCard title="Lead Status Movement">
                     <SalesLineChart data={workspace.quotations.slice(0, 6).map((item) => ({ month: item.date, sales: item.amount }))} />
@@ -1509,6 +2262,14 @@ export function LeadDetailsPage({ role, workspace, lead }: { role: Role; workspa
       <FormModal open={followUpOpen} title="Add Follow-up" onClose={() => setFollowUpOpen(false)}>
         <FollowUpForm workspace={workspace} onDone={() => setFollowUpOpen(false)} />
       </FormModal>
+      <FormModal open={editOpen} title="Edit Lead" onClose={() => setEditOpen(false)}>
+        <LeadForm
+          workspace={workspace}
+          lead={activeLead}
+          onSuccess={(row) => setActiveLead(row)}
+          onDone={() => setEditOpen(false)}
+        />
+      </FormModal>
     </>
   );
 }
@@ -1528,6 +2289,21 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   const [exportingFormat, setExportingFormat] = React.useState<"xlsx" | "csv" | null>(null);
   const [exportMenuOpen, setExportMenuOpen] = React.useState(false);
   const [feedback, setFeedback] = React.useState<{ type: "success" | "error"; title: string; message: string } | null>(null);
+
+  const refreshCustomers = React.useCallback(async () => {
+    const response = await fetch("/api/customers", { cache: "no-store" });
+    const result = await response.json();
+
+    if (!response.ok || !result.success || !Array.isArray(result.rows)) {
+      throw new Error(typeof result.message === "string" ? result.message : "Failed to load customers.");
+    }
+
+    const rows = result.rows as CompanyRow[];
+    setCustomers(rows);
+    setViewCustomer((current) => current ? rows.find((item) => item.id === current.id) ?? null : null);
+    setEditCustomer((current) => current ? rows.find((item) => item.id === current.id) ?? null : null);
+    setDeleteCustomer((current) => current ? rows.find((item) => item.id === current.id) ?? null : null);
+  }, []);
 
   const handleViewCustomer = React.useCallback((customer: CompanyRow) => {
     setViewCustomer(customer);
@@ -1572,6 +2348,12 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   React.useEffect(() => {
     setCustomers(workspace.companies);
   }, [workspace.companies]);
+
+  React.useEffect(() => {
+    void refreshCustomers().catch(() => {
+      // Keep the server-rendered workspace snapshot if the live refresh fails.
+    });
+  }, [refreshCustomers]);
 
   React.useEffect(() => {
     if (!feedback) return undefined;
@@ -1635,6 +2417,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
         title: "Import complete",
         message: `${result.inserted} inserted, ${result.updated} updated, ${result.failed.length} failed.${result.failed.length ? ` First issue: row ${result.failed[0].row} - ${result.failed[0].reason}` : ""}`,
       });
+      await refreshCustomers();
       router.refresh();
     } catch (error) {
       setFeedback({
@@ -1721,6 +2504,9 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
 
   const handleEditDone = (updatedCustomer: CompanyRow | null) => {
     setEditCustomer(null);
+    void refreshCustomers().catch(() => {
+      // Fallback to local optimistic state below if live refresh fails.
+    });
     router.refresh();
     if (updatedCustomer?.id) {
       setCustomers((prev) => prev.map((customer) => customer.id === updatedCustomer.id ? updatedCustomer : customer));
@@ -1734,6 +2520,9 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
 
   const handleCreateDone = () => {
     setOpen(false);
+    void refreshCustomers().catch(() => {
+      // The router refresh keeps the page consistent if the live fetch fails.
+    });
     router.refresh();
   };
 
@@ -1995,8 +2784,9 @@ export function TodaysPlanPage({ workspace }: { workspace: CrmWorkspace }) {
 }
 
 type TodayTaskPriorityFilter = "ALL" | "IMPORTANT" | "HIGH" | "MEDIUM" | "LOW";
+type TodayWorkFilter = "all" | "tasks" | "due-follow-ups" | "overdue" | "carry-forward";
 
-type TodayTaskApiRow = {
+export type TodayTaskApiRow = {
   id: string;
   title: string;
   companyName: string;
@@ -2023,12 +2813,31 @@ type TodayTaskApiRow = {
   completedBy: string;
 };
 
-function todayDateValue() {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padStart(2, "0");
-  const day = String(today.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function sortTodayWorkQueue(rows: TodayWorkQueueItem[]) {
+  return [...rows].sort((left, right) => {
+    const leftTime = new Date(left.taskDateIso).getTime();
+    const rightTime = new Date(right.taskDateIso).getTime();
+    if (leftTime !== rightTime) return leftTime - rightTime;
+    return left.title.localeCompare(right.title);
+  });
+}
+
+function todayWorkCounts(rows: TodayWorkQueueItem[]) {
+  return {
+    all: rows.length,
+    tasks: rows.filter((row) => row.queueType === "TASK").length,
+    "due-follow-ups": rows.filter((row) => row.queueType === "DUE_FOLLOW_UP").length,
+    overdue: rows.filter((row) => row.queueType === "OVERDUE").length,
+    "carry-forward": rows.filter((row) => row.queueType === "CARRY_FORWARD").length,
+  } satisfies Record<TodayWorkFilter, number>;
+}
+
+function matchesTodayWorkFilter(row: TodayWorkQueueItem, filter: TodayWorkFilter) {
+  if (filter === "all") return true;
+  if (filter === "tasks") return row.queueType === "TASK";
+  if (filter === "due-follow-ups") return row.queueType === "DUE_FOLLOW_UP";
+  if (filter === "overdue") return row.queueType === "OVERDUE";
+  return row.queueType === "CARRY_FORWARD";
 }
 
 function dateTimeLocalValue(date = new Date()) {
@@ -2047,24 +2856,32 @@ function taskPriorityTone(priority: TodayTaskApiRow["priorityKey"]) {
   return "border-orange-200 bg-orange-50 text-orange-700";
 }
 
-function sortActiveTasks(rows: TodayTaskApiRow[]) {
-  return [...rows].sort((left, right) => {
-    if (left.isPrevious !== right.isPrevious) return left.isPrevious ? -1 : 1;
-    return new Date(left.taskDateIso).getTime() - new Date(right.taskDateIso).getTime();
-  });
-}
-
-function sortCompletedTasks(rows: TodayTaskApiRow[]) {
-  return [...rows].sort((left, right) => {
-    const leftTime = left.completedAtIso ? new Date(left.completedAtIso).getTime() : 0;
-    const rightTime = right.completedAtIso ? new Date(right.completedAtIso).getTime() : 0;
-    return rightTime - leftTime;
-  });
-}
-
 function TaskPriorityBadge({ priority }: { priority: TodayTaskApiRow["priorityKey"] }) {
   const label = priority === "IMPORTANT" ? "Important" : priority === "HIGH" ? "High" : priority === "LOW" ? "Low" : "Medium";
   return <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-[11px] font-black", taskPriorityTone(priority))}>{label}</span>;
+}
+
+function avatarTone(seed: string) {
+  const tones = [
+    "bg-blue-50 text-blue-700 ring-blue-100",
+    "bg-emerald-50 text-emerald-700 ring-emerald-100",
+    "bg-violet-50 text-violet-700 ring-violet-100",
+    "bg-amber-50 text-amber-700 ring-amber-100",
+    "bg-rose-50 text-rose-700 ring-rose-100",
+    "bg-cyan-50 text-cyan-700 ring-cyan-100",
+  ];
+
+  const base = seed.trim() || "A";
+  const index = Array.from(base).reduce((sum, letter) => sum + letter.charCodeAt(0), 0) % tones.length;
+  return tones[index];
+}
+
+function MiniAvatar({ label }: { label: string }) {
+  return (
+    <span className={cn("inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl text-xs font-black ring-1", avatarTone(label))}>
+      {initials(label || "CRM")}
+    </span>
+  );
 }
 
 function TaskCreateModal({
@@ -2081,37 +2898,54 @@ function TaskCreateModal({
   workspace: CrmWorkspace;
 }) {
   const [title, setTitle] = React.useState("");
-  const [companyName, setCompanyName] = React.useState("");
+  const [companyId, setCompanyId] = React.useState("");
+  const [companyLabel, setCompanyLabel] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [assignedToId, setAssignedToId] = React.useState("");
-  const [priority, setPriority] = React.useState<TodayTaskPriorityFilter>("MEDIUM");
-  const [taskDate, setTaskDate] = React.useState(todayDateValue());
+  const [priority, setPriority] = React.useState<Exclude<TodayTaskPriorityFilter, "ALL">>("MEDIUM");
+  const [taskDateTime, setTaskDateTime] = React.useState(dateTimeLocalValue());
   const [pending, setPending] = React.useState(false);
   const [message, setMessage] = React.useState("");
   const canAssign = role === "ADMIN" || role === "SUPERVISOR";
-  const marketerOptions = React.useMemo(() => workspace.employees.filter((item) => item.role === "Marketer"), [workspace.employees]);
+  const assigneeOptions = React.useMemo(() => getAssignableUserOptions(workspace, role, "task"), [role, workspace]);
+  const defaultAssigneeId = role === "SUPERVISOR" ? (workspace.user.id ?? "") : "";
 
   React.useEffect(() => {
     if (!open) return;
     setTitle("");
-    setCompanyName("");
+    setCompanyId("");
+    setCompanyLabel("");
     setDescription("");
-    setAssignedToId("");
+    setAssignedToId(defaultAssigneeId);
     setPriority("MEDIUM");
-    setTaskDate(todayDateValue());
+    setTaskDateTime(dateTimeLocalValue());
     setMessage("");
-  }, [open]);
+  }, [defaultAssigneeId, open]);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setPending(true);
     setMessage("");
 
+    if (!companyId) {
+      setMessage("Please select a company from the list.");
+      setPending(false);
+      return;
+    }
+
     try {
-      const response = await fetch("/api/tasks/create", {
+      const response = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, companyName, description, assignedToId: canAssign ? assignedToId : undefined, priority, taskDate }),
+        body: JSON.stringify({
+          title,
+          companyId,
+          companyName: companyLabel,
+          description,
+          assignedToId: canAssign ? assignedToId : undefined,
+          priority,
+          taskDateTime,
+        }),
       });
       const result = await response.json();
 
@@ -2135,10 +2969,18 @@ function TaskCreateModal({
           <span className="text-sm font-semibold text-slate-700">Task Title</span>
           <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Call Prime Academy" required />
         </label>
-        <label className="block space-y-1.5">
-          <span className="text-sm font-semibold text-slate-700">Company Name</span>
-          <Input value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Prime Academy" required />
-        </label>
+        <SearchableEntitySelect
+          label="Company Name"
+          options={[]}
+          searchScope="companies"
+          value={companyId}
+          onValueChange={(value, label) => {
+            setCompanyId(value);
+            setCompanyLabel(label);
+          }}
+          required
+          placeholder="Search company..."
+        />
         <label className="block space-y-1.5">
           <span className="text-sm font-semibold text-slate-700">Task Details</span>
           <textarea
@@ -2151,15 +2993,15 @@ function TaskCreateModal({
         <div className="grid gap-3 sm:grid-cols-2">
           {canAssign ? (
             <label className="space-y-1.5">
-              <span className="text-sm font-semibold text-slate-700">Assign To Marketer</span>
+              <span className="text-sm font-semibold text-slate-700">Assign To</span>
               <select
                 value={assignedToId}
                 onChange={(event) => setAssignedToId(event.target.value)}
                 required
                 className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
               >
-                <option value="">Select marketer</option>
-                {marketerOptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                <option value="">Select assignee</option>
+                {assigneeOptions.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
               </select>
             </label>
           ) : null}
@@ -2167,17 +3009,23 @@ function TaskCreateModal({
             <span className="text-sm font-semibold text-slate-700">Priority</span>
             <select
               value={priority}
-              onChange={(event) => setPriority(event.target.value as TodayTaskPriorityFilter)}
+              onChange={(event) => setPriority(event.target.value as Exclude<TodayTaskPriorityFilter, "ALL">)}
               className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
             >
-              <option value="HIGH">High</option>
-              <option value="MEDIUM">Medium</option>
               <option value="LOW">Low</option>
+              <option value="MEDIUM">Medium</option>
+              <option value="HIGH">High</option>
+              <option value="IMPORTANT">Important</option>
             </select>
           </label>
-          <label className="space-y-1.5">
-            <span className="text-sm font-semibold text-slate-700">Date</span>
-            <Input type="date" value={taskDate} onChange={(event) => setTaskDate(event.target.value)} required />
+          <label className={cn("space-y-1.5", canAssign ? "sm:col-span-2" : "")}>
+            <span className="text-sm font-semibold text-slate-700">Date & Time</span>
+            <Input
+              type="datetime-local"
+              value={taskDateTime}
+              onChange={(event) => setTaskDateTime(event.target.value)}
+              required
+            />
           </label>
         </div>
         {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
@@ -2194,7 +3042,7 @@ function TaskCreateModal({
   );
 }
 
-function TaskCompleteConfirmModal({
+export function TaskCompleteConfirmModal({
   task,
   pending,
   message,
@@ -2231,26 +3079,36 @@ function TaskCompleteConfirmModal({
   );
 }
 
-function TaskFollowUpModal({
+export function TaskFollowUpModal({
   task,
   workspace,
   onClose,
   onSaved,
 }: {
-  task: TodayTaskApiRow | null;
+  task: {
+    id: string;
+    title: string;
+    companyId?: string | null;
+    companyName: string;
+    leadId?: string | null;
+    leadName?: string | null;
+    taskId?: string | null;
+  } | null;
   workspace: CrmWorkspace;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (result?: ActionResult) => void;
 }) {
+  const assigneeOptions = React.useMemo(() => getAssignableUserOptions(workspace, workspace.user.role, "follow-up"), [workspace]);
+
   return (
     <FormModal open={Boolean(task)} title="Add Follow-up" onClose={onClose} panelClassName="max-w-xl">
       {task ? (
-        <ActionForm action={createFollowUpAction} onDone={onSaved} submitLabel="Save Follow-up">
+        <ActionForm action={createFollowUpAction} onSuccess={(result) => onSaved(result)} submitLabel="Save Follow-up">
           <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
             <p className="text-sm font-black text-slate-900">{task.title}</p>
             <p className="mt-1 text-xs font-semibold text-slate-500">{task.companyName}</p>
           </div>
-          <input type="hidden" name="taskId" value={task.id} />
+          {task.taskId ? <input type="hidden" name="taskId" value={task.taskId} /> : null}
           <div className="grid gap-3 sm:grid-cols-2">
             <SearchableEntitySelect
               label="Customer / Company"
@@ -2266,10 +3124,13 @@ function TaskFollowUpModal({
               name="leadId"
               options={[]}
               searchScope="leads"
+              defaultValue={task.leadId ?? ""}
+              defaultLabel={task.leadName ?? ""}
               placeholder="Search lead"
             />
             <SelectBox label="Assigned To" name="assignedToId">
-              <EntityOptions workspace={workspace} type="users" />
+              <option value="">Select assignee</option>
+              {assigneeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
             </SelectBox>
             <SelectBox label="Method" name="method">
               <option>Phone Call</option>
@@ -2288,16 +3149,300 @@ function TaskFollowUpModal({
   );
 }
 
+function WorkCompletionModal({
+  item,
+  workspace,
+  onClose,
+  onSaved,
+}: {
+  item: TodayWorkQueueItem | null;
+  workspace: CrmWorkspace;
+  onClose: () => void;
+  onSaved: (result?: ActionResult) => void;
+}) {
+  const action = item?.sourceType === "FOLLOW_UP" ? completeFollowUpWithCommunicationAction : completeTaskWithFollowUpAction;
+  const title = item?.sourceType === "FOLLOW_UP" ? "Complete Follow-up" : "Complete Task";
+  const defaultMethod = item && ["Phone Call", "WhatsApp", "Email", "Physical Visit", "Meeting"].includes(item.method) ? item.method : "Phone Call";
+
+  return (
+    <FormModal open={Boolean(item)} title={title} onClose={onClose} panelClassName="max-w-2xl">
+      {item ? (
+        <ActionForm
+          action={action}
+          onSuccess={(result) => onSaved(result)}
+          submitLabel={item.sourceType === "FOLLOW_UP" ? "Save & Complete Follow-up" : "Save & Complete Task"}
+          refreshOnSuccess={false}
+          resetOnSuccess={false}
+        >
+          <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+            <p className="text-sm font-black text-slate-900">{item.title}</p>
+            <p className="mt-1 text-xs font-semibold text-slate-500">{item.companyName}</p>
+          </div>
+          <input type="hidden" name="id" value={item.sourceId} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SelectBox label="Communication Method" name="method" defaultValue={defaultMethod}>
+              <option>Phone Call</option>
+              <option>WhatsApp</option>
+              <option>Email</option>
+              <option>Physical Visit</option>
+              <option>Meeting</option>
+            </SelectBox>
+            <TextField label="Discussion Topic" name="discussionTopic" defaultValue={item.title} />
+            <TextField label="Product / Topic" name="productDiscussed" />
+            <TextField label="Outcome" name="outcome" />
+            <TextField label="Rating / Lead Score" name="rating" type="number" />
+            <TextField label="Next Follow-up Date" name="nextFollowUpDate" type="datetime-local" />
+          </div>
+          <TextAreaField label="Conversation Summary" name="conversationSummary" required defaultValue={item.description !== "-" ? item.description : ""} />
+          <TextAreaField label="Notes" name="notes" defaultValue="" />
+        </ActionForm>
+      ) : null}
+    </FormModal>
+  );
+}
+
+function TodayWorkFilterChips({
+  counts,
+  activeFilter,
+  onChange,
+}: {
+  counts: Record<TodayWorkFilter, number>;
+  activeFilter: TodayWorkFilter;
+  onChange: (filter: TodayWorkFilter) => void;
+}) {
+  const filterChips: { key: TodayWorkFilter; label: string }[] = [
+    { key: "all", label: "All" },
+    { key: "tasks", label: "Tasks" },
+    { key: "due-follow-ups", label: "Due Follow-ups" },
+    { key: "overdue", label: "Overdue" },
+    { key: "carry-forward", label: "Carry Forward" },
+  ];
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {filterChips.map((chip) => {
+        const active = activeFilter === chip.key;
+
+        return (
+          <button
+            key={chip.key}
+            type="button"
+            onClick={() => onChange(chip.key)}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-xs font-bold transition",
+              active ? "border-blue-200 bg-blue-50 text-blue-700 shadow-sm" : "border-slate-200 bg-white text-slate-500 hover:border-blue-100 hover:text-slate-700",
+            )}
+          >
+            {chip.label}
+            <span className={cn("rounded-full px-1.5 py-0.5 text-[11px]", active ? "bg-white text-blue-700" : "bg-slate-100 text-slate-500")}>
+              {counts[chip.key]}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function TodayWorkQueueList({
+  rows,
+  loading,
+  viewerRole,
+  emptyMessage,
+  activeItemId,
+  onComplete,
+  maxHeightClassName = "max-h-[520px]",
+}: {
+  rows: TodayWorkQueueItem[];
+  loading: boolean;
+  viewerRole: Role;
+  emptyMessage: string;
+  activeItemId?: string | null;
+  onComplete: (item: TodayWorkQueueItem) => void;
+  maxHeightClassName?: string;
+}) {
+  if (loading) {
+    return (
+      <p className="flex items-center gap-2 rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+        <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
+        Loading tasks...
+      </p>
+    );
+  }
+
+  if (!rows.length) {
+    return <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">{emptyMessage}</p>;
+  }
+
+  return (
+    <div className={cn("space-y-2.5 overflow-y-auto pr-1", maxHeightClassName)}>
+      <AnimatePresence initial={false}>
+        {rows.map((task) => (
+          <motion.div
+            key={task.id}
+            layout
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, x: 16 }}
+            transition={{ duration: 0.18 }}
+            className={cn(
+              "rounded-[16px] border px-3.5 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]",
+              task.queueType === "OVERDUE" || task.queueType === "CARRY_FORWARD" ? "border-red-200 bg-red-50/40" : "border-slate-200 bg-white",
+            )}
+          >
+            <div className="flex min-w-0 items-start gap-3">
+              <input
+                type="checkbox"
+                checked={false}
+                onChange={() => onComplete(task)}
+                className="mt-3 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                aria-label={`Complete ${task.title}`}
+              />
+              <MiniAvatar label={task.companyName || task.title} />
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-slate-900">{task.title}</p>
+                    <p className="mt-0.5 truncate text-xs font-semibold text-slate-500">
+                      <EntityLink href={task.companyHref} className="text-xs font-semibold text-slate-600">{task.companyName}</EntityLink>
+                    </p>
+                  </div>
+                  <p className="shrink-0 text-xs font-bold text-slate-600">{task.timeLabel}</p>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="truncate text-[11px] font-semibold text-slate-500">{task.method}</span>
+                  {viewerRole !== "MARKETER" ? <span className="truncate text-[11px] font-semibold text-slate-500">Assigned: {task.assignedTo}</span> : null}
+                  <Badge
+                    variant={task.queueType === "OVERDUE" ? "danger" : task.queueType === "DUE_FOLLOW_UP" ? "warning" : "default"}
+                    className="px-2 py-0.5 text-[11px] font-bold"
+                  >
+                    {task.queueLabel}
+                  </Badge>
+                  <TaskPriorityBadge priority={task.priorityKey} />
+                </div>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                className="mt-1 h-8 shrink-0 rounded-xl px-3 text-xs shadow-sm"
+                disabled={Boolean(activeItemId && activeItemId === task.id)}
+                onClick={() => onComplete(task)}
+              >
+                Complete
+              </Button>
+            </div>
+          </motion.div>
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function CompletedWorkList({
+  rows,
+  loading,
+  viewerRole,
+  emptyMessage,
+  onAddFollowUp,
+  previewCount,
+}: {
+  rows: CompletedWorkItem[];
+  loading: boolean;
+  viewerRole: Role;
+  emptyMessage: string;
+  onAddFollowUp: (task: CompletedWorkItem) => void;
+  previewCount?: number;
+}) {
+  const [expanded, setExpanded] = React.useState(false);
+  const hiddenCount = previewCount ? Math.max(rows.length - previewCount, 0) : 0;
+  const compactHeightClassName = previewCount === 5 ? "max-h-[360px]" : "max-h-[420px]";
+
+  if (loading) {
+    return (
+      <p className="flex items-center gap-2 rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+        <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
+        Loading completed tasks...
+      </p>
+    );
+  }
+
+  if (!rows.length) {
+    return <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">{emptyMessage}</p>;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className={cn("space-y-2.5 pr-1", previewCount ? (expanded ? "max-h-none overflow-visible" : `${compactHeightClassName} overflow-y-auto`) : "")}>
+        {rows.map((task) => (
+          <div key={task.id} className="rounded-[16px] border border-slate-200 bg-slate-50/90 px-3.5 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]">
+            <div className="flex items-start gap-3">
+              <MiniAvatar label={task.companyName || task.title} />
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-slate-900">{task.title}</p>
+                    <p className="mt-0.5 truncate text-xs font-semibold text-slate-500">
+                      <EntityLink href={task.companyHref} className="text-xs font-semibold text-slate-600">{task.companyName}</EntityLink>
+                    </p>
+                  </div>
+                  <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                    <Check className="h-4 w-4" />
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
+                  {task.method !== "Task" && task.method !== "-" ? <span>{task.method}</span> : null}
+                  {viewerRole !== "MARKETER" ? <span>Assigned: {task.assignedTo}</span> : null}
+                  <span>Completed by {task.completedBy}</span>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-xs font-bold text-slate-500">{task.completedAtLabel}</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8 rounded-xl gap-1.5 px-3 text-xs"
+                    onClick={() => onAddFollowUp(task)}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add Follow-up
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {previewCount && hiddenCount > 0 ? (
+        <div className="flex justify-center">
+          <Button type="button" variant="outline" size="sm" className="rounded-xl px-4 text-xs" onClick={() => setExpanded((value) => !value)}>
+            {expanded ? "Show Less" : `View All (${hiddenCount} more)`}
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
   const [open, setOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
   const [actionError, setActionError] = React.useState("");
-  const [pendingComplete, setPendingComplete] = React.useState(false);
-  const [activeTasks, setActiveTasks] = React.useState<TodayTaskApiRow[]>([]);
-  const [completedTasks, setCompletedTasks] = React.useState<TodayTaskApiRow[]>([]);
-  const [confirmTask, setConfirmTask] = React.useState<TodayTaskApiRow | null>(null);
-  const [followUpTask, setFollowUpTask] = React.useState<TodayTaskApiRow | null>(null);
+  const [activeTasks, setActiveTasks] = React.useState<TodayWorkQueueItem[]>([]);
+  const [completedTasks, setCompletedTasks] = React.useState<CompletedWorkItem[]>([]);
+  const [completionItem, setCompletionItem] = React.useState<TodayWorkQueueItem | null>(null);
+  const [followUpTask, setFollowUpTask] = React.useState<{
+    id: string;
+    title: string;
+    companyId?: string | null;
+    companyName: string;
+    leadId?: string | null;
+    leadName?: string | null;
+    taskId?: string | null;
+  } | null>(null);
+  const [activeFilter, setActiveFilter] = React.useState<TodayWorkFilter>("all");
+  const { refreshTaskCount } = useTaskCounterContext();
+  const scheduledRefreshTimers = React.useRef<number[]>([]);
 
   const loadTasks = React.useCallback(async () => {
     setLoading(true);
@@ -2322,8 +3467,8 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
         throw new Error(typeof completedResult.message === "string" ? completedResult.message : "Failed to load completed tasks.");
       }
 
-      setActiveTasks(sortActiveTasks(todayResult.rows as TodayTaskApiRow[]));
-      setCompletedTasks(sortCompletedTasks(completedResult.rows as TodayTaskApiRow[]));
+      setActiveTasks(sortTodayWorkQueue(todayResult.rows as TodayWorkQueueItem[]));
+      setCompletedTasks(completedResult.rows as CompletedWorkItem[]);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Failed to load tasks.");
     } finally {
@@ -2335,206 +3480,247 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
     void loadTasks();
   }, [loadTasks]);
 
-  const handleCreated = (row: TodayTaskApiRow) => {
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
-    const visibleToday = new Date(row.taskDateIso) <= endOfToday;
-
-    if (visibleToday) {
-      setActiveTasks((prev) => sortActiveTasks([row, ...prev.filter((item) => item.id !== row.id)]));
-    }
-
-    void loadTasks();
-  };
-
-  const handleConfirmComplete = async () => {
-    if (!confirmTask) return;
-
-    const task = confirmTask;
-    const optimisticCompleted: TodayTaskApiRow = {
-      ...task,
-      status: "Completed",
-      statusKey: "COMPLETED",
-      isPrevious: false,
-      completedAtIso: new Date().toISOString(),
-      completedAtLabel: new Date().toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }),
-      completedBy: "You",
-    };
-
-    const previousActive = activeTasks;
-    const previousCompleted = completedTasks;
-
-    setPendingComplete(true);
-    setActionError("");
-    setActiveTasks((prev) => prev.filter((item) => item.id !== task.id));
-    setCompletedTasks((prev) => sortCompletedTasks([optimisticCompleted, ...prev.filter((item) => item.id !== task.id)]));
-
-    try {
-      const response = await fetch(`/api/tasks/complete/${task.id}`, {
-        method: "PATCH",
-      });
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(typeof result.message === "string" ? result.message : "Task completion failed.");
+  React.useEffect(() => {
+    return () => {
+      for (const timer of scheduledRefreshTimers.current) {
+        window.clearTimeout(timer);
       }
+      scheduledRefreshTimers.current = [];
+    };
+  }, []);
 
-      const completedRow = result.row as TodayTaskApiRow;
-      setCompletedTasks((prev) => sortCompletedTasks([completedRow, ...prev.filter((item) => item.id !== completedRow.id)]));
-      setConfirmTask(null);
-      setFollowUpTask(completedRow);
-    } catch (error) {
-      setActiveTasks(previousActive);
-      setCompletedTasks(previousCompleted);
-      setActionError(error instanceof Error ? error.message : "Task completion failed.");
-    } finally {
-      setPendingComplete(false);
+  const scheduleQueueRefreshAt = React.useCallback((isoDate?: string | null) => {
+    if (!isoDate) return;
+
+    const triggerAt = new Date(isoDate).getTime();
+    if (!Number.isFinite(triggerAt)) return;
+
+    const delay = triggerAt - Date.now();
+    if (delay <= 0) {
+      void loadTasks();
+      void refreshTaskCount();
+      return;
     }
+
+    const timer = window.setTimeout(() => {
+      void loadTasks();
+      void refreshTaskCount();
+      scheduledRefreshTimers.current = scheduledRefreshTimers.current.filter((value) => value !== timer);
+    }, delay + 250);
+
+    scheduledRefreshTimers.current.push(timer);
+  }, [loadTasks, refreshTaskCount]);
+
+  const handleCreated = (_row: TodayTaskApiRow) => {
+    void loadTasks();
+    void refreshTaskCount();
   };
 
-  const pendingCount = activeTasks.length;
+  const handleCompletionSaved = (result?: ActionResult) => {
+    setCompletionItem(null);
+    const scheduledDate =
+      typeof result === "object" && result !== null && "nextFollowUpDate" in result && typeof result.nextFollowUpDate === "string"
+        ? result.nextFollowUpDate
+        : undefined;
+    void loadTasks();
+    void refreshTaskCount();
+    scheduleQueueRefreshAt(scheduledDate);
+  };
+
+  const handleFollowUpSaved = (result?: ActionResult) => {
+    setFollowUpTask(null);
+    const scheduledDate =
+      typeof result === "object" && result !== null && "followUpDate" in result && typeof result.followUpDate === "string"
+        ? result.followUpDate
+        : undefined;
+    void loadTasks();
+    void refreshTaskCount();
+    scheduleQueueRefreshAt(scheduledDate);
+  };
+
+  const counts = React.useMemo(() => todayWorkCounts(activeTasks), [activeTasks]);
+  const visibleTasks = React.useMemo(
+    () => activeTasks.filter((task) => matchesTodayWorkFilter(task, activeFilter)),
+    [activeFilter, activeTasks],
+  );
+  const myVisibleTasks = React.useMemo(
+    () => visibleTasks.filter((task) => task.assignedToId === workspace.user.id),
+    [visibleTasks, workspace.user.id],
+  );
+  const marketerVisibleTasks = React.useMemo(
+    () => visibleTasks.filter((task) => task.assignedToId !== workspace.user.id),
+    [visibleTasks, workspace.user.id],
+  );
+  const pendingCount = counts.all;
   const completedCount = completedTasks.length;
+  const myCompletedTasks = React.useMemo(
+    () => completedTasks.filter((task) => task.assignedToId === workspace.user.id),
+    [completedTasks, workspace.user.id],
+  );
+  const marketerCompletedTasks = React.useMemo(
+    () => completedTasks.filter((task) => task.assignedToId !== workspace.user.id),
+    [completedTasks, workspace.user.id],
+  );
+
+  const handleAddFollowUp = React.useCallback((task: CompletedWorkItem) => {
+    setFollowUpTask({
+      id: task.sourceId,
+      title: task.title,
+      companyId: task.companyId,
+      companyName: task.companyName,
+      leadId: task.leadId,
+      leadName: task.leadName,
+      taskId: task.taskId ?? (task.sourceType === "TASK" ? task.sourceId : null),
+    });
+  }, []);
 
   return (
     <>
-      <PageHeader
-        title="Today's Tasks"
-        description="All assigned tasks, follow-ups and overdue work in one view."
-        actions={pageActions([{ label: "Add Task", icon: Plus, variant: "default", onClick: () => setOpen(true) }])}
-      />
+      <div className="space-y-5">
+        <PageHeader
+          title="Today's Tasks"
+          description="All assigned tasks, follow-ups and overdue work in one view."
+          actions={pageActions([{ label: "Add Task", icon: Plus, variant: "default", onClick: () => setOpen(true) }])}
+        />
 
-      {error ? <p className="rounded-lg bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p> : null}
-      {actionError ? <p className="rounded-lg bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{actionError}</p> : null}
+        {error ? <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p> : null}
+        {actionError ? <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{actionError}</p> : null}
 
-      <DashboardCard
-        title="Today's Tasks"
-        action={<Badge variant={activeTasks.some((task) => task.isPrevious) ? "warning" : "neutral"}>{pendingCount} Pending</Badge>}
-      >
-        <div className="space-y-3">
-          {loading ? (
-            <p className="flex items-center gap-2 rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
-              Loading tasks...
-            </p>
-          ) : activeTasks.length ? (
-            <AnimatePresence initial={false}>
-              {activeTasks.map((task) => (
-                <motion.div
-                  key={task.id}
-                  layout
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, x: 16 }}
-                  transition={{ duration: 0.18 }}
-                  className={cn(
-                    "grid gap-3 rounded-xl border px-4 py-3 lg:grid-cols-[minmax(0,1fr)_140px_260px] lg:items-center",
-                    task.isPrevious ? "border-red-200 bg-red-50/40" : "border-slate-200 bg-white",
-                  )}
-                >
-                  <div className="flex min-w-0 items-start gap-3">
-                    <input
-                      type="checkbox"
-                      checked={false}
-                      onChange={() => {
-                        setActionError("");
-                        setConfirmTask(task);
-                      }}
-                      className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                      aria-label={`Complete ${task.title}`}
-                    />
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="truncate text-sm font-black text-slate-900">{task.title}</p>
-                        {task.isPrevious ? (
-                          <>
-                            <Badge variant="danger">Overdue</Badge>
-                            <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-black text-red-700 ring-1 ring-red-100">
-                              Previous Task
-                            </span>
-                          </>
-                        ) : null}
-                      </div>
-                      <p className="mt-1 text-xs font-semibold text-slate-500">
-                        <EntityLink href={task.companyHref} className="text-xs font-semibold">{task.companyName}</EntityLink>
-                      </p>
-                      <p className="mt-1 text-[11px] font-semibold text-slate-500">
-                        Assigned by {task.assignedBy} ({task.assignedByRole}) - {task.assignedAtLabel}
-                      </p>
-                      {task.description !== "-" ? <p className="mt-1 line-clamp-2 text-xs text-slate-500">{task.description}</p> : null}
-                    </div>
-                  </div>
-                  <div className="lg:justify-self-start">
-                    <TaskPriorityBadge priority={task.priorityKey} />
-                  </div>
-                  <div className="flex flex-wrap items-center justify-between gap-3 lg:justify-end">
-                    <p className="text-sm font-bold text-slate-700">
-                      {task.taskDateLabel}
-                      <span className="ml-2 text-xs font-black text-slate-500">{task.timeLabel}</span>
-                    </p>
-                    <Button type="button" size="sm" disabled={pendingComplete && confirmTask?.id === task.id} onClick={() => { setActionError(""); setConfirmTask(task); }}>
-                      Complete
-                    </Button>
-                  </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          ) : (
-            <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No pending tasks match this view.</p>
-          )}
-        </div>
-      </DashboardCard>
+        <Card className="rounded-[16px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]">
+          <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
+            <TodayWorkFilterChips counts={counts} activeFilter={activeFilter} onChange={setActiveFilter} />
+            <Badge variant={counts.overdue ? "warning" : "neutral"} className="w-fit rounded-full px-3 py-1 text-xs font-bold">
+              {pendingCount} Pending
+            </Badge>
+          </div>
+        </Card>
 
-      <DashboardCard title="Completed Tasks" action={<Badge variant="neutral">{completedCount} Completed</Badge>}>
-        <div className="space-y-3">
-          {loading ? (
-            <p className="flex items-center gap-2 rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
-              Loading completed tasks...
-            </p>
-          ) : completedTasks.length ? completedTasks.map((task) => (
-            <div key={task.id} className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 md:grid-cols-[1fr_auto_auto_auto] md:items-center">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-black text-slate-900">{task.title}</p>
-                <p className="mt-1 text-xs font-semibold text-slate-500">
-                  <EntityLink href={task.companyHref} className="text-xs font-semibold">{task.companyName}</EntityLink>
-                </p>
-                <p className="mt-1 text-[11px] font-semibold text-slate-500">
-                  Assigned by {task.assignedBy} ({task.assignedByRole}) - {task.assignedAtLabel}
-                </p>
-                {task.description !== "-" ? <p className="mt-1 line-clamp-2 text-xs text-slate-500">{task.description}</p> : null}
-              </div>
-              <p className="text-xs font-bold text-slate-500 md:text-right">{task.completedAtLabel}</p>
-              <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={() => setFollowUpTask(task)}>
-                <Plus className="h-3.5 w-3.5" />
-                Add Follow-up
-              </Button>
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
-                <Check className="h-4 w-4" />
-              </span>
+        {role === "SUPERVISOR" ? (
+          <>
+            <div className="grid gap-5 xl:grid-cols-2">
+              <DashboardCard
+                title="Marketer Tasks"
+                action={<Badge variant={counts.overdue ? "warning" : "neutral"}>{marketerVisibleTasks.length} Pending</Badge>}
+                className="rounded-[16px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]"
+              >
+                <TodayWorkQueueList
+                  rows={marketerVisibleTasks}
+                  loading={loading}
+                  viewerRole={role}
+                  emptyMessage="No marketer tasks due right now."
+                  activeItemId={completionItem?.id ?? null}
+                  onComplete={(task) => {
+                    setActionError("");
+                    setCompletionItem(task);
+                  }}
+                />
+              </DashboardCard>
+
+              <DashboardCard
+                title="My Today's Tasks"
+                action={<Badge variant={counts.overdue ? "warning" : "neutral"}>{myVisibleTasks.length} Pending</Badge>}
+                className="rounded-[16px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]"
+              >
+                <TodayWorkQueueList
+                  rows={myVisibleTasks}
+                  loading={loading}
+                  viewerRole={role}
+                  emptyMessage="No personal tasks due right now."
+                  activeItemId={completionItem?.id ?? null}
+                  onComplete={(task) => {
+                    setActionError("");
+                    setCompletionItem(task);
+                  }}
+                />
+              </DashboardCard>
             </div>
-          )) : (
-            <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No completed tasks yet.</p>
-          )}
-        </div>
-      </DashboardCard>
+
+            <div className="grid gap-5 xl:grid-cols-2">
+              <DashboardCard
+                title="My Completed Tasks"
+                action={<Badge variant="neutral">{myCompletedTasks.length} Completed</Badge>}
+                className="rounded-[16px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]"
+              >
+                <CompletedWorkList
+                  rows={myCompletedTasks}
+                  loading={loading}
+                  viewerRole={role}
+                  emptyMessage="No completed personal work yet."
+                  onAddFollowUp={handleAddFollowUp}
+                  previewCount={5}
+                />
+              </DashboardCard>
+
+              <DashboardCard
+                title="Marketer Completed Tasks"
+                action={<Badge variant="neutral">{marketerCompletedTasks.length} Completed</Badge>}
+                className="rounded-[16px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]"
+              >
+                <CompletedWorkList
+                  rows={marketerCompletedTasks}
+                  loading={loading}
+                  viewerRole={role}
+                  emptyMessage="No completed marketer work yet."
+                  onAddFollowUp={handleAddFollowUp}
+                  previewCount={6}
+                />
+              </DashboardCard>
+            </div>
+          </>
+        ) : (
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.95fr)]">
+            <DashboardCard
+              title="Today's Tasks"
+              action={<Badge variant={counts.overdue ? "warning" : "neutral"}>{pendingCount} Pending</Badge>}
+              className="rounded-[16px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]"
+            >
+              <TodayWorkQueueList
+                rows={visibleTasks}
+                loading={loading}
+                viewerRole={role}
+                emptyMessage="No pending work items match this view."
+                activeItemId={completionItem?.id ?? null}
+                onComplete={(task) => {
+                  setActionError("");
+                  setCompletionItem(task);
+                }}
+                maxHeightClassName="max-h-[640px]"
+              />
+            </DashboardCard>
+
+            <DashboardCard
+              title="Completed Tasks"
+              action={<Badge variant="neutral">{completedCount} Completed</Badge>}
+              className="rounded-[16px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]"
+            >
+              <CompletedWorkList
+                rows={completedTasks}
+                loading={loading}
+                viewerRole={role}
+                emptyMessage="No completed work yet."
+                onAddFollowUp={handleAddFollowUp}
+                previewCount={6}
+              />
+            </DashboardCard>
+          </div>
+        )}
+      </div>
 
       <TaskCreateModal open={open} onClose={() => setOpen(false)} onCreated={handleCreated} role={role} workspace={workspace} />
-      <TaskCompleteConfirmModal
-        task={confirmTask}
-        pending={pendingComplete}
-        message={actionError}
+      <WorkCompletionModal
+        item={completionItem}
+        workspace={workspace}
         onClose={() => {
-          if (pendingComplete) return;
-          setConfirmTask(null);
+          setCompletionItem(null);
           setActionError("");
         }}
-        onConfirm={handleConfirmComplete}
+        onSaved={handleCompletionSaved}
       />
       <TaskFollowUpModal
         task={followUpTask}
         workspace={workspace}
         onClose={() => setFollowUpTask(null)}
-        onSaved={() => setFollowUpTask(null)}
+        onSaved={handleFollowUpSaved}
       />
     </>
   );
@@ -2760,27 +3946,161 @@ function ProductVisual({ product }: { product: ProductRow }) {
 
 export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
   const [open, setOpen] = React.useState(false);
+  const [products, setProducts] = React.useState(workspace.products);
+  const [editingProductId, setEditingProductId] = React.useState<string | null>(null);
+  const [deleteProductId, setDeleteProductId] = React.useState<string | null>(null);
+  const [feedback, setFeedback] = React.useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [deletePending, setDeletePending] = React.useState(false);
+  const [deleteMessage, setDeleteMessage] = React.useState("");
+
+  const editingProduct = editingProductId ? products.find((item) => item.id === editingProductId) ?? null : null;
+  const deletingProduct = deleteProductId ? products.find((item) => item.id === deleteProductId) ?? null : null;
+
+  React.useEffect(() => {
+    setProducts(workspace.products);
+  }, [workspace.products]);
 
   return (
     <>
-      <PageHeader title="Product / Services" description="Products and opportunity analytics by interested customers, follow-ups, sales, and conversion." actions={role === "ADMIN" ? pageActions([{ label: "Add Product", icon: Plus, variant: "default", onClick: () => setOpen(true) }]) : undefined} />
+      <PageHeader title="Product / Services" description="Products and opportunity analytics by interested customers, follow-ups, sales, and conversion." actions={pageActions([{ label: "Add Product", icon: Plus, variant: "default", onClick: () => {
+        setEditingProductId(null);
+        setOpen(true);
+      } }])} />
+      {feedback ? (
+        <div className={cn("rounded-xl border px-4 py-3 text-sm font-semibold", feedback.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}>
+          {feedback.message}
+        </div>
+      ) : null}
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        {workspace.products.map((product) => (
-          <Link href={`/products/${product.id}`} key={product.id} className="group rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-xl">
-            <ProductVisual product={product} />
+        {products.map((product) => (
+          <div key={product.id} className="group rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <Link href={`/products/${product.id}`} className="min-w-0 flex-1">
+                <ProductVisual product={product} />
+              </Link>
+              <div className="flex shrink-0 items-center gap-1">
+                <Link href={`/products/${product.id}`} className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-blue-50 hover:text-blue-700" aria-label="View product">
+                  <Eye className="h-4 w-4" />
+                </Link>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Edit product"
+                  onClick={() => {
+                    setFeedback(null);
+                    setEditingProductId(product.id);
+                    setOpen(true);
+                  }}
+                >
+                  <Edit className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Delete product"
+                  className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                  onClick={() => {
+                    setFeedback(null);
+                    setDeleteProductId(product.id);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
             <div className="mt-4">
-              <h3 className="text-base font-black text-slate-950">{product.name}</h3>
+              <Link href={`/products/${product.id}`} className="block">
+                <h3 className="text-base font-black text-slate-950">{product.name}</h3>
+              </Link>
               <p className="text-sm text-slate-500">{product.category} / {product.brand}</p>
               <p className="mt-2 text-sm font-black text-slate-900">{formatCurrency(product.price)}</p>
               <div className="mt-4 flex items-center justify-between text-sm"><span className="text-slate-500">Interested Customers</span><span className="font-black text-slate-950">{product.interestedCustomers}</span></div>
               <div className="mt-2 flex items-center justify-between text-sm"><span className="text-slate-500">Conversion Rate</span><span className="font-black text-blue-700">{product.conversionRate}%</span></div>
             </div>
-          </Link>
+          </div>
         ))}
       </div>
-      {!workspace.products.length ? <EmptyState title="No products yet" description="Create your real product or service catalog to start tracking opportunities." /> : null}
-      <FormModal title="Create Product / Service" open={open} onClose={() => setOpen(false)}>
-        <ProductForm onDone={() => setOpen(false)} />
+      {!products.length ? <EmptyState title="No products yet" description="Create your real product or service catalog to start tracking opportunities." /> : null}
+      <FormModal title={editingProduct ? "Update Product / Service" : "Create Product / Service"} open={open} onClose={() => {
+        setOpen(false);
+        setEditingProductId(null);
+      }}>
+        <ProductForm
+          product={editingProduct}
+          onSuccess={(row) => {
+            setProducts((current) => {
+              if (editingProduct) {
+                return current.map((item) => (
+                  item.id === row.id
+                    ? {
+                        ...item,
+                        name: row.name,
+                        category: row.category,
+                        brand: row.brand,
+                        price: row.price,
+                        imageUrl: row.imageUrl,
+                        description: row.description,
+                        specification: row.specification,
+                        status: row.status,
+                      }
+                    : item
+                ));
+              }
+
+              return [row, ...current];
+            });
+            setFeedback({ type: "success", message: editingProduct ? "Product updated successfully." : "Product created successfully." });
+          }}
+          onDone={() => {
+            setOpen(false);
+            setEditingProductId(null);
+          }}
+        />
+      </FormModal>
+      <FormModal title="Delete Product" open={Boolean(deletingProduct)} onClose={() => setDeleteProductId(null)} panelClassName="max-w-md">
+        {deletingProduct ? (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-700">
+              Are you sure you want to delete <span className="font-black">{deletingProduct.name}</span>?
+            </p>
+            {deleteMessage ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{deleteMessage}</p> : null}
+            <div className="flex flex-col gap-2">
+              <Button
+                type="button"
+                variant="destructive"
+                className="w-full"
+                disabled={deletePending}
+                onClick={async () => {
+                  setDeletePending(true);
+                  setDeleteMessage("");
+                  try {
+                    const response = await fetch(`/api/products/${deletingProduct.id}`, { method: "DELETE" });
+                    const result = await response.json();
+                    if (!response.ok || !result.success || typeof result.id !== "string") {
+                      setDeleteMessage(result.message ?? "Product delete failed.");
+                      return;
+                    }
+
+                    setProducts((current) => current.filter((item) => item.id !== result.id));
+                    setFeedback({ type: "success", message: "Product deleted successfully." });
+                    setDeleteProductId(null);
+                  } catch (error) {
+                    setDeleteMessage(error instanceof Error ? error.message : "Product delete failed.");
+                  } finally {
+                    setDeletePending(false);
+                  }
+                }}
+              >
+                {deletePending ? "Deleting..." : "Delete Product"}
+              </Button>
+              <Button type="button" variant="outline" className="w-full" onClick={() => setDeleteProductId(null)} disabled={deletePending}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </FormModal>
     </>
   );
@@ -2804,6 +4124,7 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
     filters: {},
     filterOptions: { communicationTypes: [], assignedUsers: [] },
   };
+  const recentConversations = engagement.rows.slice(0, 5);
 
   return (
     <>
@@ -2820,11 +4141,68 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
         </Card>
         <div className="grid gap-5">
           <DashboardCard title="Specification"><p className="text-sm leading-6 text-slate-600">{active.specification}</p></DashboardCard>
-                  <div className="grid gap-5 xl:grid-cols-4">
+          <div className="grid gap-5 xl:grid-cols-4">
             <StatCard title="Companies Contacted" value={String(engagement.summary.totalCompaniesContacted)} helper="Product conversations" icon={WalletCards} tone="bg-blue-100 text-blue-700" />
             <StatCard title="Total Communications" value={String(engagement.summary.totalCommunicationCount)} helper="Calls, meetings, emails, WhatsApp" icon={MessageSquare} tone="bg-indigo-100 text-indigo-700" />
             <StatCard title="Follow-up Count" value={String(engagement.summary.followUpCount)} helper="Open discussions" icon={CalendarClock} tone="bg-amber-100 text-amber-700" />
             <StatCard title="Conversion Rate" value={`${engagement.summary.conversionRate}%`} helper="Leads to sales" icon={Check} tone="bg-violet-100 text-violet-700" />
+          </div>
+          <div className="grid gap-5 xl:grid-cols-[1.1fr_1.3fr]">
+            <DashboardCard title="Product Activity Summary">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-xs font-bold uppercase text-slate-500">Company Conversations</p>
+                  <p className="mt-2 text-2xl font-black text-slate-950">{engagement.summary.totalCompaniesContacted}</p>
+                  <p className="mt-1 text-sm text-slate-500">How many companies have been contacted about this product.</p>
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-xs font-bold uppercase text-slate-500">Leads Involved</p>
+                  <p className="mt-2 text-2xl font-black text-slate-950">{engagement.summary.totalLeadsInterested}</p>
+                  <p className="mt-1 text-sm text-slate-500">Leads currently connected to this product.</p>
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-xs font-bold uppercase text-slate-500">Follow-ups Created</p>
+                  <p className="mt-2 text-2xl font-black text-slate-950">{engagement.summary.followUpCount}</p>
+                  <p className="mt-1 text-sm text-slate-500">Total follow-ups generated from product discussions.</p>
+                </div>
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-xs font-bold uppercase text-slate-500">Quotation / Sales</p>
+                  <p className="mt-2 text-2xl font-black text-slate-950">{engagement.summary.quotationSentCount} / {engagement.summary.salesCount}</p>
+                  <p className="mt-1 text-sm text-slate-500">Sent quotations alongside converted sales.</p>
+                </div>
+              </div>
+            </DashboardCard>
+            <DashboardCard title="Recent Product Conversations">
+              <div className="space-y-3">
+                {recentConversations.length ? recentConversations.map((row) => (
+                  <div key={`conversation-${row.id}`} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-black text-slate-950">
+                          <EntityLink href={row.companyId ? `/customers/${row.companyId}` : undefined} className="font-black">{row.companyName}</EntityLink>
+                        </p>
+                        <p className="text-xs font-semibold text-slate-500">
+                          {row.leadId ? <EntityLink href={`/leads/${row.leadId}`} className="font-semibold">{row.leadName}</EntityLink> : row.leadName}
+                          {row.assignedMarketer !== "-" ? <span> · {row.assignedMarketer}</span> : null}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <StatusBadge value={row.communicationType} />
+                        <StatusBadge value={row.status} />
+                      </div>
+                    </div>
+                    {row.discussionTopic !== "-" ? <p className="mt-3 text-xs font-bold uppercase text-slate-500">Topic: <span className="normal-case text-slate-700">{row.discussionTopic}</span></p> : null}
+                    <p className="mt-2 text-sm leading-6 text-slate-600">{row.summary !== "-" ? row.summary : "No discussion summary recorded yet."}</p>
+                    <div className="mt-3 flex flex-wrap gap-4 text-xs font-semibold text-slate-500">
+                      <span>Last Contact: {row.lastContactDate}</span>
+                      <span>Follow-ups: {row.followUpCount}</span>
+                      <span>Communications: {row.communicationCount}</span>
+                      {row.nextFollowUpDate !== "-" ? <span>Next Follow-up: {row.nextFollowUpDate}</span> : null}
+                    </div>
+                  </div>
+                )) : <p className="text-sm font-semibold text-slate-500">No saved communication history for this product yet.</p>}
+              </div>
+            </DashboardCard>
           </div>
           <Card className="p-5">
             <Tabs
@@ -2902,7 +4280,7 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
-                          <tr>{["Company Name", "Lead Name", "Communication Type", "Last Contact Date", "Status", "Assigned Marketer"].map((heading) => <th key={heading} className="px-4 py-3 font-bold">{heading}</th>)}</tr>
+                          <tr>{["Company Name", "Lead Name", "What Was Discussed", "Communication Type", "Last Contact Date", "Follow-ups", "Status", "Assigned Marketer"].map((heading) => <th key={heading} className="px-4 py-3 font-bold">{heading}</th>)}</tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {engagement.rows.length ? engagement.rows.map((row) => (
@@ -2913,13 +4291,21 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
                               <td className="px-4 py-3">
                                 <EntityLink href={row.leadId ? `/leads/${row.leadId}` : undefined} className="font-bold">{row.leadName}</EntityLink>
                               </td>
+                              <td className="px-4 py-3">
+                                <div className="min-w-[220px]">
+                                  <p className="font-semibold text-slate-800">{row.discussionTopic !== "-" ? row.discussionTopic : "General discussion"}</p>
+                                  <p className="mt-1 text-xs leading-5 text-slate-500">{row.summary !== "-" ? row.summary : "No detailed note saved yet."}</p>
+                                  {row.nextFollowUpDate !== "-" ? <p className="mt-1 text-[11px] font-semibold text-blue-700">Next follow-up: {row.nextFollowUpDate}</p> : null}
+                                </div>
+                              </td>
                               <td className="px-4 py-3 font-semibold text-slate-700">{row.communicationType}</td>
                               <td className="px-4 py-3 font-semibold text-slate-600">{row.lastContactDate}</td>
+                              <td className="px-4 py-3 font-semibold text-slate-700">{row.followUpCount}</td>
                               <td className="px-4 py-3"><StatusBadge value={row.status} /></td>
                               <td className="px-4 py-3 font-semibold text-slate-700">{row.assignedMarketer}</td>
                             </tr>
                           )) : (
-                            <tr><td colSpan={6} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">No product communication records match the selected filters.</td></tr>
+                            <tr><td colSpan={8} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">No product communication records match the selected filters.</td></tr>
                           )}
                         </tbody>
                       </table>
@@ -3059,45 +4445,365 @@ export function NotificationsPage({ workspace }: { workspace: CrmWorkspace }) {
 export function RewardsPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
   const [rewardOpen, setRewardOpen] = React.useState(false);
   const [ruleOpen, setRuleOpen] = React.useState(false);
+  const [rewardRules, setRewardRules] = React.useState(workspace.rewardRules);
+  const [editingRuleId, setEditingRuleId] = React.useState<string | null>(null);
+  const [deleteRule, setDeleteRule] = React.useState<(typeof workspace.rewardRules)[number] | null>(null);
+  const [ruleSearch, setRuleSearch] = React.useState("");
+  const [ruleStatus, setRuleStatus] = React.useState<"all" | "active" | "inactive">("all");
+  const [togglingRuleId, setTogglingRuleId] = React.useState<string | null>(null);
+  const [ruleMessage, setRuleMessage] = React.useState("");
+  const [ruleSaving, setRuleSaving] = React.useState(false);
+  const [ruleDeleting, setRuleDeleting] = React.useState(false);
 
-  if (role === "MARKETER") {
-    const me = workspace.employees.find((item) => item.id === workspace.user.id) ?? workspace.employees[0];
-    return (
-      <>
-        <PageHeader title="Rewards" description="Your reward points, rank, achievement history, and incentive timeline." />
-        <div className="grid gap-5 xl:grid-cols-[300px_1fr_300px]">
-          <StatCard title="Total Points" value={String(me?.rewardPoints ?? 0)} helper="Current score" icon={WalletCards} tone="bg-blue-100 text-blue-700" />
-          <DashboardCard title="Reward Rules">
-            <div className="space-y-3">{workspace.rewardRules.map((rule) => <div key={rule.id} className="flex items-center justify-between rounded-xl bg-slate-50 p-3"><span className="text-sm font-bold text-slate-900">{rule.name}</span><StatusBadge value={`+${rule.points} pts`} /></div>)}</div>
-          </DashboardCard>
-          <Card className="flex flex-col items-center justify-center p-6 text-center"><div className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 text-amber-600"><Award className="h-8 w-8" /></div><p className="mt-4 text-3xl font-black text-slate-950">{me?.conversionRate ?? "0%"}</p><p className="text-sm text-slate-500">Conversion Rate</p></Card>
-        </div>
-      </>
-    );
-  }
+  const isAdmin = role === "ADMIN";
+  const editingRule = editingRuleId ? rewardRules.find((rule) => rule.id === editingRuleId) ?? null : null;
+
+  const triggerOptions = [
+    ["LEAD_CREATED", "Lead Added"],
+    ["FOLLOW_UP_COMPLETED", "Follow-up Completed"],
+    ["MEETING_SCHEDULED", "Meeting Scheduled"],
+    ["WON_SALE", "Deal Won"],
+    ["TASK_COMPLETED", "Task Completed"],
+    ["MANUAL_ADJUSTMENT", "Manual Adjustment"],
+  ] as const;
+
+  const rewardRuleTriggerLabel = (trigger: string) => {
+    const match = triggerOptions.find(([value]) => value === trigger);
+    return match ? match[1] : trigger;
+  };
+
+  const filteredRules = React.useMemo(() => {
+    const keyword = ruleSearch.trim().toLowerCase();
+    return rewardRules.filter((rule) => {
+      if (ruleStatus !== "all") {
+        const isActive = rule.active;
+        if (ruleStatus === "active" && !isActive) return false;
+        if (ruleStatus === "inactive" && isActive) return false;
+      }
+      if (!keyword) return true;
+      return [rule.name, rewardRuleTriggerLabel(rule.trigger)].some((value) => value.toLowerCase().includes(keyword));
+    });
+  }, [rewardRules, ruleSearch, ruleStatus]);
+
+  React.useEffect(() => {
+    setRewardRules(workspace.rewardRules);
+  }, [workspace.rewardRules]);
+
+  const toggleRuleStatus = async (rule: (typeof rewardRules)[number]) => {
+    setTogglingRuleId(rule.id);
+    setRuleMessage("");
+    try {
+      const response = await fetch(`/api/reward-rules/${rule.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: !rule.active }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success || !result.row) {
+        setRuleMessage(result.message ?? "Action failed.");
+        return;
+      }
+
+      const nextRule = result.row as (typeof rewardRules)[number];
+      setRewardRules((current) => current.map((item) => (item.id === nextRule.id ? nextRule : item)));
+    } catch (error) {
+      setRuleMessage(error instanceof Error ? error.message : "Action failed.");
+    } finally {
+      setTogglingRuleId(null);
+    }
+  };
 
   return (
     <>
-      <PageHeader title="Rewards & Incentives" description="Manage reward rules, manual incentives, reward history, and automation log." actions={pageActions([{ label: "Manual Reward", icon: Plus, variant: "default", onClick: () => setRewardOpen(true) }, { label: "Add Rule", icon: Plus, variant: "outline", onClick: () => setRuleOpen(true) }])} />
+      <PageHeader title="Rewards & Incentives" description="Manage reward rules, manual incentives, reward history, and automation log." actions={isAdmin ? pageActions([{ label: "Manual Reward", icon: Plus, variant: "default", onClick: () => setRewardOpen(true) }]) : undefined} />
       <div className="grid gap-5 lg:grid-cols-3">
         <StatCard title="Total Reward Given" value={String(workspace.employees.reduce((sum, row) => sum + row.rewardPoints, 0))} helper="Visible users" icon={WalletCards} tone="bg-blue-100 text-blue-700" />
         <StatCard title="Best Performer" value={workspace.employees[0]?.name ?? "-"} helper={`${workspace.employees[0]?.rewardPoints ?? 0} points`} icon={UserPlus} tone="bg-amber-100 text-amber-700" />
-        <StatCard title="Rules Active" value={String(workspace.rewardRules.filter((rule) => rule.active).length)} helper="Automation rules" icon={Check} tone="bg-emerald-100 text-emerald-700" />
+        <StatCard title="Rules Active" value={String(rewardRules.filter((rule) => rule.active).length)} helper="Automation rules" icon={Check} tone="bg-emerald-100 text-emerald-700" />
       </div>
-      <TeamManagementTable workspace={workspace} />
+
+      <Card className="p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-lg font-black text-slate-950">Reward Rules</h2>
+            <p className="text-sm text-slate-500">Create and manage rules to automatically reward employees for specific actions.</p>
+          </div>
+          {isAdmin ? (
+            <Button type="button" size="sm" onClick={() => {
+              setEditingRuleId(null);
+              setRuleOpen(true);
+            }} className="gap-2">
+              <Plus className="h-4 w-4" />
+              Add Rule
+            </Button>
+          ) : null}
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-[1.2fr_220px]">
+          <Input placeholder="Search rules..." value={ruleSearch} onChange={(event) => setRuleSearch(event.target.value)} />
+          <select
+            value={ruleStatus}
+            onChange={(event) => setRuleStatus(event.target.value as "all" | "active" | "inactive")}
+            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+          >
+            <option value="all">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </div>
+
+        <div className="mt-4 hidden lg:block">
+          {ruleMessage ? <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{ruleMessage}</p> : null}
+          <div className="overflow-x-auto">
+            <table className="w-full table-auto text-sm">
+              <thead>
+                <tr className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+                  <th className="px-4 py-3 font-bold">Rule Name</th>
+                  <th className="px-4 py-3 font-bold">Trigger / Event</th>
+                  <th className="px-4 py-3 font-bold">Points</th>
+                  <th className="px-4 py-3 font-bold">Status</th>
+                  <th className="px-4 py-3 font-bold">Created At</th>
+                  <th className="px-4 py-3 font-bold">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredRules.length ? filteredRules.map((rule) => (
+                  <tr key={rule.id} className="transition hover:bg-slate-50">
+                    <td className="px-4 py-3 font-semibold text-slate-900">{rule.name}</td>
+                    <td className="px-4 py-3 text-slate-600">{rewardRuleTriggerLabel(rule.trigger)}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-900">{rule.points}</td>
+                    <td className="px-4 py-3"><StatusBadge value={rule.active ? "Active" : "Inactive"} /></td>
+                    <td className="px-4 py-3 text-slate-600">{rule.createdAt}</td>
+                    <td className="px-4 py-3">
+                      {isAdmin ? (
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => {
+                              setEditingRuleId(rule.id);
+                              setRuleOpen(true);
+                            }}
+                            className="scale-95 transition hover:scale-105 hover:bg-slate-100"
+                            aria-label="Edit rule"
+                          >
+                            <Edit className="h-4 w-4 text-slate-600" />
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="transition hover:scale-105"
+                            disabled={togglingRuleId === rule.id}
+                            onClick={() => void toggleRuleStatus(rule)}
+                          >
+                            {togglingRuleId === rule.id ? "Updating..." : rule.active ? "Disable" : "Enable"}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="destructive"
+                            className="transition hover:scale-105"
+                            onClick={() => setDeleteRule(rule)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ) : null}
+                    </td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-sm font-semibold text-slate-500">No reward rules found.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+            <div className="mt-4 space-y-3 lg:hidden">
+          {ruleMessage ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{ruleMessage}</p> : null}
+          {filteredRules.length ? filteredRules.map((rule) => (
+            <div key={rule.id} className="rounded-2xl border border-slate-200 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-black text-slate-900">{rule.name}</p>
+                  <p className="text-xs text-slate-500">{rewardRuleTriggerLabel(rule.trigger)}</p>
+                </div>
+                <StatusBadge value={rule.active ? "Active" : "Inactive"} />
+              </div>
+              <div className="mt-3 grid gap-1 text-xs text-slate-600">
+                <p><span className="font-bold text-slate-700">Points:</span> {rule.points}</p>
+                <p><span className="font-bold text-slate-700">Created:</span> {rule.createdAt}</p>
+              </div>
+              {isAdmin ? (
+                <div className="mt-3 flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                    className="h-8"
+                    onClick={() => {
+                      setEditingRuleId(rule.id);
+                      setRuleOpen(true);
+                    }}
+                  >
+                    <Edit className="h-4 w-4" />
+                    Edit
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8"
+                    disabled={togglingRuleId === rule.id}
+                    onClick={() => void toggleRuleStatus(rule)}
+                  >
+                    {togglingRuleId === rule.id ? "Updating..." : rule.active ? "Disable" : "Enable"}
+                  </Button>
+                  <Button type="button" size="sm" variant="destructive" className="h-8" onClick={() => setDeleteRule(rule)}>
+                    <Trash2 className="h-4 w-4" />
+                    Delete
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          )) : <EmptyState title="No reward rules found" description="Try adjusting your search or status filter." />}
+        </div>
+      </Card>
+
+      <div className="mt-5">
+        <TeamManagementTable workspace={workspace} />
+      </div>
+
       <FormModal title="Manual Reward" open={rewardOpen} onClose={() => setRewardOpen(false)}>
         <ActionForm action={giveManualRewardAction} onDone={() => setRewardOpen(false)} submitLabel="Give Reward">
           <SelectBox label="Employee" name="userId"><EntityOptions workspace={workspace} type="users" /></SelectBox>
-          <TextField label="Points" name="points" type="number" />
+          <TextField label="Points" name="points" type="number" defaultValue="0" />
           <TextAreaField label="Reason" name="reason" />
         </ActionForm>
       </FormModal>
-      <FormModal title="Reward Rule" open={ruleOpen} onClose={() => setRuleOpen(false)}>
-        <ActionForm action={createRewardRuleAction} onDone={() => setRuleOpen(false)} submitLabel="Create Rule">
-          <TextField label="Rule Name" name="name" />
-          <SelectBox label="Trigger" name="trigger"><option value="LEAD_CREATED">Lead Added</option><option value="FOLLOW_UP_COMPLETED">Follow-up Completed</option><option value="WON_SALE">Sale Won</option></SelectBox>
-          <TextField label="Points" name="points" type="number" />
-        </ActionForm>
+      <FormModal title={editingRule ? "Update Reward Rule" : "Add Reward Rule"} open={ruleOpen} onClose={() => setRuleOpen(false)}>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const formData = new FormData(form);
+            const payload = {
+              name: String(formData.get("name") ?? "").trim(),
+              trigger: String(formData.get("trigger") ?? "").trim(),
+              points: Number(formData.get("points")),
+              active: String(formData.get("active") ?? "true") === "true",
+            };
+
+            void (async () => {
+              setRuleSaving(true);
+              setRuleMessage("");
+              try {
+                const response = await fetch(editingRule ? `/api/reward-rules/${editingRule.id}` : "/api/reward-rules", {
+                  method: editingRule ? "PATCH" : "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(payload),
+                });
+                const result = await response.json();
+                if (!response.ok || !result.success || !result.row) {
+                  setRuleMessage(result.message ?? "Reward rule save failed.");
+                  return;
+                }
+
+                const nextRule = result.row as (typeof rewardRules)[number];
+                setRewardRules((current) => {
+                  if (editingRule) {
+                    return current.map((item) => (item.id === nextRule.id ? nextRule : item));
+                  }
+                  return [...current, nextRule];
+                });
+
+                if (!editingRule) {
+                  form.reset();
+                }
+                setRuleOpen(false);
+                setEditingRuleId(null);
+              } catch (error) {
+                setRuleMessage(error instanceof Error ? error.message : "Reward rule save failed.");
+              } finally {
+                setRuleSaving(false);
+              }
+            })();
+          }}
+        >
+          <TextField label="Rule Name" name="name" required defaultValue={editingRule?.name ?? ""} />
+          <SelectBox label="Trigger / Event" name="trigger" defaultValue={editingRule?.trigger ?? "LEAD_CREATED"}>
+            {triggerOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </SelectBox>
+          <TextField label="Points" name="points" type="number" required defaultValue={editingRule ? String(editingRule.points) : ""} />
+          <SelectBox label="Status" name="active" defaultValue={editingRule ? (editingRule.active ? "true" : "false") : "true"}>
+            <option value="true">Active</option>
+            <option value="false">Inactive</option>
+          </SelectBox>
+          {ruleMessage ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{ruleMessage}</p> : null}
+          <div className="flex flex-col gap-2">
+            <Button className="w-full" disabled={ruleSaving} type="submit">
+              {ruleSaving ? "Saving..." : editingRule ? "Update Rule" : "Create Rule"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              disabled={ruleSaving}
+              onClick={() => {
+                setRuleOpen(false);
+                setEditingRuleId(null);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
+      </FormModal>
+      <FormModal title="Delete Reward Rule" open={Boolean(deleteRule)} onClose={() => setDeleteRule(null)}>
+        {deleteRule ? (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-700">
+              Are you sure you want to delete <span className="font-black">{deleteRule.name}</span>? This action cannot be undone.
+            </p>
+            {ruleMessage ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{ruleMessage}</p> : null}
+            <div className="flex flex-col gap-2">
+              <Button
+                type="button"
+                variant="destructive"
+                className="w-full"
+                disabled={ruleDeleting}
+                onClick={async () => {
+                  setRuleDeleting(true);
+                  setRuleMessage("");
+                  try {
+                    const response = await fetch(`/api/reward-rules/${deleteRule.id}`, { method: "DELETE" });
+                    const result = await response.json();
+                    if (!response.ok || !result.success || typeof result.id !== "string") {
+                      setRuleMessage(result.message ?? "Reward rule delete failed.");
+                      return;
+                    }
+
+                    setRewardRules((current) => current.filter((item) => item.id !== result.id));
+                    setDeleteRule(null);
+                  } catch (error) {
+                    setRuleMessage(error instanceof Error ? error.message : "Reward rule delete failed.");
+                  } finally {
+                    setRuleDeleting(false);
+                  }
+                }}
+              >
+                {ruleDeleting ? "Deleting..." : "Delete Rule"}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setDeleteRule(null)} className="w-full bg-slate-50" disabled={ruleDeleting}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </FormModal>
     </>
   );
