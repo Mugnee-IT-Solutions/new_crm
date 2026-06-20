@@ -261,6 +261,27 @@ export type ActivityRow = {
   title: string;
   detail: string;
   time: string;
+  createdAtValue?: string;
+  dateLabel?: string;
+  timeLabel?: string;
+  category?: "CALL" | "WHATSAPP" | "EMAIL" | "MEETING" | "FOLLOW_UP" | "QUOTATION" | "LEAD" | "TASK" | "PLAN" | "USER" | "SYSTEM" | "OTHER";
+  badgeLabel?: string;
+  customerName?: string;
+  customerHref?: string;
+  employeeName?: string;
+  employeeId?: string;
+  entity?: string;
+  rawAction?: string;
+  discussionSummary?: string;
+  notes?: string;
+  rating?: string;
+  contactMethod?: string;
+  phoneOrEmailUsed?: string;
+  nextFollowUpDate?: string;
+  quotationReference?: string;
+  meetingDateTime?: string;
+  createdBy?: string;
+  relatedCustomerHref?: string;
 };
 
 export type CommunicationHistoryRow = {
@@ -374,6 +395,13 @@ export type CrmWorkspace = {
     mostDiscussed: ProductIntelligenceItem[];
   };
   systemSummary: { label: string; value: string }[];
+  communicationCenterSummary: {
+    todayCalls: number;
+    todayWhatsApp: number;
+    todayEmails: number;
+    todayMeetings: number;
+    todayFollowUps: number;
+  };
   followUpSummary: {
     overdue: number;
     today: number;
@@ -558,6 +586,82 @@ const communicationHistoryInclude = {
 } satisfies Prisma.Prisma.CommunicationLogInclude;
 
 type CommunicationHistoryRecord = Prisma.Prisma.CommunicationLogGetPayload<{ include: typeof communicationHistoryInclude }>;
+
+const activityTimelineInclude = {
+  user: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+  company: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+  lead: {
+    select: {
+      id: true,
+      title: true,
+      customerName: true,
+    },
+  },
+  task: {
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      notes: true,
+      dueDate: true,
+      taskTime: true,
+    },
+  },
+  followUp: {
+    select: {
+      id: true,
+      method: true,
+      note: true,
+      nextDiscussionPlan: true,
+      followUpDate: true,
+      completedAt: true,
+      rating: true,
+      assignedTo: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  },
+  communicationLog: {
+    select: {
+      id: true,
+      method: true,
+      note: true,
+      discussionTopic: true,
+      productDiscussed: true,
+      outcome: true,
+      rating: true,
+      nextFollowUpDate: true,
+      followUpNote: true,
+      communicationAt: true,
+    },
+  },
+} satisfies Prisma.Prisma.ActivityTimelineInclude;
+
+type ActivityTimelineRecord = Prisma.Prisma.ActivityTimelineGetPayload<{ include: typeof activityTimelineInclude }>;
+
+const activityLogInclude = {
+  user: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+} satisfies Prisma.Prisma.ActivityLogInclude;
+
+type ActivityLogRecord = Prisma.Prisma.ActivityLogGetPayload<{ include: typeof activityLogInclude }>;
 
 const workspaceCompanySelect = {
   id: true,
@@ -878,6 +982,235 @@ function normalizeRawJson(value: Prisma.Prisma.JsonValue): Record<string, unknow
   }
 
   return value as Record<string, unknown>;
+}
+
+function readJsonText(raw: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+  }
+
+  return undefined;
+}
+
+function firstMeaningfulText(...values: Array<string | null | undefined>) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim() && value.trim() !== "-") return value.trim();
+  }
+
+  return undefined;
+}
+
+function normalizeActivityToken(value?: string | null) {
+  if (!value?.trim()) return "";
+  return value
+    .trim()
+    .replace(/([a-z])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
+    .toUpperCase();
+}
+
+function activityCategoryLabel(category?: ActivityRow["category"]) {
+  switch (category) {
+    case "CALL":
+      return "CALL";
+    case "WHATSAPP":
+      return "WHATSAPP";
+    case "EMAIL":
+      return "EMAIL";
+    case "MEETING":
+      return "MEETING";
+    case "FOLLOW_UP":
+      return "FOLLOW-UP";
+    case "QUOTATION":
+      return "QUOTATION";
+    case "LEAD":
+      return "LEAD";
+    case "TASK":
+      return "TASK";
+    case "PLAN":
+      return "PLAN";
+    case "USER":
+      return "USER";
+    case "SYSTEM":
+      return "SYSTEM";
+    default:
+      return "ACTIVITY";
+  }
+}
+
+function inferActivityCategory(input: {
+  title?: string | null;
+  rawAction?: string | null;
+  entity?: string | null;
+  description?: string | null;
+  method?: string | null;
+}): NonNullable<ActivityRow["category"]> {
+  const values = [input.method, input.rawAction, input.title, input.description, input.entity]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => value.toLowerCase());
+
+  if (values.some((value) => value.includes("meeting"))) return "MEETING";
+  if (values.some((value) => value.includes("whatsapp"))) return "WHATSAPP";
+  if (values.some((value) => value.includes("email") || value.includes("gmail"))) return "EMAIL";
+  if (values.some((value) => value.includes("phone") || value.includes("call"))) return "CALL";
+  if (values.some((value) => value.includes("lead converted") || value.includes("won sale") || value.includes("converted lead"))) return "LEAD";
+  if (values.some((value) => value.includes("quotation") || value.includes("quote"))) return "QUOTATION";
+  if (values.some((value) => value.includes("follow-up") || value.includes("follow up"))) return "FOLLOW_UP";
+  if (values.some((value) => value.includes("task"))) return "TASK";
+  if (values.some((value) => value.includes("plan"))) return "PLAN";
+  if (values.some((value) => value.includes("user"))) return "USER";
+  if (values.some((value) => value.includes("system") || value.includes("setting"))) return "SYSTEM";
+  return "OTHER";
+}
+
+function humanizeActivityTitle(input: {
+  title: string;
+  rawAction?: string | null;
+  category?: ActivityRow["category"];
+}) {
+  const normalizedValues = [input.rawAction, input.title].map(normalizeActivityToken).filter(Boolean);
+  if (normalizedValues.some((value) => value === "EMAIL_COMPOSE_OPENED" || value === "EMAIL_OPENED")) return "Opened Gmail Compose";
+  if (normalizedValues.some((value) => value === "WHATSAPP_OPENED" || value === "WHATSAPP_CHAT_OPENED")) return "Opened WhatsApp";
+  if (normalizedValues.some((value) => value === "CALL_INITIATED" || value === "PHONE_CALL_OPENED" || value === "CALL_OPENED")) return "Phone Call Initiated";
+  if (normalizedValues.some((value) => value === "FOLLOW_UP_COMPLETED")) return "Completed Follow-up";
+  if (normalizedValues.some((value) => value === "MEETING_SCHEDULED")) return "Meeting Scheduled";
+  if (normalizedValues.some((value) => value === "QUOTATION_CREATED")) return "Quotation Created";
+  if (normalizedValues.some((value) => value === "LEAD_CONVERTED" || value === "WON_SALE")) return "Lead Converted";
+
+  const rawText = firstMeaningfulText(input.rawAction, input.title);
+  if (!rawText) return "CRM Activity";
+  const lower = rawText.toLowerCase();
+
+  if (input.category === "EMAIL" && (lower.includes("open") || lower.includes("compose"))) return "Opened Gmail Compose";
+  if (input.category === "WHATSAPP" && lower.includes("open")) return "Opened WhatsApp";
+  if (input.category === "CALL" && (lower.includes("open") || lower.includes("initiat"))) return "Phone Call Initiated";
+  if (input.category === "FOLLOW_UP" && lower.includes("complete")) return "Completed Follow-up";
+  if (input.category === "MEETING" && (lower.includes("schedule") || lower.includes("meeting"))) return "Meeting Scheduled";
+  if (input.category === "QUOTATION" && lower.includes("create")) return "Quotation Created";
+  if (input.category === "LEAD" && (lower.includes("convert") || lower.includes("won"))) return "Lead Converted";
+
+  return labelize(rawText.replace(/[_-]+/g, " "));
+}
+
+function normalizeActivityEntityKey(entity?: string | null, entityId?: string | null) {
+  if (!entityId) return "";
+  return `${normalizeActivityToken(entity)}:${entityId}`;
+}
+
+function buildActivityRowFromTimeline(item: ActivityTimelineRecord): ActivityRow {
+  const metadata = normalizeRawJson(item.metadata ?? {});
+  const rawAction = firstMeaningfulText(readJsonText(metadata, ["action"]), item.title) ?? item.title;
+  const contactMethod = firstMeaningfulText(item.communicationLog?.method, item.followUp?.method, readJsonText(metadata, ["method"]));
+  const customerName = firstMeaningfulText(item.company?.name, item.lead?.customerName, readJsonText(metadata, ["customerName", "companyName"]));
+  const customerHref = item.companyId ? `/customers/${item.companyId}` : item.leadId ? `/leads/${item.leadId}` : undefined;
+  const employeeName = firstMeaningfulText(item.user?.name, readJsonText(metadata, ["userName"]), item.followUp?.assignedTo?.name);
+  const category = inferActivityCategory({
+    title: item.title,
+    rawAction,
+    entity: item.entity,
+    description: item.description,
+    method: contactMethod,
+  });
+  const title = humanizeActivityTitle({ title: item.title, rawAction, category });
+  const discussionSummary = firstMeaningfulText(item.communicationLog?.note, item.description, item.followUp?.note, item.task?.description);
+  const notes = firstMeaningfulText(item.communicationLog?.followUpNote, item.followUp?.nextDiscussionPlan, item.task?.notes);
+
+  return {
+    id: item.id,
+    href: linkedEntityHref({ entity: item.entity, entityId: item.entityId, leadId: item.leadId, companyId: item.companyId }),
+    title,
+    detail: firstMeaningfulText(
+      customerName && employeeName ? `${customerName} · ${employeeName}` : undefined,
+      customerName,
+      employeeName ? `By ${employeeName}` : undefined,
+      item.description,
+      `${labelize(item.entity)} activity`,
+    ) ?? "CRM activity",
+    time: dateLabel(item.createdAt, "dd/MM/yyyy hh:mm a"),
+    createdAtValue: item.createdAt.toISOString(),
+    dateLabel: dateLabel(item.createdAt, "dd MMM yyyy"),
+    timeLabel: dateLabel(item.createdAt, "hh:mm a"),
+    category,
+    badgeLabel: activityCategoryLabel(category),
+    customerName,
+    customerHref,
+    employeeName,
+    employeeId: item.user?.id ?? undefined,
+    entity: item.entity,
+    rawAction,
+    discussionSummary,
+    notes,
+    rating:
+      typeof item.communicationLog?.rating === "number"
+        ? String(item.communicationLog.rating)
+        : typeof item.followUp?.rating === "number"
+          ? String(item.followUp.rating)
+          : undefined,
+    contactMethod,
+    nextFollowUpDate: item.communicationLog?.nextFollowUpDate ? dateLabel(item.communicationLog.nextFollowUpDate, "dd MMM yyyy hh:mm a") : undefined,
+    quotationReference: category === "QUOTATION" ? firstMeaningfulText(item.description, title) : undefined,
+    meetingDateTime:
+      category === "MEETING"
+        ? firstMeaningfulText(
+          item.followUp?.followUpDate ? dateLabel(item.followUp.followUpDate, "dd MMM yyyy hh:mm a") : undefined,
+          item.task?.taskTime ? dateLabel(item.task.taskTime, "dd MMM yyyy hh:mm a") : undefined,
+          item.task?.dueDate ? dateLabel(item.task.dueDate, "dd MMM yyyy hh:mm a") : undefined,
+          item.communicationLog?.communicationAt ? dateLabel(item.communicationLog.communicationAt, "dd MMM yyyy hh:mm a") : undefined,
+        )
+        : undefined,
+    createdBy: employeeName,
+    relatedCustomerHref: customerHref,
+  };
+}
+
+function buildActivityRowFromLog(item: ActivityLogRecord): ActivityRow {
+  const metadata = normalizeRawJson(item.metadata ?? {});
+  const customerId = readJsonText(metadata, ["customerId", "companyId"]);
+  const customerName = readJsonText(metadata, ["customerName", "companyName"]);
+  const employeeName = firstMeaningfulText(item.user?.name, readJsonText(metadata, ["userName"]));
+  const rawAction = firstMeaningfulText(readJsonText(metadata, ["action"]), item.action) ?? item.action;
+  const contactMethod = firstMeaningfulText(readJsonText(metadata, ["method"]));
+  const category = inferActivityCategory({
+    title: item.action,
+    rawAction,
+    entity: item.entity,
+    description: item.action,
+    method: contactMethod,
+  });
+  const title = humanizeActivityTitle({ title: item.action, rawAction, category });
+  const customerHref = customerId ? `/customers/${customerId}` : undefined;
+
+  return {
+    id: item.id,
+    href: customerHref ?? linkedEntityHref({ entity: item.entity, entityId: item.entityId, companyId: customerId ?? undefined }),
+    title,
+    detail: firstMeaningfulText(
+      customerName && employeeName ? `${customerName} · ${employeeName}` : undefined,
+      customerName,
+      employeeName ? `By ${employeeName}` : undefined,
+      item.entity,
+    ) ?? "CRM activity",
+    time: dateLabel(item.createdAt, "dd/MM/yyyy hh:mm a"),
+    createdAtValue: item.createdAt.toISOString(),
+    dateLabel: dateLabel(item.createdAt, "dd MMM yyyy"),
+    timeLabel: dateLabel(item.createdAt, "hh:mm a"),
+    category,
+    badgeLabel: activityCategoryLabel(category),
+    customerName: customerName ?? undefined,
+    customerHref,
+    employeeName,
+    employeeId: item.user?.id ?? readJsonText(metadata, ["userId"]),
+    entity: item.entity,
+    rawAction,
+    discussionSummary: rawAction !== title ? rawAction : undefined,
+    contactMethod,
+    createdBy: employeeName,
+    relatedCustomerHref: customerHref,
+  };
 }
 
 function normalizeCityLookupKey(value: string) {
@@ -1409,6 +1742,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
         ],
       }
     : {};
+  const communicationWhere: Prisma.Prisma.CommunicationLogWhereInput = scopedUserIds ? { userId: { in: scopedUserIds } } : {};
   const activityWhere = scopedUserIds ? { userId: { in: scopedUserIds } } : {};
   const planWidgetWhere = (planWhere
     ? { ...planWhere, status: { not: "COMPLETED" }, plannedAt: { lt: tomorrow } }
@@ -1449,6 +1783,9 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     rolePermissions,
     rewardSums,
     followUpSummaryCounts,
+    todayCallCount,
+    todayWhatsAppCount,
+    todayEmailCount,
   ] = await Promise.all([
     prisma.lead.findMany({
       where: leadWhere,
@@ -1520,15 +1857,15 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     }),
     prisma.activityLog.findMany({
       where: activityWhere,
-      include: { user: true },
+      include: activityLogInclude,
       orderBy: { createdAt: "desc" },
-      take: 20,
+      take: 120,
     }),
     prisma.activityTimeline.findMany({
       where: activityWhere,
-      include: { user: true },
+      include: activityTimelineInclude,
       orderBy: { createdAt: "desc" },
-      take: 20,
+      take: 120,
     }),
     prisma.notification.findMany({
       where: scopedUserIds ? { recipientId: { in: scopedUserIds } } : {},
@@ -1582,6 +1919,27 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     })(),
     prisma.reward.groupBy({ by: ["userId"], _sum: { points: true } }),
     countFollowUpSummary(prisma, followUpWhere),
+    prisma.communicationLog.count({
+      where: combineWhere(communicationWhere, {
+        communicationAt: { gte: today, lt: tomorrow },
+        OR: [
+          { method: { contains: "phone", mode: "insensitive" as const } },
+          { method: { contains: "call", mode: "insensitive" as const } },
+        ],
+      }),
+    }),
+    prisma.communicationLog.count({
+      where: combineWhere(communicationWhere, {
+        communicationAt: { gte: today, lt: tomorrow },
+        method: { contains: "whatsapp", mode: "insensitive" as const },
+      }),
+    }),
+    prisma.communicationLog.count({
+      where: combineWhere(communicationWhere, {
+        communicationAt: { gte: today, lt: tomorrow },
+        method: { contains: "email", mode: "insensitive" as const },
+      }),
+    }),
   ]);
 
   const rewardByUser = new Map(rewardSums.map((item) => [item.userId, item._sum.points ?? 0]));
@@ -1711,23 +2069,22 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     highestConversion: [...productIntelligenceItems].filter((item) => item.leadCount > 0).sort((a, b) => b.conversionRate - a.conversionRate || b.salesCount - a.salesCount).slice(0, 5),
     mostDiscussed: [...productIntelligenceItems].sort((a, b) => b.communicationCount - a.communicationCount).slice(0, 5),
   };
-
+  const timelineEntityKeys = new Set(
+    timeline
+      .map((item) => normalizeActivityEntityKey(item.entity, item.entityId))
+      .filter(Boolean),
+  );
   const mergedActivities: ActivityRow[] = [
-    ...timeline.map((item) => ({
-      id: item.id,
-      href: linkedEntityHref({ entity: item.entity, entityId: item.entityId, leadId: item.leadId, companyId: item.companyId }),
-      title: item.title,
-      detail: item.description ?? `${item.entity} activity${item.user?.name ? ` by ${item.user.name}` : ""}`,
-      time: dateLabel(item.createdAt, "dd/MM/yyyy hh:mm a"),
-    })),
-    ...activities.map((item) => ({
-      id: item.id,
-      href: linkedEntityHref({ entity: item.entity, entityId: item.entityId }),
-      title: item.action,
-      detail: `${item.entity}${item.user?.name ? ` by ${item.user.name}` : ""}`,
-      time: dateLabel(item.createdAt, "dd/MM/yyyy hh:mm a"),
-    })),
-  ].slice(0, 12);
+    ...timeline.map(buildActivityRowFromTimeline),
+    ...activities
+      .filter((item) => {
+        const key = normalizeActivityEntityKey(item.entity, item.entityId);
+        return !key || !timelineEntityKeys.has(key);
+      })
+      .map(buildActivityRowFromLog),
+  ]
+    .sort((left, right) => new Date(right.createdAtValue ?? 0).getTime() - new Date(left.createdAtValue ?? 0).getTime())
+    .slice(0, 120);
 
   const notificationRows: NotificationRow[] = notifications.map((item) => ({
     id: item.id,
@@ -1796,6 +2153,13 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     followUps.filter((followUp) => followUp.status !== "COMPLETED" && isSameDay(followUp.followUpDate, today) && includesMeeting(followUp.method, followUp.note, followUp.nextDiscussionPlan)).length +
     tasks.filter((task) => task.status !== "COMPLETED" && task.dueDate && isSameDay(task.dueDate, today) && includesMeeting(task.title, task.description, task.notes)).length +
     todayPlans.filter((plan) => plan.status !== "COMPLETED" && isSameDay(plan.plannedAt, today) && includesMeeting(plan.title, plan.note)).length;
+  const communicationCenterSummary = {
+    todayCalls: todayCallCount,
+    todayWhatsApp: todayWhatsAppCount,
+    todayEmails: todayEmailCount,
+    todayMeetings: meetingsToday,
+    todayFollowUps: followUpSummary.today,
+  };
 
   const stats =
     role === "MARKETER"
@@ -1891,6 +2255,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
       { label: "Unread Notifications", value: String(notificationRows.filter((item) => !item.read).length) },
       { label: "Report Logs", value: String(reportLogs.length) },
     ],
+    communicationCenterSummary,
     followUpSummary,
     sidebarCounts: {
       followUps: followUpBadgeCount,

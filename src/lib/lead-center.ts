@@ -212,6 +212,20 @@ function normalizePhone(value: unknown) {
   return String(value ?? "").trim().replace(/\s+/g, "");
 }
 
+async function getScopedLeadUserIds(prisma: ReturnType<typeof getPrisma>, actor?: LeadActor) {
+  if (!actor) return undefined;
+  if (actor.role === "ADMIN") return undefined;
+  if (!actor.id) return [];
+  if (actor.role === "MARKETER") return [actor.id];
+
+  const team = await prisma.user.findMany({
+    where: { supervisorId: actor.id, status: "ACTIVE" },
+    select: { id: true },
+  });
+
+  return [actor.id, ...team.map((member) => member.id)];
+}
+
 function dedupe(values: string[]) {
   return values.filter((value, index, array) => value && array.indexOf(value) === index);
 }
@@ -303,18 +317,30 @@ function validateLeadInput(input: LeadInput) {
   };
 }
 
-function buildLeadWhere(query: LeadListQuery): Prisma.Prisma.LeadWhereInput {
+function buildLeadWhere(query: LeadListQuery, scopedUserIds?: string[]): Prisma.Prisma.LeadWhereInput {
   const search = query.search?.trim();
   return {
-    ...(search
+    ...(scopedUserIds
       ? {
           OR: [
-            { title: { contains: search, mode: "insensitive" } },
-            { customerName: { contains: search, mode: "insensitive" } },
-            { phone: { contains: search, mode: "insensitive" } },
-            { email: { contains: search, mode: "insensitive" } },
-            { company: { name: { contains: search, mode: "insensitive" } } },
-            { interestedProduct: { name: { contains: search, mode: "insensitive" } } },
+            { assignedToId: { in: scopedUserIds } },
+            { createdById: { in: scopedUserIds } },
+          ],
+        }
+      : {}),
+    ...(search
+      ? {
+          AND: [
+            {
+              OR: [
+                { title: { contains: search, mode: "insensitive" } },
+                { customerName: { contains: search, mode: "insensitive" } },
+                { phone: { contains: search, mode: "insensitive" } },
+                { email: { contains: search, mode: "insensitive" } },
+                { company: { name: { contains: search, mode: "insensitive" } } },
+                { interestedProduct: { name: { contains: search, mode: "insensitive" } } },
+              ],
+            },
           ],
         }
       : {}),
@@ -330,11 +356,42 @@ function buildLeadWhere(query: LeadListQuery): Prisma.Prisma.LeadWhereInput {
   };
 }
 
-export async function listLeads(query: LeadListQuery): Promise<LeadListResult> {
+export async function listLeadLookupOptions({
+  actor,
+  search,
+  limit,
+}: {
+  actor?: LeadActor;
+  search?: string;
+  limit: number;
+}) {
+  const prisma = getPrisma();
+  const scopedUserIds = await getScopedLeadUserIds(prisma, actor);
+  const where = buildLeadWhere({ search }, scopedUserIds);
+
+  return prisma.lead.findMany({
+    where,
+    select: {
+      id: true,
+      title: true,
+      customerName: true,
+      email: true,
+      phone: true,
+      company: {
+        select: { name: true },
+      },
+    },
+    orderBy: { updatedAt: "desc" },
+    take: limit,
+  });
+}
+
+export async function listLeads(query: LeadListQuery, actor?: LeadActor): Promise<LeadListResult> {
   const prisma = getPrisma();
   const page = Math.max(1, Number(query.page) || 1);
   const pageSize = Math.min(50, Math.max(1, Number(query.pageSize) || 10));
-  const where = buildLeadWhere(query);
+  const scopedUserIds = await getScopedLeadUserIds(prisma, actor);
+  const where = buildLeadWhere(query, scopedUserIds);
 
   const [rows, total] = await Promise.all([
     prisma.lead.findMany({

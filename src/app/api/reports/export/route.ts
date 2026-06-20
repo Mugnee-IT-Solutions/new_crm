@@ -25,6 +25,7 @@ function parseFilters(searchParams: URLSearchParams): ReportFilters {
     to: searchParams.get("to") ?? undefined,
     userId: searchParams.get("userId") ?? undefined,
     customerId: searchParams.get("customerId") ?? undefined,
+    communicationType: searchParams.get("communicationType") ?? undefined,
     leadStatus: searchParams.get("leadStatus") ?? undefined,
     followUpStatus: searchParams.get("followUpStatus") ?? undefined,
     taskStatus: searchParams.get("taskStatus") ?? undefined,

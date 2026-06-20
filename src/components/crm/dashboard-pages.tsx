@@ -2,6 +2,8 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { motion } from "framer-motion";
+import { gsap } from "gsap";
 import {
   ArrowRight,
   AlertTriangle,
@@ -13,6 +15,7 @@ import {
   ClipboardCheck,
   Clock3,
   Eye,
+  Mail,
   MessageCircleMore,
   MessageSquarePlus,
   Pencil,
@@ -36,7 +39,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { updateFollowUpStatusAction, updateTaskStatusAction } from "@/lib/crm-actions";
 import type { CrmWorkspace } from "@/lib/crm-data";
-import { cn, rolePath, type Role } from "@/lib/utils";
+import { cn, initials, rolePath, type Role } from "@/lib/utils";
 
 const statIcons = [CalendarClock, ClipboardCheck, PhoneForwarded, Target, Trophy, Users, BriefcaseBusiness, WalletCards, Award, Bell];
 const chartColors = ["#2563EB", "#06B6D4", "#16A34A", "#F59E0B", "#4F46E5", "#8B5CF6", "#22C55E", "#DC2626", "#94A3B8"];
@@ -507,6 +510,936 @@ function TeamPerformanceTable({ workspace }: { workspace: CrmWorkspace }) {
   );
 }
 
+type SupervisorPerformanceRow = CrmWorkspace["employees"][number] & {
+  performanceScore: number;
+  performanceScoreRaw: number;
+};
+
+const supervisorKpiConfig = {
+  "Total Marketers": {
+    icon: Users,
+    accent: "bg-blue-500",
+    iconTone: "bg-blue-100 text-blue-700",
+    valueTone: "text-blue-700",
+    sparkStroke: "#2563EB",
+    helper: "Active marketers under your supervision",
+  },
+  "Total Leads": {
+    icon: Target,
+    accent: "bg-indigo-500",
+    iconTone: "bg-indigo-100 text-indigo-700",
+    valueTone: "text-indigo-700",
+    sparkStroke: "#7C3AED",
+    helper: "Total team pipeline opportunities",
+  },
+  "Follow-up Due": {
+    icon: CalendarClock,
+    accent: "bg-orange-500",
+    iconTone: "bg-orange-100 text-orange-700",
+    valueTone: "text-orange-700",
+    sparkStroke: "#F97316",
+    helper: "Due today across your active team",
+  },
+  "Overdue Follow-ups": {
+    icon: AlertTriangle,
+    accent: "bg-red-500",
+    iconTone: "bg-red-100 text-red-700",
+    valueTone: "text-red-700",
+    sparkStroke: "#EF4444",
+    helper: "Urgent items needing escalation",
+  },
+  "Sales This Month": {
+    icon: WalletCards,
+    accent: "bg-emerald-500",
+    iconTone: "bg-emerald-100 text-emerald-700",
+    valueTone: "text-emerald-700",
+    sparkStroke: "#10B981",
+    helper: "Closed quotation value this month",
+  },
+  "Conversion Rate": {
+    icon: Award,
+    accent: "bg-violet-500",
+    iconTone: "bg-violet-100 text-violet-700",
+    valueTone: "text-violet-700",
+    sparkStroke: "#8B5CF6",
+    helper: "Won deals versus total team leads",
+  },
+} as const;
+
+function SupervisorSurfaceCard({
+  title,
+  subtitle,
+  action,
+  children,
+  className,
+  contentClassName,
+}: {
+  title: string;
+  subtitle?: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+  contentClassName?: string;
+}) {
+  return (
+    <motion.div whileHover={{ y: -2 }} transition={{ duration: 0.18, ease: "easeOut" }} className="h-full">
+      <Card className={cn("h-full rounded-[20px] border border-slate-200/80 bg-white shadow-[0_14px_34px_rgba(15,23,42,0.06)]", className)}>
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+          <div>
+            <h2 className="text-lg font-black text-slate-950">{title}</h2>
+            {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
+          </div>
+          {action ? <div className="shrink-0">{action}</div> : null}
+        </div>
+        <div className={cn("p-5", contentClassName)}>{children}</div>
+      </Card>
+    </motion.div>
+  );
+}
+
+function SupervisorEmptyState({
+  icon: Icon,
+  title,
+  description,
+  className,
+}: {
+  icon: typeof Trophy;
+  title: string;
+  description: string;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex min-h-[260px] flex-col items-center justify-center rounded-[18px] border border-dashed border-slate-200 bg-slate-50/80 px-6 py-8 text-center", className)}>
+      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-slate-400 shadow-sm">
+        <Icon className="h-6 w-6" />
+      </div>
+      <h3 className="mt-4 text-base font-black text-slate-900">{title}</h3>
+      <p className="mt-2 max-w-sm text-sm leading-6 text-slate-500">{description}</p>
+    </div>
+  );
+}
+
+function SupervisorHeaderAction({
+  children,
+  href,
+  className,
+}: {
+  children: React.ReactNode;
+  href?: string;
+  className?: string;
+}) {
+  const classes = cn(
+    "inline-flex h-9 items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 text-xs font-bold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700",
+    className,
+  );
+
+  if (href) return <Link href={href} className={classes}>{children}</Link>;
+  return <button type="button" className={classes}>{children}</button>;
+}
+
+function SupervisorKpiGrid({ items }: { items: CrmWorkspace["stats"] }) {
+  return (
+    <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+      {items.map((item, index) => {
+        const config = supervisorKpiConfig[item.title as keyof typeof supervisorKpiConfig];
+        const Icon = config.icon;
+
+        return (
+          <motion.div
+            key={item.title}
+            data-supervisor-kpi
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.28, delay: index * 0.04, ease: "easeOut" }}
+            whileHover={{ y: -3 }}
+            className="h-full"
+          >
+            <Card className="relative h-full overflow-hidden rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
+              <div className={cn("absolute inset-x-0 top-0 h-1", config.accent)} />
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className={cn("text-sm font-bold", config.valueTone)}>{item.title}</p>
+                  <p className={cn("mt-4 text-[2.35rem] font-black leading-none tracking-[-0.03em]", config.valueTone)}>{item.value}</p>
+                  <p className="mt-3 text-sm text-slate-500">{config.helper || item.helper}</p>
+                </div>
+                <div className={cn("flex h-14 w-14 shrink-0 items-center justify-center rounded-full shadow-sm", config.iconTone)}>
+                  <Icon className="h-6 w-6" strokeWidth={2.1} />
+                </div>
+              </div>
+            </Card>
+          </motion.div>
+        );
+      })}
+    </div>
+  );
+}
+
+function performanceScoreVariant(score: number) {
+  if (score >= 75) return "bg-emerald-500";
+  if (score >= 50) return "bg-blue-500";
+  if (score >= 35) return "bg-amber-500";
+  return "bg-rose-500";
+}
+
+function followUpMethodVisual(method: string) {
+  const normalized = method.toLowerCase();
+  if (normalized.includes("whatsapp")) return { icon: MessageCircleMore, badge: "success" as const, label: "WhatsApp" };
+  if (normalized.includes("email")) return { icon: Mail, badge: "default" as const, label: "Email" };
+  if (normalized.includes("meeting")) return { icon: CalendarClock, badge: "violet" as const, label: "Meeting" };
+  return { icon: PhoneCall, badge: "warning" as const, label: normalized.includes("call") || normalized.includes("phone") ? "Phone Call" : method };
+}
+
+function followUpBucketVariant(bucket: string) {
+  if (bucket === "Overdue") return "danger" as const;
+  if (bucket === "Due Today") return "warning" as const;
+  if (bucket === "Upcoming") return "default" as const;
+  return "neutral" as const;
+}
+
+function buildSupervisorLeadStatusData(workspace: CrmWorkspace) {
+  const pipelineMap = new Map(workspace.pipeline.map((item) => [item.label, item.value]));
+  const count = (...labels: string[]) => labels.reduce((sum, label) => sum + (pipelineMap.get(label) ?? 0), 0);
+
+  return [
+    { name: `New Leads · ${count("New Lead")}`, value: count("New Lead"), color: "#2563EB" },
+    { name: `Qualified · ${count("Contacted", "Interested", "Negotiation")}`, value: count("Contacted", "Interested", "Negotiation"), color: "#4F46E5" },
+    { name: `Follow-up · ${count("Follow-up Required")}`, value: count("Follow-up Required"), color: "#F59E0B" },
+    { name: `Quotation · ${count("Quotation Sent")}`, value: count("Quotation Sent"), color: "#0EA5E9" },
+    { name: `Customer · ${count("Won Sale")}`, value: count("Won Sale"), color: "#16A34A" },
+    { name: `Lost · ${count("Lost Sale", "On Hold")}`, value: count("Lost Sale", "On Hold"), color: "#DC2626" },
+  ].filter((item) => item.value > 0);
+}
+
+function SupervisorTeamPerformancePanel({ rows }: { rows: SupervisorPerformanceRow[] }) {
+  return (
+    <SupervisorSurfaceCard
+      title="Team Performance"
+      subtitle="A live view of marketer execution, communication load, and conversion progress."
+      action={<Badge variant="neutral">{rows.length} Marketers</Badge>}
+    >
+      {rows.length ? (
+        <>
+          <div className="hidden xl:block overflow-x-auto">
+            <table className="min-w-[1180px] w-full text-sm">
+              <thead className="text-left text-[11px] uppercase tracking-[0.14em] text-slate-500">
+                <tr>
+                  {["Employee", "Leads", "Calls", "WhatsApp", "Meetings", "Follow-ups", "Pending Tasks", "Overdue Follow-ups", "Sales", "Conversion", "Performance Score"].map((heading) => (
+                    <th key={heading} className="px-3 py-3 font-bold">{heading}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {rows.map((row) => (
+                  <tr key={row.id} className="transition hover:bg-slate-50/80">
+                    <td className="px-3 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-sm font-black text-white shadow-sm">
+                          {initials(row.name)}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate font-black text-slate-950">{row.name}</p>
+                          <p className="truncate text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.role}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.leads}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.calls}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.whatsapp}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.meetings}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.followUps}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.pendingTasks}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.overdueFollowUps}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.sales}</td>
+                    <td className="px-3 py-4"><Badge variant={row.sales > 0 ? "success" : "neutral"}>{row.conversionRate}</Badge></td>
+                    <td className="px-3 py-4">
+                      <div className="min-w-[170px]">
+                        <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
+                          <span>Performance</span>
+                          <span>{row.performanceScore}%</span>
+                        </div>
+                        <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+                          <div className={cn("h-full rounded-full", performanceScoreVariant(row.performanceScore))} style={{ width: `${row.performanceScore}%` }} />
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="space-y-3 xl:hidden">
+            {rows.map((row) => (
+              <div key={row.id} className="rounded-[18px] border border-slate-200 bg-slate-50/80 p-4 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-sm font-black text-white shadow-sm">
+                    {initials(row.name)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="truncate text-sm font-black text-slate-950">{row.name}</p>
+                        <p className="text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.role}</p>
+                      </div>
+                      <Badge variant={row.sales > 0 ? "success" : "neutral"}>{row.conversionRate}</Badge>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
+                      {[
+                        ["Leads", row.leads],
+                        ["Calls", row.calls],
+                        ["WhatsApp", row.whatsapp],
+                        ["Meetings", row.meetings],
+                        ["Follow-ups", row.followUps],
+                        ["Pending", row.pendingTasks],
+                        ["Overdue", row.overdueFollowUps],
+                        ["Sales", row.sales],
+                      ].map(([label, value]) => (
+                        <div key={String(label)} className="rounded-xl bg-white px-3 py-2 text-center shadow-sm">
+                          <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
+                          <p className="mt-1 text-base font-black text-slate-900">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-4">
+                      <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
+                        <span>Performance Score</span>
+                        <span>{row.performanceScore}%</span>
+                      </div>
+                      <div className="h-2.5 overflow-hidden rounded-full bg-white">
+                        <div className={cn("h-full rounded-full", performanceScoreVariant(row.performanceScore))} style={{ width: `${row.performanceScore}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <SupervisorEmptyState
+          icon={Users}
+          title="No marketer performance data available"
+          description="Assign marketers to leads and team activities to view performance analytics here."
+          className="min-h-[360px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function SupervisorLeadStatusPanel({ totalLeads, data }: { totalLeads: number; data: Array<{ name: string; value: number; color: string }> }) {
+  return (
+    <SupervisorSurfaceCard
+      title="Lead Status Distribution"
+      subtitle="A grouped pipeline view across your supervised team."
+      action={<Badge variant="neutral">{totalLeads} Total Leads</Badge>}
+      className="h-full"
+      contentClassName="h-full min-h-[420px] p-5"
+    >
+      {data.length ? (
+        <div className="h-full">
+          <LeadStatusDonut total={totalLeads} data={data} />
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={Target}
+          title="No lead distribution available"
+          description="Add and progress leads through the pipeline to unlock distribution analytics."
+          className="min-h-[340px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function SupervisorSalesTrendPanel({ data }: { data: Array<{ month: string; sales: number }> }) {
+  return (
+    <SupervisorSurfaceCard
+      title="Sales Trends"
+      subtitle="Quotation momentum and closed-value movement over time."
+      className="h-full"
+      contentClassName="min-h-[340px] p-5"
+    >
+      {data.length ? (
+        <div className="h-[280px]">
+          <SalesLineChart data={data} />
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={WalletCards}
+          title="No sales activity available"
+          description="Create quotations and close deals to view analytics."
+          className="min-h-[280px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function SupervisorTopPerformerPanel({ performer }: { performer?: SupervisorPerformanceRow }) {
+  return (
+    <SupervisorSurfaceCard title="Top Performer" subtitle="Best-performing marketer in the current team snapshot." className="h-full">
+      {performer ? (
+        <div className="flex h-full flex-col rounded-[18px] bg-[radial-gradient(circle_at_top,#fff6db_0%,#fff7ed_40%,#eff6ff_100%)] p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-100 text-amber-600 shadow-sm">
+              <Trophy className="h-7 w-7" />
+            </div>
+            <Badge variant="warning">Top Score {performer.performanceScore}%</Badge>
+          </div>
+          <div className="mt-5 flex items-center gap-4">
+            <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-gradient-to-br from-slate-950 to-slate-700 text-lg font-black text-white shadow-lg">
+              {initials(performer.name)}
+            </div>
+            <div className="min-w-0">
+              <h3 className="truncate text-xl font-black text-slate-950">{performer.name}</h3>
+              <p className="truncate text-sm font-semibold text-slate-500">{performer.designation !== "-" ? performer.designation : performer.role}</p>
+            </div>
+          </div>
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            {[
+              ["Leads", performer.leads],
+              ["Follow-ups", performer.followUps],
+              ["Sales", performer.sales],
+              ["Conversion", performer.conversionRate],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="rounded-2xl border border-white/90 bg-white/90 px-3 py-3 shadow-sm">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
+                <p className="mt-1 text-lg font-black text-slate-950">{value}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-5">
+            <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
+              <span>Performance Score</span>
+              <span>{performer.performanceScore}%</span>
+            </div>
+            <div className="h-3 overflow-hidden rounded-full bg-white/90">
+              <div className="h-full rounded-full bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500" style={{ width: `${performer.performanceScore}%` }} />
+            </div>
+          </div>
+          <Link href="/supervisor/rewards" className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-950 text-sm font-semibold text-white transition hover:bg-slate-800">
+            <Award className="h-4 w-4" />
+            Give Reward
+          </Link>
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={Trophy}
+          title="No top performer yet"
+          description="Team activity will spotlight your highest-performing marketer automatically."
+          className="min-h-[320px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function SupervisorPendingFollowUpsPanel({ rows }: { rows: CrmWorkspace["followUps"] }) {
+  return (
+    <SupervisorSurfaceCard
+      title="Pending Follow-ups"
+      subtitle="Outstanding customer actions sorted by urgency."
+      action={<Badge variant="neutral">{rows.length} Open</Badge>}
+      className="h-full"
+    >
+      {rows.length ? (
+        <div className="space-y-3">
+          {rows.map((item, index) => {
+            const methodVisual = followUpMethodVisual(item.method);
+            const MethodIcon = methodVisual.icon;
+
+            return (
+              <motion.div
+                key={item.id}
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.22, delay: Math.min(index * 0.04, 0.18), ease: "easeOut" }}
+                className="rounded-[18px] border border-slate-200 bg-slate-50/80 p-4 shadow-sm"
+              >
+                <div className="flex items-start gap-3">
+                  <div className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white shadow-sm", methodVisual.badge === "success" ? "text-emerald-600" : methodVisual.badge === "default" ? "text-blue-600" : methodVisual.badge === "violet" ? "text-violet-600" : "text-amber-600")}>
+                    <MethodIcon className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="min-w-0 truncate text-sm font-black text-slate-950">
+                        <EntityLink href={item.href} className="font-black">{item.customer}</EntityLink>
+                      </p>
+                      <Badge variant={methodVisual.badge}>{methodVisual.label}</Badge>
+                      <Badge variant={followUpBucketVariant(item.bucket)}>{item.bucket}</Badge>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-semibold text-slate-500">
+                      <span className="inline-flex items-center gap-1"><Users className="h-3.5 w-3.5" /> {item.assignedTo}</span>
+                      <span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> {item.followUpDate}</span>
+                    </div>
+                    {item.note !== "-" ? <p className="mt-2 line-clamp-2 text-sm text-slate-600">{item.note}</p> : null}
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={CalendarClock}
+          title="No pending follow-ups"
+          description="Your team is clear for now. New reminders will appear here automatically."
+          className="min-h-[320px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function SupervisorProductInterestPanel({ data }: { data: Array<{ name: string; leads: number }> }) {
+  return (
+    <SupervisorSurfaceCard
+      title="Product-wise Interest"
+      subtitle="Top products attracting the highest customer demand."
+      className="h-full"
+      contentClassName="min-h-[320px] p-5"
+    >
+      {data.length ? (
+        <div className="h-[250px]">
+          <ProductBarChart data={data} />
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={BriefcaseBusiness}
+          title="No product interest available"
+          description="As marketers discuss products with leads and customers, demand insights will appear here."
+          className="min-h-[250px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function SupervisorProductIntelligencePanel({ workspace }: { workspace: CrmWorkspace }) {
+  const panels = [
+    {
+      title: "Top 5 Most Engaged Products",
+      rows: workspace.productIntelligence.topEngaged,
+      badgeVariant: "default" as const,
+      metric: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.engagementScore} score`,
+      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.leadCount} interested companies · ${item.followUpCount} follow-ups`,
+    },
+    {
+      title: "Highest Conversion Products",
+      rows: workspace.productIntelligence.highestConversion,
+      badgeVariant: "success" as const,
+      metric: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.conversionRate}% conversion`,
+      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.salesCount} sales · ${item.quotationCount} quotations`,
+    },
+    {
+      title: "Most Discussed Products",
+      rows: workspace.productIntelligence.mostDiscussed,
+      badgeVariant: "warning" as const,
+      metric: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.communicationCount} discussions`,
+      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.leadCount} companies · ${item.followUpCount} follow-ups`,
+    },
+  ] as const;
+
+  return (
+    <div className="grid gap-6 xl:grid-cols-3" data-supervisor-section>
+      {panels.map((panel) => (
+        <SupervisorSurfaceCard key={panel.title} title={panel.title} className="h-full">
+          {panel.rows.length ? (
+            <div className="space-y-3">
+              {panel.rows.map((item, index) => (
+                <Link key={`${panel.title}-${item.id}`} href={`/products/${item.id}`} className="flex items-start justify-between gap-3 rounded-[18px] border border-slate-200 bg-slate-50/80 px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:bg-white">
+                  <div className="flex min-w-0 gap-3">
+                    <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-sm font-black text-slate-700 shadow-sm">
+                      {index + 1}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-slate-950">{item.name}</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">{panel.description(item)}</p>
+                    </div>
+                  </div>
+                  <Badge variant={panel.badgeVariant}>{panel.metric(item)}</Badge>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <SupervisorEmptyState
+              icon={BriefcaseBusiness}
+              title="No product intelligence yet"
+              description="Once team conversations, follow-ups, and quotations increase, product intelligence rankings will show here."
+              className="min-h-[260px]"
+            />
+          )}
+        </SupervisorSurfaceCard>
+      ))}
+    </div>
+  );
+}
+
+function buildSupervisorLeadStatusDataV2(workspace: CrmWorkspace) {
+  const pipelineMap = new Map(workspace.pipeline.map((item) => [item.label, item.value]));
+  const count = (...labels: string[]) => labels.reduce((sum, label) => sum + (pipelineMap.get(label) ?? 0), 0);
+
+  return [
+    { name: "New Leads", value: count("New Lead"), color: "#2563EB" },
+    { name: "Qualified", value: count("Contacted", "Interested", "Negotiation"), color: "#22C55E" },
+    { name: "Follow-up", value: count("Follow-up Required"), color: "#F59E0B" },
+    { name: "Quotation", value: count("Quotation Sent"), color: "#FB923C" },
+    { name: "Customer", value: count("Won Sale"), color: "#06B6D4" },
+    { name: "Lost", value: count("Lost Sale", "On Hold"), color: "#EF4444" },
+  ].filter((item) => item.value > 0);
+}
+
+function SupervisorTeamPerformancePanelV2({ rows }: { rows: SupervisorPerformanceRow[] }) {
+  return (
+    <SupervisorSurfaceCard
+      title="Team Performance"
+      action={<SupervisorHeaderAction href={rolePath("SUPERVISOR", "team")}>View All</SupervisorHeaderAction>}
+    >
+      {rows.length ? (
+        <>
+          <div className="hidden overflow-x-auto xl:block">
+            <table className="min-w-[1180px] w-full text-sm">
+              <thead className="text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                <tr>
+                  {["Employee", "Leads", "Calls", "WhatsApp", "Meetings", "Follow-ups", "Pending Tasks", "Overdue Follow-ups", "Sales", "Conversion", "Score"].map((heading) => (
+                    <th key={heading} className="px-3 py-3 font-black">{heading}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {rows.map((row) => (
+                  <tr key={row.id} className="transition hover:bg-slate-50/60">
+                    <td className="px-3 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-black text-white shadow-sm">
+                          {initials(row.name)}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate font-black text-slate-950">{row.name}</p>
+                          <p className="truncate text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.role}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.leads}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.calls}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.whatsapp}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.meetings}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.followUps}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.pendingTasks}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.overdueFollowUps}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.sales}</td>
+                    <td className="px-3 py-4 font-semibold text-slate-700">{row.conversionRate}</td>
+                    <td className="px-3 py-4">
+                      <div className="min-w-[152px]">
+                        <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
+                          <span>Score</span>
+                          <span>{row.performanceScore}%</span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                          <div className={cn("h-full rounded-full", performanceScoreVariant(row.performanceScore))} style={{ width: `${row.performanceScore}%` }} />
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="space-y-3 xl:hidden">
+            {rows.map((row) => (
+              <div key={row.id} className="rounded-[18px] border border-slate-200 bg-slate-50/80 p-4 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-black text-white shadow-sm">
+                    {initials(row.name)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="truncate text-sm font-black text-slate-950">{row.name}</p>
+                        <p className="text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.role}</p>
+                      </div>
+                      <span className="text-sm font-bold text-slate-700">{row.conversionRate}</span>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
+                      {[
+                        ["Leads", row.leads],
+                        ["Calls", row.calls],
+                        ["WhatsApp", row.whatsapp],
+                        ["Meetings", row.meetings],
+                        ["Follow-ups", row.followUps],
+                        ["Pending", row.pendingTasks],
+                        ["Overdue", row.overdueFollowUps],
+                        ["Sales", row.sales],
+                      ].map(([label, value]) => (
+                        <div key={String(label)} className="rounded-xl bg-white px-3 py-2 text-center shadow-sm">
+                          <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
+                          <p className="mt-1 text-base font-black text-slate-900">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-4">
+                      <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
+                        <span>Performance Score</span>
+                        <span>{row.performanceScore}%</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-white">
+                        <div className={cn("h-full rounded-full", performanceScoreVariant(row.performanceScore))} style={{ width: `${row.performanceScore}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <SupervisorEmptyState
+          icon={Users}
+          title="No marketer performance data available"
+          description="Assign marketers to leads and team activities to view performance analytics here."
+          className="min-h-[360px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function SupervisorLeadStatusPanelV2({ totalLeads, data }: { totalLeads: number; data: Array<{ name: string; value: number; color: string }> }) {
+  return (
+    <SupervisorSurfaceCard
+      title="Lead Status Distribution"
+      className="h-full"
+      contentClassName="h-full min-h-[420px] p-5"
+    >
+      {data.length ? (
+        <div className="h-full">
+          <LeadStatusDonut total={totalLeads} data={data} detailedLegend />
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={Target}
+          title="No lead distribution available"
+          description="Add and progress leads through the pipeline to unlock distribution analytics."
+          className="min-h-[340px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function SupervisorSalesTrendPanelV2({ data }: { data: Array<{ month: string; sales: number }> }) {
+  return (
+    <SupervisorSurfaceCard
+      title="Sales Trends"
+      action={<SupervisorHeaderAction>This Month</SupervisorHeaderAction>}
+      className="h-full"
+      contentClassName="min-h-[340px] p-5"
+    >
+      {data.length ? (
+        <div className="h-[280px]">
+          <SalesLineChart data={data} />
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={WalletCards}
+          title="No sales activity available"
+          description="Create quotations and close deals to view analytics."
+          className="min-h-[280px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function SupervisorTopPerformerPanelV2({ performer }: { performer?: SupervisorPerformanceRow }) {
+  return (
+    <SupervisorSurfaceCard title="Top Performer" className="h-full">
+      {performer ? (
+        <div className="flex h-full flex-col rounded-[20px] bg-[radial-gradient(circle_at_top,#fff9e9_0%,#fff5de_36%,#f8fbff_100%)] p-5 text-center">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-amber-500 shadow-sm">
+            <Trophy className="h-8 w-8" />
+          </div>
+          <h3 className="mt-5 text-[1.5rem] font-black text-slate-950">{performer.name}</h3>
+          <p className="mt-1 text-sm font-semibold text-slate-500">{performer.designation !== "-" ? performer.designation : performer.role}</p>
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            {[
+              ["Leads", performer.leads],
+              ["Follow-ups", performer.followUps],
+              ["Sales", performer.sales],
+              ["Conversion", performer.conversionRate],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-3 shadow-sm">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
+                <p className="mt-1 text-lg font-black text-slate-950">{value}</p>
+              </div>
+            ))}
+          </div>
+          <Badge variant="warning" className="mx-auto mt-5">Top Score {performer.performanceScore}%</Badge>
+          <Link href="/supervisor/rewards" className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-blue-600 text-sm font-semibold text-white transition hover:bg-blue-700">
+            <Award className="h-4 w-4" />
+            Give Reward
+          </Link>
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={Trophy}
+          title="No top performer yet"
+          description="Team activity will spotlight your highest-performing marketer automatically."
+          className="min-h-[320px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function SupervisorPendingFollowUpsPanelV2({ rows }: { rows: CrmWorkspace["followUps"] }) {
+  return (
+    <SupervisorSurfaceCard
+      title="Pending Follow-ups"
+      action={<SupervisorHeaderAction href={rolePath("SUPERVISOR", "follow-ups")}>View All</SupervisorHeaderAction>}
+      className="h-full"
+    >
+      {rows.length ? (
+        <div className="space-y-3">
+          {rows.map((item, index) => {
+            const methodVisual = followUpMethodVisual(item.method);
+            const MethodIcon = methodVisual.icon;
+
+            return (
+              <motion.div
+                key={item.id}
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.22, delay: Math.min(index * 0.04, 0.18), ease: "easeOut" }}
+                className="rounded-[18px] border border-slate-200 bg-slate-50/80 p-4 shadow-sm"
+              >
+                <div className="flex items-start gap-3">
+                  <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white shadow-sm", methodVisual.badge === "success" ? "text-emerald-600" : methodVisual.badge === "default" ? "text-blue-600" : methodVisual.badge === "violet" ? "text-violet-600" : "text-amber-600")}>
+                    <MethodIcon className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="min-w-0 truncate text-sm font-black text-slate-950">
+                        <EntityLink href={item.href} className="font-black">{item.customer}</EntityLink>
+                      </p>
+                      <Badge variant={followUpBucketVariant(item.bucket)}>{item.bucket}</Badge>
+                    </div>
+                    <p className="mt-1 truncate text-xs font-semibold text-slate-500">{methodVisual.label} - {item.note !== "-" ? item.note : item.assignedTo}</p>
+                    <p className="mt-1 text-xs text-slate-400">{item.bucket === "Overdue" ? `Overdue follow-up - ${item.followUpDate}` : `Follow-up date - ${item.followUpDate}`}</p>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={CalendarClock}
+          title="No pending follow-ups"
+          description="Your team is clear for now. New reminders will appear here automatically."
+          className="min-h-[320px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function SupervisorProductInterestPanelV2({ data }: { data: Array<{ name: string; leads: number }> }) {
+  const maxLeads = Math.max(1, ...data.map((item) => item.leads));
+
+  return (
+    <SupervisorSurfaceCard
+      title="Product-wise Interest"
+      action={<SupervisorHeaderAction href={rolePath("SUPERVISOR", "reports")}>View Report</SupervisorHeaderAction>}
+      className="h-full"
+      contentClassName="min-h-[320px] p-5"
+    >
+      {data.length ? (
+        <div className="space-y-5">
+          {data.slice(0, 5).map((item) => (
+            <div key={item.name} className="grid gap-2 sm:grid-cols-[170px_minmax(0,1fr)_28px] sm:items-center">
+              <p className="truncate text-sm font-semibold text-slate-700">{item.name}</p>
+              <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                <div className="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-500" style={{ width: `${item.leads === 0 ? 0 : Math.max(10, (item.leads / maxLeads) * 100)}%` }} />
+              </div>
+              <span className="text-right text-sm font-black text-slate-700">{item.leads}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={BriefcaseBusiness}
+          title="No product interest available"
+          description="As marketers discuss products with leads and customers, demand insights will appear here."
+          className="min-h-[250px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function SupervisorProductIntelligencePanelV2({ workspace }: { workspace: CrmWorkspace }) {
+  const panels = [
+    {
+      title: "Top 5 Most Engaged Products",
+      rows: workspace.productIntelligence.topEngaged,
+      badgeVariant: "default" as const,
+      metric: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.engagementScore} score`,
+      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.leadCount} leads - ${item.followUpCount} follow-ups - ${item.quotationCount} quotes`,
+    },
+    {
+      title: "Highest Conversion Products",
+      rows: workspace.productIntelligence.highestConversion,
+      badgeVariant: "success" as const,
+      metric: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.conversionRate}% conversion`,
+      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.salesCount} sales - ${item.quotationCount} quotations`,
+    },
+    {
+      title: "Most Discussed Products",
+      rows: workspace.productIntelligence.mostDiscussed,
+      badgeVariant: "warning" as const,
+      metric: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.communicationCount} discussions`,
+      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.leadCount} companies - ${item.followUpCount} follow-ups`,
+    },
+  ] as const;
+
+  return (
+    <div data-supervisor-section>
+      <SupervisorSurfaceCard title="Product Intelligence" className="h-full">
+        <div className="grid gap-5 xl:grid-cols-3">
+          {panels.map((panel) => (
+            <div key={panel.title} className="rounded-[20px] border border-slate-200 bg-slate-50/70 p-4 shadow-sm">
+              <h3 className="text-sm font-black text-slate-950">{panel.title}</h3>
+              {panel.rows.length ? (
+                <div className="mt-4 space-y-3">
+                  {panel.rows.map((item, index) => (
+                    <Link key={`${panel.title}-${item.id}`} href={`/products/${item.id}`} className="flex items-start justify-between gap-3 rounded-[16px] border border-slate-200 bg-white px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black text-blue-700">{index + 1}. {item.name}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">{panel.description(item)}</p>
+                      </div>
+                      <Badge variant={panel.badgeVariant} className="shrink-0">{panel.metric(item)}</Badge>
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <SupervisorEmptyState
+                  icon={BriefcaseBusiness}
+                  title="No product intelligence yet"
+                  description="Once team conversations, follow-ups, and quotations increase, product intelligence rankings will show here."
+                  className="mt-4 min-h-[260px]"
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      </SupervisorSurfaceCard>
+    </div>
+  );
+}
+
 type MarketerTaskFilter = "all" | "tasks" | "due-follow-ups" | "overdue" | "carry-forward";
 
 const marketerKpiIcons = [ClipboardCheck, AlertTriangle, PhoneForwarded, Target, CalendarClock, Award] as const;
@@ -808,55 +1741,112 @@ export function MarketerDashboard({ workspace }: { workspace: CrmWorkspace }) {
 }
 
 export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) {
+  const dashboardRef = React.useRef<HTMLDivElement | null>(null);
   const charts = chartData(workspace);
+  const supervisorStats = React.useMemo(() => {
+    const requestedTitles = [
+      "Total Marketers",
+      "Total Leads",
+      "Follow-up Due",
+      "Overdue Follow-ups",
+      "Sales This Month",
+      "Conversion Rate",
+    ] as const;
+    const statMap = new Map(workspace.stats.map((item) => [item.title, item]));
+    return requestedTitles
+      .map((title) => statMap.get(title))
+      .filter((item): item is CrmWorkspace["stats"][number] => Boolean(item));
+  }, [workspace.stats]);
+  const performanceRows = React.useMemo<SupervisorPerformanceRow[]>(() => {
+    const teamRows = workspace.employees.filter((row) => row.role === "Marketer");
+    const withRawScore = teamRows.map((row) => ({
+      ...row,
+      performanceScoreRaw:
+        row.sales * 30 +
+        row.leads * 7 +
+        row.followUps * 5 +
+        row.calls * 3 +
+        row.whatsapp * 3 +
+        row.meetings * 4 -
+        row.pendingTasks * 2 -
+        row.overdueFollowUps * 8,
+    }));
+    const highestRaw = Math.max(1, ...withRawScore.map((row) => Math.max(0, row.performanceScoreRaw)));
+
+    return withRawScore
+      .map((row) => ({
+        ...row,
+        performanceScore: Math.max(0, Math.min(100, Math.round((Math.max(0, row.performanceScoreRaw) / highestRaw) * 100))),
+      }))
+      .sort((left, right) => (
+        right.performanceScore - left.performanceScore ||
+        right.sales - left.sales ||
+        right.leads - left.leads ||
+        right.followUps - left.followUps
+      ));
+  }, [workspace.employees]);
+  const leadStatusData = React.useMemo(() => buildSupervisorLeadStatusDataV2(workspace), [workspace]);
+  const pendingFollowUps = React.useMemo(() => {
+    const bucketRank: Record<string, number> = {
+      Overdue: 0,
+      "Due Today": 1,
+      Upcoming: 2,
+      Completed: 3,
+    };
+
+    return workspace.followUps
+      .filter((item) => item.bucket !== "Completed")
+      .sort((left, right) => (bucketRank[left.bucket] ?? 99) - (bucketRank[right.bucket] ?? 99))
+      .slice(0, 6);
+  }, [workspace.followUps]);
+
+  React.useEffect(() => {
+    if (!dashboardRef.current) return;
+
+    const context = gsap.context(() => {
+      gsap.fromTo(
+        "[data-supervisor-kpi]",
+        { autoAlpha: 0, y: 20 },
+        { autoAlpha: 1, y: 0, duration: 0.5, stagger: 0.06, ease: "power2.out" },
+      );
+      gsap.fromTo(
+        "[data-supervisor-section]",
+        { autoAlpha: 0, y: 28 },
+        { autoAlpha: 1, y: 0, duration: 0.55, stagger: 0.1, delay: 0.14, ease: "power2.out" },
+      );
+    }, dashboardRef);
+
+    return () => context.revert();
+  }, []);
 
   return (
-    <>
+    <div ref={dashboardRef} className="space-y-6">
       <PageHeader
         eyebrow="Supervisor Dashboard"
         title="Team performance overview"
         description="Monitor team leads, due follow-ups, product interest, and target achievement."
-        actions={<Badge variant="neutral">Current Month</Badge>}
+        actions={<SupervisorHeaderAction>Current Month</SupervisorHeaderAction>}
       />
-      <StatsGrid items={workspace.stats} />
 
-      <div className="grid gap-5 xl:grid-cols-[1.25fr_0.9fr]">
-        <DashboardCard title="Team Performance">
-          <TeamPerformanceTable workspace={workspace} />
-        </DashboardCard>
-        <ChartCard title="Lead Status Distribution">
-          <LeadStatusDonut total={workspace.leads.length} data={charts.leadStatus} />
-        </ChartCard>
+      <SupervisorKpiGrid items={supervisorStats} />
+
+      <div className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]" data-supervisor-section>
+        <SupervisorTeamPerformancePanelV2 rows={performanceRows} />
+        <SupervisorLeadStatusPanelV2 totalLeads={workspace.leads.length} data={leadStatusData} />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-3">
-        <ChartCard title="Sales Trends" className="xl:col-span-2">
-          <SalesLineChart data={charts.sales} />
-        </ChartCard>
-        <DashboardCard title="Top Performer">
-          {workspace.employees[0] ? (
-            <div className="flex flex-col items-center rounded-2xl bg-gradient-to-br from-amber-50 to-blue-50 p-5 text-center">
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 text-amber-600">
-                <Trophy className="h-8 w-8" />
-              </div>
-              <h3 className="mt-4 text-lg font-black text-slate-950">{workspace.employees[0].name}</h3>
-              <p className="text-sm text-slate-500">Leads {workspace.employees[0].leads} | Won {workspace.employees[0].sales} | Reward {workspace.employees[0].rewardPoints}</p>
-              <Link href="/supervisor/rewards" className="mt-5 inline-flex h-10 w-full items-center justify-center rounded-lg bg-blue-600 text-sm font-semibold text-white">Give Reward</Link>
-            </div>
-          ) : <p className="text-sm text-slate-500">No employees yet.</p>}
-        </DashboardCard>
+      <div className="grid gap-6 xl:grid-cols-[1.45fr_0.88fr_1fr]" data-supervisor-section>
+        <SupervisorSalesTrendPanelV2 data={charts.sales} />
+        <SupervisorTopPerformerPanelV2 performer={performanceRows[0]} />
+        <SupervisorPendingFollowUpsPanelV2 rows={pendingFollowUps} />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <ChartCard title="Product-wise Interest">
-          <ProductBarChart data={charts.products} />
-        </ChartCard>
-        <DashboardCard title="Pending Follow-ups">
-          <CompactList rows={workspace.followUps.filter((item) => item.bucket !== "Completed").slice(0, 6).map((item) => ({ title: item.customer, href: item.href, meta: `${item.method} - ${item.note}`, status: item.bucket }))} />
-        </DashboardCard>
+      <div data-supervisor-section>
+        <SupervisorProductInterestPanelV2 data={charts.products} />
       </div>
-      <ProductIntelligenceWidget workspace={workspace} />
-    </>
+
+      <SupervisorProductIntelligencePanelV2 workspace={workspace} />
+    </div>
   );
 }
 

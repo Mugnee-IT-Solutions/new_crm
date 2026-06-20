@@ -20,7 +20,7 @@ export async function GET(request: Request) {
       assignedToId: searchParams.get("assignedToId") ?? undefined,
       page: Number(searchParams.get("page") ?? 1),
       pageSize: Number(searchParams.get("pageSize") ?? 10),
-    });
+    }, { id: auth.user.id, role: auth.user.role });
 
     return NextResponse.json({ success: true, ...result });
   } catch (error) {

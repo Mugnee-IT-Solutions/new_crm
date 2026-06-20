@@ -22,6 +22,8 @@ import {
   Phone,
   Plus,
   Printer,
+  RefreshCw,
+  Search,
   Send,
   Settings,
   SlidersHorizontal,
@@ -79,7 +81,7 @@ import type {
   TaskRow,
 } from "@/lib/crm-data";
 import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
-import { DATE_PRESET_OPTIONS, REPORT_DEFINITIONS, type ReportFormat, type ReportTypeKey } from "@/lib/report-definitions";
+import { DATE_PRESET_OPTIONS, REPORT_DEFINITIONS, type ReportFilterKey, type ReportFormat, type ReportTypeKey } from "@/lib/report-definitions";
 import { cn, formatCurrency, initials, rolePath, type Role } from "@/lib/utils";
 
 type ActionResult = { ok?: boolean; message?: string; [key: string]: unknown } | unknown;
@@ -934,13 +936,15 @@ function prependUniqueById<T extends { id: string }>(rows: T[], nextRow: T) {
 }
 
 function Timeline({ rows }: { rows: CrmWorkspace["activities"] }) {
+  const visibleRows = rows.slice(0, 10);
+
   return (
     <div className="space-y-4">
-      {rows.length ? rows.map((item, index) => (
+      {visibleRows.length ? visibleRows.map((item, index) => (
         <div key={item.id} className="flex gap-3">
           <div className="flex flex-col items-center">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-50 text-blue-700">{index + 1}</span>
-            {index < rows.length - 1 ? <span className="h-10 w-px bg-slate-200" /> : null}
+            {index < visibleRows.length - 1 ? <span className="h-10 w-px bg-slate-200" /> : null}
           </div>
           <div>
             <p className="text-sm font-bold text-slate-900">
@@ -1028,6 +1032,271 @@ function CommunicationHistoryList({ rows }: { rows: CommunicationHistoryRow[] })
       })}
     </div>
   ) : <EmptyState title="No communication history" description="Task and customer conversation logs will appear here." />;
+}
+
+function CommunicationSummaryCard({
+  title,
+  value,
+  subtitle,
+  icon: Icon,
+  iconBg,
+  iconColor,
+  valueColor,
+  accentColor,
+}: {
+  title: string;
+  value: string;
+  subtitle?: string;
+  icon: typeof Phone;
+  iconBg: string;
+  iconColor: string;
+  valueColor: string;
+  accentColor: string;
+}) {
+  return (
+    <motion.div whileHover={{ y: -2 }} transition={{ duration: 0.18, ease: "easeOut" }} className="h-full">
+      <Card className="relative h-full overflow-hidden rounded-[16px] border border-slate-200/80 bg-white p-5 shadow-[0_14px_36px_rgba(15,23,42,0.08)]">
+        <div className={cn("absolute inset-x-0 top-0 h-1.5", accentColor)} />
+        <div className="flex items-start gap-4">
+          <div className={cn("flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl", iconBg, iconColor)}>
+            <Icon className="h-7 w-7" />
+          </div>
+          <div className="min-w-0">
+            <p className={cn("text-sm font-bold", valueColor)}>{title}</p>
+            <p className={cn("mt-3 text-4xl font-black leading-none", valueColor)}>{value}</p>
+            {subtitle ? <p className="mt-2 text-xs font-medium text-slate-500">{subtitle}</p> : null}
+          </div>
+        </div>
+      </Card>
+    </motion.div>
+  );
+}
+
+type CommunicationDateRange = "today" | "thisWeek" | "thisMonth" | "custom";
+type CommunicationActivityFilter = "ALL" | "CALL" | "WHATSAPP" | "EMAIL" | "MEETING" | "FOLLOW_UP" | "QUOTATION" | "LEAD";
+
+const COMMUNICATION_DATE_RANGE_OPTIONS: Array<{ value: CommunicationDateRange; label: string }> = [
+  { value: "today", label: "Today" },
+  { value: "thisWeek", label: "This Week" },
+  { value: "thisMonth", label: "This Month" },
+  { value: "custom", label: "Custom" },
+];
+
+const COMMUNICATION_ACTIVITY_FILTER_OPTIONS: Array<{ value: CommunicationActivityFilter; label: string }> = [
+  { value: "ALL", label: "All" },
+  { value: "CALL", label: "Call" },
+  { value: "WHATSAPP", label: "WhatsApp" },
+  { value: "EMAIL", label: "Email" },
+  { value: "MEETING", label: "Meeting" },
+  { value: "FOLLOW_UP", label: "Follow-up" },
+  { value: "QUOTATION", label: "Quotation" },
+  { value: "LEAD", label: "Lead Converted" },
+];
+
+function hasActivityText(value?: string | null) {
+  return Boolean(value && value.trim() && value.trim() !== "-");
+}
+
+function matchesCommunicationDateRange({
+  createdAtValue,
+  preset,
+  customStart,
+  customEnd,
+}: {
+  createdAtValue?: string;
+  preset: CommunicationDateRange;
+  customStart: string;
+  customEnd: string;
+}) {
+  if (!createdAtValue) return preset !== "custom" || (!customStart && !customEnd);
+  const createdAt = new Date(createdAtValue);
+  if (Number.isNaN(createdAt.getTime())) return false;
+
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const endOfToday = new Date(startOfToday);
+  endOfToday.setDate(endOfToday.getDate() + 1);
+
+  if (preset === "today") {
+    return createdAt >= startOfToday && createdAt < endOfToday;
+  }
+
+  if (preset === "thisWeek") {
+    const day = startOfToday.getDay();
+    const offset = day === 0 ? 6 : day - 1;
+    const startOfWeek = new Date(startOfToday);
+    startOfWeek.setDate(startOfWeek.getDate() - offset);
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(endOfWeek.getDate() + 7);
+    return createdAt >= startOfWeek && createdAt < endOfWeek;
+  }
+
+  if (preset === "thisMonth") {
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    return createdAt >= startOfMonth && createdAt < endOfMonth;
+  }
+
+  const start = customStart ? new Date(`${customStart}T00:00:00`) : null;
+  const end = customEnd ? new Date(`${customEnd}T23:59:59.999`) : null;
+
+  if (start && Number.isNaN(start.getTime())) return false;
+  if (end && Number.isNaN(end.getTime())) return false;
+  if (start && createdAt < start) return false;
+  if (end && createdAt > end) return false;
+  return true;
+}
+
+function communicationActivityVisual(activity: CrmWorkspace["activities"][number]) {
+  switch (activity.category) {
+    case "EMAIL":
+      return { icon: Mail, iconWrap: "bg-blue-100", iconColor: "text-blue-700", badge: "border-blue-200 bg-blue-50 text-blue-700" };
+    case "WHATSAPP":
+      return { icon: MessageSquare, iconWrap: "bg-green-100", iconColor: "text-green-700", badge: "border-green-200 bg-green-50 text-green-700" };
+    case "CALL":
+      return { icon: Phone, iconWrap: "bg-violet-100", iconColor: "text-violet-700", badge: "border-violet-200 bg-violet-50 text-violet-700" };
+    case "FOLLOW_UP":
+      return { icon: Check, iconWrap: "bg-orange-100", iconColor: "text-orange-700", badge: "border-orange-200 bg-orange-50 text-orange-700" };
+    case "MEETING":
+      return { icon: CalendarClock, iconWrap: "bg-indigo-100", iconColor: "text-indigo-700", badge: "border-indigo-200 bg-indigo-50 text-indigo-700" };
+    case "QUOTATION":
+      return { icon: FileText, iconWrap: "bg-teal-100", iconColor: "text-teal-700", badge: "border-teal-200 bg-teal-50 text-teal-700" };
+    case "LEAD":
+      return { icon: Target, iconWrap: "bg-cyan-100", iconColor: "text-cyan-700", badge: "border-cyan-200 bg-cyan-50 text-cyan-700" };
+    default:
+      return { icon: SlidersHorizontal, iconWrap: "bg-slate-100", iconColor: "text-slate-700", badge: "border-slate-200 bg-slate-50 text-slate-700" };
+  }
+}
+
+function CommunicationActivityDetail({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+      <div className="mt-2 text-sm font-semibold text-slate-800">{value}</div>
+    </div>
+  );
+}
+
+function CommunicationActivityTimelineItem({
+  activity,
+  expanded,
+  onToggle,
+  index,
+}: {
+  activity: CrmWorkspace["activities"][number];
+  expanded: boolean;
+  onToggle: () => void;
+  index: number;
+}) {
+  const visual = communicationActivityVisual(activity);
+  const Icon = visual.icon;
+  const discussionSummary = hasActivityText(activity.discussionSummary)
+    ? activity.discussionSummary
+    : hasActivityText(activity.notes)
+      ? activity.notes
+      : "";
+
+  const detailRows: Array<{ label: string; value: React.ReactNode }> = [];
+
+  if (hasActivityText(activity.rating)) detailRows.push({ label: "Rating", value: activity.rating });
+  if (hasActivityText(activity.contactMethod)) detailRows.push({ label: "Contact Method", value: activity.contactMethod });
+  if (hasActivityText(activity.phoneOrEmailUsed)) detailRows.push({ label: "Phone / Email Used", value: activity.phoneOrEmailUsed });
+  if (hasActivityText(activity.nextFollowUpDate)) detailRows.push({ label: "Next Follow-up Date", value: activity.nextFollowUpDate });
+  if (hasActivityText(activity.quotationReference)) detailRows.push({ label: "Quotation Reference", value: activity.quotationReference });
+  if (hasActivityText(activity.meetingDateTime)) detailRows.push({ label: "Meeting Date / Time", value: activity.meetingDateTime });
+  if (hasActivityText(activity.createdBy)) detailRows.push({ label: "Created By", value: activity.createdBy });
+  if (hasActivityText(activity.customerName)) {
+    detailRows.push({
+      label: "Related Customer",
+      value: <EntityLink href={activity.relatedCustomerHref ?? activity.customerHref} className="font-semibold" stopPropagation>{activity.customerName}</EntityLink>,
+    });
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, delay: Math.min(index * 0.03, 0.18), ease: "easeOut" }}
+      className="overflow-hidden rounded-[22px] border border-slate-200/80 bg-white shadow-[0_10px_28px_rgba(15,23,42,0.06)] transition hover:border-slate-300 hover:shadow-[0_16px_34px_rgba(15,23,42,0.08)]"
+    >
+      <button type="button" onClick={onToggle} className="w-full text-left">
+        <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex min-w-0 gap-4">
+            <div className={cn("flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl", visual.iconWrap, visual.iconColor)}>
+              <Icon className="h-6 w-6" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-base font-black text-slate-950">
+                  <EntityLink href={activity.href} className="font-black" stopPropagation>{activity.title}</EntityLink>
+                </p>
+                <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-bold tracking-[0.12em]", visual.badge)}>
+                  {activity.badgeLabel ?? "ACTIVITY"}
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-slate-600">
+                <span>
+                  <span className="font-semibold text-slate-500">Customer:</span>{" "}
+                  <EntityLink href={activity.customerHref ?? activity.relatedCustomerHref} className="font-semibold" stopPropagation>{activity.customerName ?? "-"}</EntityLink>
+                </span>
+                <span>
+                  <span className="font-semibold text-slate-500">Employee:</span> {activity.employeeName ?? "-"}
+                </span>
+              </div>
+              {hasActivityText(activity.detail) && activity.detail !== activity.customerName && activity.detail !== `${activity.customerName} · ${activity.employeeName}` ? (
+                <p className="mt-3 text-sm leading-6 text-slate-500">{activity.detail}</p>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-4 lg:justify-end">
+            <div className="text-left lg:text-right">
+              <p className="text-sm font-semibold text-slate-700">{activity.dateLabel ?? "-"}</p>
+              <p className="mt-1 text-xs font-medium text-slate-500">{activity.timeLabel ?? activity.time}</p>
+            </div>
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-500">
+              <ChevronDown className={cn("h-4 w-4 transition-transform duration-200", expanded && "rotate-180")} />
+            </span>
+          </div>
+        </div>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {expanded ? (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="overflow-hidden border-t border-slate-100"
+          >
+            <div className="space-y-4 p-5 pt-4">
+              {discussionSummary ? (
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Notes / Discussion Summary</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{discussionSummary}</p>
+                </div>
+              ) : null}
+              {detailRows.length ? (
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {detailRows.map((detail) => <CommunicationActivityDetail key={detail.label} label={detail.label} value={detail.value} />)}
+                </div>
+              ) : !discussionSummary ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm font-medium text-slate-500">
+                  No additional details available.
+                </div>
+              ) : null}
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </motion.div>
+  );
 }
 
 type LeadFormValues = {
@@ -4836,11 +5105,334 @@ export function QuotationDetailsPage({ role, quotation }: { role: Role; quotatio
 }
 
 export function CommunicationPage({ workspace }: { workspace: CrmWorkspace }) {
+  const router = useRouter();
   const [open, setOpen] = React.useState(false);
+  const [refreshPending, startRefresh] = React.useTransition();
+  const [dateRange, setDateRange] = React.useState<CommunicationDateRange>("thisMonth");
+  const [activityType, setActivityType] = React.useState<CommunicationActivityFilter>("ALL");
+  const [employeeFilter, setEmployeeFilter] = React.useState("ALL");
+  const [customerQuery, setCustomerQuery] = React.useState("");
+  const [activityQuery, setActivityQuery] = React.useState("");
+  const [customStartDate, setCustomStartDate] = React.useState("");
+  const [customEndDate, setCustomEndDate] = React.useState("");
+  const [pageSize, setPageSize] = React.useState(25);
+  const [currentPage, setCurrentPage] = React.useState(1);
+  const [expandedActivityId, setExpandedActivityId] = React.useState<string | null>(null);
+  const deferredCustomerQuery = React.useDeferredValue(customerQuery);
+  const deferredActivityQuery = React.useDeferredValue(activityQuery);
+  const summaryCards = [
+    {
+      title: "Today's Calls",
+      value: String(workspace.communicationCenterSummary.todayCalls),
+      subtitle: "Call activities today",
+      icon: Phone,
+      iconBg: "bg-emerald-100",
+      iconColor: "text-emerald-600",
+      valueColor: "text-emerald-600",
+      accentColor: "bg-emerald-500",
+    },
+    {
+      title: "Today's WhatsApp",
+      value: String(workspace.communicationCenterSummary.todayWhatsApp),
+      subtitle: "WhatsApp activities today",
+      icon: MessageSquare,
+      iconBg: "bg-green-100",
+      iconColor: "text-green-600",
+      valueColor: "text-green-600",
+      accentColor: "bg-green-500",
+    },
+    {
+      title: "Today's Emails",
+      value: String(workspace.communicationCenterSummary.todayEmails),
+      subtitle: "Email activities today",
+      icon: Mail,
+      iconBg: "bg-blue-100",
+      iconColor: "text-blue-600",
+      valueColor: "text-blue-600",
+      accentColor: "bg-blue-500",
+    },
+    {
+      title: "Today's Meetings",
+      value: String(workspace.communicationCenterSummary.todayMeetings),
+      subtitle: "Meeting activities today",
+      icon: CalendarClock,
+      iconBg: "bg-violet-100",
+      iconColor: "text-violet-600",
+      valueColor: "text-violet-600",
+      accentColor: "bg-violet-500",
+    },
+    {
+      title: "Today's Follow-ups",
+      value: String(workspace.communicationCenterSummary.todayFollowUps),
+      subtitle: "Follow-up activities today",
+      icon: Check,
+      iconBg: "bg-orange-100",
+      iconColor: "text-orange-600",
+      valueColor: "text-orange-600",
+      accentColor: "bg-orange-500",
+    },
+  ] as const;
+  const employeeOptions = React.useMemo(
+    () => workspace.employees
+      .map((employee) => ({ id: employee.id, name: employee.name }))
+      .sort((left, right) => left.name.localeCompare(right.name)),
+    [workspace.employees],
+  );
+  const filteredActivities = React.useMemo(() => {
+    const customerNeedle = deferredCustomerQuery.trim().toLowerCase();
+    const activityNeedle = deferredActivityQuery.trim().toLowerCase();
+
+    return workspace.activities.filter((activity) => {
+      if (!matchesCommunicationDateRange({
+        createdAtValue: activity.createdAtValue,
+        preset: dateRange,
+        customStart: customStartDate,
+        customEnd: customEndDate,
+      })) {
+        return false;
+      }
+
+      if (activityType !== "ALL" && activity.category !== activityType) {
+        return false;
+      }
+
+      if (employeeFilter !== "ALL" && activity.employeeId !== employeeFilter) {
+        return false;
+      }
+
+      if (customerNeedle) {
+        const customerHaystack = [activity.customerName, activity.detail]
+          .filter(hasActivityText)
+          .join(" ")
+          .toLowerCase();
+        if (!customerHaystack.includes(customerNeedle)) {
+          return false;
+        }
+      }
+
+      if (!activityNeedle) {
+        return true;
+      }
+
+      const activityHaystack = [
+        activity.title,
+        activity.detail,
+        activity.discussionSummary,
+        activity.notes,
+        activity.rawAction,
+        activity.contactMethod,
+        activity.badgeLabel,
+        activity.customerName,
+        activity.employeeName,
+      ]
+        .filter(hasActivityText)
+        .join(" ")
+        .toLowerCase();
+
+      return activityHaystack.includes(activityNeedle);
+    });
+  }, [
+    workspace.activities,
+    dateRange,
+    customStartDate,
+    customEndDate,
+    activityType,
+    employeeFilter,
+    deferredCustomerQuery,
+    deferredActivityQuery,
+  ]);
+  const totalPages = Math.max(1, Math.ceil(filteredActivities.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const pagedActivities = React.useMemo(
+    () => filteredActivities.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [filteredActivities, pageSize, safePage],
+  );
+  const pageNumbers = React.useMemo(() => {
+    const start = Math.max(1, safePage - 2);
+    const end = Math.min(totalPages, start + 4);
+    const adjustedStart = Math.max(1, end - 4);
+    return Array.from({ length: end - adjustedStart + 1 }, (_, index) => adjustedStart + index);
+  }, [safePage, totalPages]);
+
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [dateRange, activityType, employeeFilter, deferredCustomerQuery, deferredActivityQuery, customStartDate, customEndDate, pageSize]);
+
+  React.useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  React.useEffect(() => {
+    if (expandedActivityId && !pagedActivities.some((activity) => activity.id === expandedActivityId)) {
+      setExpandedActivityId(null);
+    }
+  }, [expandedActivityId, pagedActivities]);
+
+  const resetFilters = React.useCallback(() => {
+    setDateRange("thisMonth");
+    setActivityType("ALL");
+    setEmployeeFilter("ALL");
+    setCustomerQuery("");
+    setActivityQuery("");
+    setCustomStartDate("");
+    setCustomEndDate("");
+    setPageSize(25);
+    setCurrentPage(1);
+    setExpandedActivityId(null);
+  }, []);
+
   return (
     <>
-      <PageHeader title="Communication / Activity Log" description="Log every customer touchpoint and keep the customer timeline complete." actions={pageActions([{ label: "Log Communication", icon: Plus, variant: "default", onClick: () => setOpen(true) }])} />
-      <DashboardCard title="Activity Timeline"><Timeline rows={workspace.activities} /></DashboardCard>
+      <PageHeader title="Communication / Activity Log" description="Track all communication and activities across your team in real time." actions={pageActions([{ label: "Log Communication", icon: Plus, variant: "default", onClick: () => setOpen(true) }])} />
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        {summaryCards.map((card) => <CommunicationSummaryCard key={card.title} {...card} />)}
+      </div>
+
+      <Card className="rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-600">
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              Filter Toolbar
+            </div>
+            <h2 className="mt-3 text-lg font-black text-slate-950">Refine activity feed</h2>
+            <p className="mt-1 text-sm text-slate-500">Filter role-scoped activities by date, type, employee, customer, and keywords.</p>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={resetFilters}>
+            Reset Filters
+          </Button>
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold uppercase text-slate-500">Date Range</span>
+            <select value={dateRange} onChange={(event) => setDateRange(event.target.value as CommunicationDateRange)} className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+              {COMMUNICATION_DATE_RANGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold uppercase text-slate-500">Activity Type</span>
+            <select value={activityType} onChange={(event) => setActivityType(event.target.value as CommunicationActivityFilter)} className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+              {COMMUNICATION_ACTIVITY_FILTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold uppercase text-slate-500">Employee</span>
+            <select value={employeeFilter} onChange={(event) => setEmployeeFilter(event.target.value)} className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+              <option value="ALL">All Employees</option>
+              {employeeOptions.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
+            </select>
+          </label>
+
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold uppercase text-slate-500">Customer / Company</span>
+            <Input value={customerQuery} onChange={(event) => setCustomerQuery(event.target.value)} placeholder="Search customer or company" className="h-10 rounded-xl border-slate-200 text-sm font-medium" />
+          </label>
+
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold uppercase text-slate-500">Search Activities</span>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input value={activityQuery} onChange={(event) => setActivityQuery(event.target.value)} placeholder="Search titles, notes or actions" className="h-10 rounded-xl border-slate-200 pl-9 text-sm font-medium" />
+            </div>
+          </label>
+        </div>
+
+        {dateRange === "custom" ? (
+          <div className="mt-3 grid gap-3 md:grid-cols-2 xl:max-w-[420px]">
+            <label className="space-y-1.5">
+              <span className="text-xs font-bold uppercase text-slate-500">Start Date</span>
+              <Input type="date" value={customStartDate} onChange={(event) => setCustomStartDate(event.target.value)} className="h-10 rounded-xl border-slate-200 text-sm font-medium" />
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-bold uppercase text-slate-500">End Date</span>
+              <Input type="date" value={customEndDate} onChange={(event) => setCustomEndDate(event.target.value)} className="h-10 rounded-xl border-slate-200 text-sm font-medium" />
+            </label>
+          </div>
+        ) : null}
+      </Card>
+
+      <Card className="rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-col gap-4 border-b border-slate-100 pb-5 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-xl font-black text-slate-950">Activity Timeline</h2>
+            <p className="mt-1 text-sm text-slate-500">Clean, human-readable CRM activity across calls, WhatsApp, emails, follow-ups, meetings, quotations, and lead updates.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+              {filteredActivities.length} {filteredActivities.length === 1 ? "activity" : "activities"}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => startRefresh(() => router.refresh())}
+              className="gap-2"
+            >
+              <RefreshCw className={cn("h-4 w-4", refreshPending && "animate-spin")} />
+              Refresh
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-5 space-y-4">
+          {pagedActivities.length ? pagedActivities.map((activity, index) => (
+            <CommunicationActivityTimelineItem
+              key={activity.id}
+              activity={activity}
+              expanded={expandedActivityId === activity.id}
+              onToggle={() => setExpandedActivityId((current) => (current === activity.id ? null : activity.id))}
+              index={index}
+            />
+          )) : (
+            <div className="rounded-[22px] border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center">
+              <EmptyState title="No activities found" description="Try a different date range, employee, customer, or keyword filter." />
+              <div className="mt-4">
+                <Button type="button" variant="outline" size="sm" onClick={resetFilters}>
+                  Reset Filters
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-6 flex flex-col gap-4 border-t border-slate-100 pt-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-col gap-2 text-sm text-slate-500 md:flex-row md:items-center md:gap-4">
+            <span>Showing {pagedActivities.length ? (safePage - 1) * pageSize + 1 : 0} - {Math.min(safePage * pageSize, filteredActivities.length)} of {filteredActivities.length} activities</span>
+            <label className="flex items-center gap-2">
+              <span className="font-semibold text-slate-600">Page size</span>
+              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+                {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" size="sm" disabled={safePage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}>
+              Previous
+            </Button>
+            {pageNumbers.map((pageNumber) => (
+              <Button
+                key={pageNumber}
+                type="button"
+                size="sm"
+                variant={pageNumber === safePage ? "default" : "outline"}
+                onClick={() => setCurrentPage(pageNumber)}
+              >
+                {pageNumber}
+              </Button>
+            ))}
+            <Button type="button" variant="outline" size="sm" disabled={safePage >= totalPages} onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}>
+              Next
+            </Button>
+          </div>
+        </div>
+      </Card>
+
       <FormModal open={open} title="Add Communication / Activity Log" onClose={() => setOpen(false)}>
         <CommunicationForm workspace={workspace} onDone={() => setOpen(false)} />
       </FormModal>
@@ -5249,20 +5841,94 @@ export function RewardsPage({ role, workspace }: { role: Role; workspace: CrmWor
   );
 }
 
+const REPORT_LEAD_STATUS_OPTIONS = [
+  "NEW_LEAD",
+  "CONTACTED",
+  "INTERESTED",
+  "FOLLOW_UP_REQUIRED",
+  "QUOTATION_SENT",
+  "NEGOTIATION",
+  "WON_SALE",
+  "LOST_SALE",
+  "ON_HOLD",
+] as const;
+
+const REPORT_FOLLOW_UP_STATUS_OPTIONS = ["DUE", "TODAY", "UPCOMING", "OVERDUE", "COMPLETED"] as const;
+const REPORT_TASK_STATUS_OPTIONS = ["TODO", "IN_PROGRESS", "PENDING", "COMPLETED", "OVERDUE"] as const;
+const REPORT_COMMUNICATION_TYPE_OPTIONS = [
+  { value: "CALL", label: "Call" },
+  { value: "WHATSAPP", label: "WhatsApp" },
+  { value: "EMAIL", label: "Email" },
+  { value: "MEETING", label: "Meeting" },
+] as const;
+
+type ReportModalFilters = {
+  datePreset: (typeof DATE_PRESET_OPTIONS)[number]["value"];
+  from: string;
+  to: string;
+  userId: string;
+  customerId: string;
+  communicationType: string;
+  leadStatus: string;
+  followUpStatus: string;
+  taskStatus: string;
+  productId: string;
+};
+
+type ReportDialogState = {
+  reportType: ReportTypeKey;
+  format: ReportFormat;
+};
+
+const EMPTY_REPORT_MODAL_FILTERS: ReportModalFilters = {
+  datePreset: "month",
+  from: "",
+  to: "",
+  userId: "",
+  customerId: "",
+  communicationType: "",
+  leadStatus: "",
+  followUpStatus: "",
+  taskStatus: "",
+  productId: "",
+};
+
+function reportFormatLabel(format: ReportFormat) {
+  return format === "xlsx" ? "XLSX" : format === "csv" ? "CSV" : format === "print" ? "PRINT" : "PDF";
+}
+
+function reportActionLabel(format: ReportFormat) {
+  return format === "print" ? "Open Print Preview" : `Generate ${reportFormatLabel(format)}`;
+}
+
+function reportFilterLabel(filter: ReportFilterKey) {
+  switch (filter) {
+    case "dateRange":
+      return "Date Range";
+    case "employee":
+      return "Employee";
+    case "customer":
+      return "Customer";
+    case "communicationType":
+      return "Communication Type";
+    case "followUpStatus":
+      return "Follow-up Status";
+    case "taskStatus":
+      return "Task Status";
+    case "leadStatus":
+      return "Lead Status";
+    case "product":
+      return "Product";
+    default:
+      return "Filter";
+  }
+}
+
 export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
   const [feedback, setFeedback] = React.useState<UserFeedback>(null);
   const [activeExport, setActiveExport] = React.useState<string | null>(null);
-  const [filters, setFilters] = React.useState({
-    datePreset: "month",
-    from: "",
-    to: "",
-    userId: "",
-    customerId: "",
-    leadStatus: "",
-    followUpStatus: "",
-    taskStatus: "",
-    productId: "",
-  });
+  const [dialogState, setDialogState] = React.useState<ReportDialogState | null>(null);
+  const [dialogFilters, setDialogFilters] = React.useState<ReportModalFilters>(EMPTY_REPORT_MODAL_FILTERS);
 
   React.useEffect(() => {
     if (!feedback) return undefined;
@@ -5281,39 +5947,117 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
     return [...reportExports, ...workspace.reportLogs];
   }, [workspace.importExportLogs, workspace.reportLogs]);
 
-  const updateFilter = (key: keyof typeof filters, value: string) => {
-    setFilters((current) => ({ ...current, [key]: value }));
-  };
+  const selectedReportDefinition = React.useMemo(
+    () => (dialogState ? REPORT_DEFINITIONS.find((item) => item.type === dialogState.reportType) ?? null : null),
+    [dialogState],
+  );
 
-  const parseFileName = (response: Response, fallback: string) => {
+  const visibleReportFilters = React.useMemo<ReportFilterKey[]>(
+    () => (selectedReportDefinition ? [...selectedReportDefinition.filters] : []),
+    [selectedReportDefinition],
+  );
+
+  const parseFileName = React.useCallback((response: Response, fallback: string) => {
     const disposition = response.headers.get("content-disposition");
-    const match = disposition?.match(/filename="?([^"]+)"?/i);
+    const match = disposition?.match(/filename=\"?([^\"]+)\"?/i);
     return match?.[1] ?? fallback;
-  };
+  }, []);
 
-  const buildParams = (reportType: ReportTypeKey, format: ReportFormat) => {
+  const updateDialogFilter = React.useCallback((key: keyof ReportModalFilters, value: string) => {
+    setDialogFilters((current) => ({ ...current, [key]: value }));
+  }, []);
+
+  const openReportDialog = React.useCallback((reportType: ReportTypeKey, format: ReportFormat) => {
+    setDialogState({ reportType, format });
+    setDialogFilters(EMPTY_REPORT_MODAL_FILTERS);
+    setFeedback(null);
+  }, []);
+
+  const closeReportDialog = React.useCallback(() => {
+    if (activeExport) return;
+    setDialogState(null);
+    setDialogFilters(EMPTY_REPORT_MODAL_FILTERS);
+  }, [activeExport]);
+
+  const reportUsesFilter = React.useCallback((filter: ReportFilterKey) => visibleReportFilters.includes(filter), [visibleReportFilters]);
+
+  const buildParams = React.useCallback((reportType: ReportTypeKey, format: ReportFormat, filters: ReportModalFilters, filterKeys: ReportFilterKey[]) => {
     const params = new URLSearchParams();
+    const filterSet = new Set(filterKeys);
+
     params.set("reportType", reportType);
     params.set("format", format);
-    params.set("datePreset", filters.datePreset);
-    if (filters.from) params.set("from", filters.from);
-    if (filters.to) params.set("to", filters.to);
-    if (filters.userId) params.set("userId", filters.userId);
-    if (filters.customerId) params.set("customerId", filters.customerId);
-    if (filters.leadStatus) params.set("leadStatus", filters.leadStatus);
-    if (filters.followUpStatus) params.set("followUpStatus", filters.followUpStatus);
-    if (filters.taskStatus) params.set("taskStatus", filters.taskStatus);
-    if (filters.productId) params.set("productId", filters.productId);
-    return params;
-  };
 
-  const handleExport = async (reportType: ReportTypeKey, format: ReportFormat, title: string) => {
-    const exportKey = `${reportType}-${format}`;
+    if (filterSet.has("dateRange")) {
+      params.set("datePreset", filters.datePreset);
+      if (filters.datePreset === "custom") {
+        if (filters.from) params.set("from", filters.from);
+        if (filters.to) params.set("to", filters.to);
+      }
+    }
+
+    if (filterSet.has("employee") && filters.userId) params.set("userId", filters.userId);
+    if (filterSet.has("customer") && filters.customerId) params.set("customerId", filters.customerId);
+    if (filterSet.has("communicationType") && filters.communicationType) params.set("communicationType", filters.communicationType);
+    if (filterSet.has("leadStatus") && filters.leadStatus) params.set("leadStatus", filters.leadStatus);
+    if (filterSet.has("followUpStatus") && filters.followUpStatus) params.set("followUpStatus", filters.followUpStatus);
+    if (filterSet.has("taskStatus") && filters.taskStatus) params.set("taskStatus", filters.taskStatus);
+    if (filterSet.has("product") && filters.productId) params.set("productId", filters.productId);
+
+    return params;
+  }, []);
+
+  const describeFilterValue = React.useCallback((filter: ReportFilterKey) => {
+    if (filter === "dateRange") {
+      if (dialogFilters.datePreset === "custom") {
+        if (dialogFilters.from || dialogFilters.to) {
+          return `${dialogFilters.from || "Start not set"} - ${dialogFilters.to || "End not set"}`;
+        }
+        return "Custom range";
+      }
+      return DATE_PRESET_OPTIONS.find((item) => item.value === dialogFilters.datePreset)?.label ?? "This Month";
+    }
+
+    if (filter === "employee") {
+      return workspace.employees.find((employee) => employee.id === dialogFilters.userId)?.name ?? "All Employees";
+    }
+
+    if (filter === "customer") {
+      return workspace.companies.find((company) => company.id === dialogFilters.customerId)?.name ?? "All Customers";
+    }
+
+    if (filter === "communicationType") {
+      return REPORT_COMMUNICATION_TYPE_OPTIONS.find((option) => option.value === dialogFilters.communicationType)?.label ?? "All Communication Types";
+    }
+
+    if (filter === "leadStatus") {
+      return dialogFilters.leadStatus ? dialogFilters.leadStatus.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase()) : "All Lead Status";
+    }
+
+    if (filter === "followUpStatus") {
+      return dialogFilters.followUpStatus ? dialogFilters.followUpStatus.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase()) : "All Follow-up Status";
+    }
+
+    if (filter === "taskStatus") {
+      return dialogFilters.taskStatus ? dialogFilters.taskStatus.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase()) : "All Task Status";
+    }
+
+    if (filter === "product") {
+      return workspace.products.find((product) => product.id === dialogFilters.productId)?.name ?? "All Products";
+    }
+
+    return "All";
+  }, [dialogFilters, workspace.companies, workspace.employees, workspace.products]);
+
+  const handleExport = React.useCallback(async () => {
+    if (!dialogState || !selectedReportDefinition) return;
+
+    const exportKey = `${dialogState.reportType}-${dialogState.format}`;
     setActiveExport(exportKey);
     setFeedback(null);
 
     try {
-      const response = await fetch(`/api/reports/export?${buildParams(reportType, format).toString()}`, {
+      const response = await fetch(`/api/reports/export?${buildParams(dialogState.reportType, dialogState.format, dialogFilters, visibleReportFilters).toString()}`, {
         method: "GET",
         cache: "no-store",
       });
@@ -5323,12 +6067,12 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
         throw new Error(payload?.message ?? "Report export failed.");
       }
 
-      const fallbackName = `${title}.${format === "print" ? "html" : format}`;
+      const fallbackName = `${selectedReportDefinition.title}.${dialogState.format === "print" ? "html" : dialogState.format}`;
       const fileName = parseFileName(response, fallbackName);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
 
-      if (format === "print") {
+      if (dialogState.format === "print") {
         const popup = window.open(url, "_blank", "noopener,noreferrer");
         if (!popup) {
           window.location.href = url;
@@ -5346,8 +6090,10 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
 
       setFeedback({
         type: "success",
-        message: format === "print" ? "Printable report opened successfully." : `${title} exported successfully.`,
+        message: dialogState.format === "print" ? "Printable report opened successfully." : `${selectedReportDefinition.title} exported successfully.`,
       });
+      setDialogState(null);
+      setDialogFilters(EMPTY_REPORT_MODAL_FILTERS);
     } catch (error) {
       setFeedback({
         type: "error",
@@ -5356,134 +6102,49 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
     } finally {
       setActiveExport(null);
     }
-  };
+  }, [buildParams, dialogFilters, dialogState, parseFileName, selectedReportDefinition, visibleReportFilters]);
 
   return (
     <>
       <FloatingFeedback feedback={feedback} />
       <PageHeader title="Reports Center" description="Generate CRM reports and export filtered data in PDF, Excel, CSV, or print-ready format." />
-      <FilterBar>
-        <label className="space-y-1.5">
-          <span className="text-xs font-bold uppercase text-slate-500">Date Range</span>
-          <select
-            value={filters.datePreset}
-            onChange={(event) => updateFilter("datePreset", event.target.value)}
-            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-          >
-            {DATE_PRESET_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-bold uppercase text-slate-500">Employee</span>
-          <select
-            value={filters.userId}
-            onChange={(event) => updateFilter("userId", event.target.value)}
-            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-          >
-            <option value="">All Employees</option>
-            {workspace.employees.map((employee) => (
-              <option key={employee.id} value={employee.id}>
-                {employee.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-bold uppercase text-slate-500">Customer</span>
-          <select
-            value={filters.customerId}
-            onChange={(event) => updateFilter("customerId", event.target.value)}
-            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-          >
-            <option value="">All Customers</option>
-            {workspace.companies.map((company) => (
-              <option key={company.id} value={company.id}>
-                {company.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-bold uppercase text-slate-500">Lead Status</span>
-          <select
-            value={filters.leadStatus}
-            onChange={(event) => updateFilter("leadStatus", event.target.value)}
-            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-          >
-            <option value="">All Lead Status</option>
-            {["NEW_LEAD", "CONTACTED", "INTERESTED", "FOLLOW_UP_REQUIRED", "QUOTATION_SENT", "NEGOTIATION", "WON_SALE", "LOST_SALE", "ON_HOLD"].map((status) => (
-              <option key={status} value={status}>
-                {status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-bold uppercase text-slate-500">Follow-up Status</span>
-          <select
-            value={filters.followUpStatus}
-            onChange={(event) => updateFilter("followUpStatus", event.target.value)}
-            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-          >
-            <option value="">All Follow-up Status</option>
-            {["DUE", "TODAY", "UPCOMING", "OVERDUE", "COMPLETED"].map((status) => (
-              <option key={status} value={status}>
-                {status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-bold uppercase text-slate-500">Task Status</span>
-          <select
-            value={filters.taskStatus}
-            onChange={(event) => updateFilter("taskStatus", event.target.value)}
-            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-          >
-            <option value="">All Task Status</option>
-            {["TODO", "IN_PROGRESS", "PENDING", "COMPLETED", "OVERDUE"].map((status) => (
-              <option key={status} value={status}>
-                {status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-bold uppercase text-slate-500">Product</span>
-          <select
-            value={filters.productId}
-            onChange={(event) => updateFilter("productId", event.target.value)}
-            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-          >
-            <option value="">All Products</option>
-            {workspace.products.map((product) => (
-              <option key={product.id} value={product.id}>
-                {product.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        {filters.datePreset === "custom" ? (
-          <>
-            <label className="space-y-1.5">
-              <span className="text-xs font-bold uppercase text-slate-500">From</span>
-              <Input type="date" value={filters.from} onChange={(event) => updateFilter("from", event.target.value)} />
-            </label>
-            <label className="space-y-1.5">
-              <span className="text-xs font-bold uppercase text-slate-500">To</span>
-              <Input type="date" value={filters.to} onChange={(event) => updateFilter("to", event.target.value)} />
-            </label>
-          </>
-        ) : null}
-      </FilterBar>
+
+      <Card className="rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-blue-700">
+              <FileText className="h-3.5 w-3.5" />
+              Contextual Report Filters
+            </div>
+            <h2 className="mt-3 text-xl font-black text-slate-950">Choose format first, then apply only relevant filters</h2>
+            <p className="mt-1 text-sm text-slate-500">Each report card now opens its own preview and filter modal, so unrelated filters no longer affect exports.</p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            <p className="font-semibold text-slate-800">Available actions</p>
+            <p className="mt-1">PDF, XLSX, CSV, and PRINT open a report-specific setup modal before export.</p>
+          </div>
+        </div>
+      </Card>
+
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        {REPORT_DEFINITIONS.map(({ title, description, type }) => (
-          <Card key={title} className="p-5">
-            <div className="flex items-start gap-4"><div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700"><FileText className="h-6 w-6" /></div><div><h3 className="font-black text-slate-950">{title}</h3><p className="mt-1 text-sm text-slate-500">{description}</p></div></div>
+        {REPORT_DEFINITIONS.map(({ title, description, type, filters }) => (
+          <Card key={title} className="rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.06)]">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
+                <FileText className="h-6 w-6" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-black text-slate-950">{title}</h3>
+                <p className="mt-1 text-sm text-slate-500">{description}</p>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {filters.map((filter) => (
+                <span key={filter} className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                  {reportFilterLabel(filter)}
+                </span>
+              ))}
+            </div>
             <div className="mt-5 grid grid-cols-2 gap-2">
               {(["pdf", "xlsx", "csv", "print"] as const).map((format) => (
                 <Button
@@ -5492,17 +6153,18 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
                   variant="outline"
                   size="sm"
                   className="w-full"
-                  disabled={activeExport === `${type}-${format}`}
-                  onClick={() => handleExport(type, format, title)}
+                  disabled={Boolean(activeExport)}
+                  onClick={() => openReportDialog(type, format)}
                 >
                   {format === "print" ? <Printer className="h-4 w-4" /> : <Download className="h-4 w-4" />}
-                  {activeExport === `${type}-${format}` ? "Loading..." : format.toUpperCase()}
+                  {reportFormatLabel(format)}
                 </Button>
               ))}
             </div>
           </Card>
         ))}
       </div>
+
       <DashboardCard title="Report Data Preview">
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
@@ -5531,6 +6193,7 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
           </div>
         </div>
       </DashboardCard>
+
       <DataTable data={reportHistory} columns={React.useMemo<ColumnDef<(typeof reportHistory)[number]>[]>(() => [
         {
           accessorKey: "module",
@@ -5541,6 +6204,216 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
         { accessorKey: "status", header: "Status", cell: ({ row }) => <StatusBadge value={row.original.status} /> },
         { accessorKey: "createdAt", header: "Created" },
       ], [reportHistory])} searchPlaceholder="Search report logs..." />
+
+      <FormModal
+        open={Boolean(dialogState && selectedReportDefinition)}
+        title={`${selectedReportDefinition?.title ?? "Report"} · ${dialogState ? reportFormatLabel(dialogState.format) : ""}`}
+        onClose={closeReportDialog}
+        panelClassName="max-w-4xl"
+      >
+        {dialogState && selectedReportDefinition ? (
+          <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+            <div>
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">Report Setup</p>
+                <h3 className="mt-2 text-lg font-black text-slate-950">{selectedReportDefinition.title}</h3>
+                <p className="mt-1 text-sm text-slate-500">{selectedReportDefinition.description}</p>
+                <p className="mt-3 text-sm font-medium text-slate-600">Only filters relevant to this report are shown below before export.</p>
+              </div>
+
+              <div className="mt-5 grid gap-4 md:grid-cols-2">
+                {reportUsesFilter("dateRange") ? (
+                  <label className="space-y-1.5 md:col-span-2">
+                    <span className="text-xs font-bold uppercase text-slate-500">Date Range</span>
+                    <select
+                      value={dialogFilters.datePreset}
+                      onChange={(event) => updateDialogFilter("datePreset", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                    >
+                      {DATE_PRESET_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {reportUsesFilter("dateRange") && dialogFilters.datePreset === "custom" ? (
+                  <>
+                    <label className="space-y-1.5">
+                      <span className="text-xs font-bold uppercase text-slate-500">From</span>
+                      <Input type="date" value={dialogFilters.from} onChange={(event) => updateDialogFilter("from", event.target.value)} />
+                    </label>
+                    <label className="space-y-1.5">
+                      <span className="text-xs font-bold uppercase text-slate-500">To</span>
+                      <Input type="date" value={dialogFilters.to} onChange={(event) => updateDialogFilter("to", event.target.value)} />
+                    </label>
+                  </>
+                ) : null}
+
+                {reportUsesFilter("employee") ? (
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-bold uppercase text-slate-500">Employee</span>
+                    <select
+                      value={dialogFilters.userId}
+                      onChange={(event) => updateDialogFilter("userId", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                    >
+                      <option value="">All Employees</option>
+                      {workspace.employees.map((employee) => (
+                        <option key={employee.id} value={employee.id}>
+                          {employee.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {reportUsesFilter("customer") ? (
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-bold uppercase text-slate-500">Customer</span>
+                    <select
+                      value={dialogFilters.customerId}
+                      onChange={(event) => updateDialogFilter("customerId", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                    >
+                      <option value="">All Customers</option>
+                      {workspace.companies.map((company) => (
+                        <option key={company.id} value={company.id}>
+                          {company.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {reportUsesFilter("communicationType") ? (
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-bold uppercase text-slate-500">Communication Type</span>
+                    <select
+                      value={dialogFilters.communicationType}
+                      onChange={(event) => updateDialogFilter("communicationType", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                    >
+                      <option value="">All Communication Types</option>
+                      {REPORT_COMMUNICATION_TYPE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {reportUsesFilter("followUpStatus") ? (
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-bold uppercase text-slate-500">Follow-up Status</span>
+                    <select
+                      value={dialogFilters.followUpStatus}
+                      onChange={(event) => updateDialogFilter("followUpStatus", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                    >
+                      <option value="">All Follow-up Status</option>
+                      {REPORT_FOLLOW_UP_STATUS_OPTIONS.map((status) => (
+                        <option key={status} value={status}>
+                          {status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {reportUsesFilter("taskStatus") ? (
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-bold uppercase text-slate-500">Task Status</span>
+                    <select
+                      value={dialogFilters.taskStatus}
+                      onChange={(event) => updateDialogFilter("taskStatus", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                    >
+                      <option value="">All Task Status</option>
+                      {REPORT_TASK_STATUS_OPTIONS.map((status) => (
+                        <option key={status} value={status}>
+                          {status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {reportUsesFilter("leadStatus") ? (
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-bold uppercase text-slate-500">Lead Status</span>
+                    <select
+                      value={dialogFilters.leadStatus}
+                      onChange={(event) => updateDialogFilter("leadStatus", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                    >
+                      <option value="">All Lead Status</option>
+                      {REPORT_LEAD_STATUS_OPTIONS.map((status) => (
+                        <option key={status} value={status}>
+                          {status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {reportUsesFilter("product") ? (
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-bold uppercase text-slate-500">Product</span>
+                    <select
+                      value={dialogFilters.productId}
+                      onChange={(event) => updateDialogFilter("productId", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                    >
+                      <option value="">All Products</option>
+                      {workspace.products.map((product) => (
+                        <option key={product.id} value={product.id}>
+                          {product.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-slate-50 p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">Preview</p>
+                  <h3 className="mt-1 text-lg font-black text-slate-950">{reportFormatLabel(dialogState.format)} export</h3>
+                </div>
+                <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-bold text-blue-700 shadow-sm">
+                  {reportFormatLabel(dialogState.format)}
+                </span>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-slate-600">Review the report scope below, then {dialogState.format === "print" ? "open the printable preview" : "generate the export"}.</p>
+
+              <div className="mt-5 space-y-3">
+                {visibleReportFilters.map((filter) => (
+                  <div key={filter} className="rounded-2xl border border-white/80 bg-white px-4 py-3 shadow-sm">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{reportFilterLabel(filter)}</p>
+                    <p className="mt-2 text-sm font-semibold text-slate-800">{describeFilterValue(filter)}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-auto flex flex-col gap-2 pt-5 sm:flex-row">
+                <Button type="button" variant="outline" className="w-full" onClick={closeReportDialog} disabled={Boolean(activeExport)}>
+                  Cancel
+                </Button>
+                <Button type="button" className="w-full" onClick={() => void handleExport()} disabled={Boolean(activeExport)}>
+                  {dialogState.format === "print" ? <Printer className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+                  {activeExport === `${dialogState.reportType}-${dialogState.format}` ? "Preparing..." : reportActionLabel(dialogState.format)}
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </FormModal>
     </>
   );
 }

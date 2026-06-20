@@ -41,6 +41,7 @@ export type ReportFilters = {
   to?: string;
   userId?: string;
   customerId?: string;
+  communicationType?: string;
   leadStatus?: string;
   followUpStatus?: string;
   taskStatus?: string;
@@ -92,6 +93,15 @@ function labelize(value: string | null | undefined) {
     .replace(/_/g, " ")
     .toLowerCase()
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function communicationTypeLabel(value?: string) {
+  if (!value) return "-";
+  if (value === "WHATSAPP") return "WhatsApp";
+  if (value === "CALL") return "Call";
+  if (value === "EMAIL") return "Email";
+  if (value === "MEETING") return "Meeting";
+  return labelize(value);
 }
 
 function escapeCsvValue(value: unknown) {
@@ -205,6 +215,7 @@ async function resolveFilterLabels(
     labels.push({ label: "Product", value: product?.name ?? filters.productId });
   }
 
+  if (filters.communicationType) labels.push({ label: "Communication Type", value: communicationTypeLabel(filters.communicationType) });
   if (filters.leadStatus) labels.push({ label: "Lead Status", value: labelize(filters.leadStatus) });
   if (filters.followUpStatus) labels.push({ label: "Follow-up Status", value: labelize(filters.followUpStatus) });
   if (filters.taskStatus) labels.push({ label: "Task Status", value: labelize(filters.taskStatus) });
@@ -267,6 +278,21 @@ async function buildCustomerCommunicationReport(
   const productName = filters.productId
     ? (await prisma.productService.findUnique({ where: { id: filters.productId }, select: { name: true } }))?.name ?? null
     : null;
+  const communicationTypeFilter =
+    filters.communicationType === "CALL"
+      ? {
+          OR: [
+            { method: { contains: "phone", mode: "insensitive" as const } },
+            { method: { contains: "call", mode: "insensitive" as const } },
+          ],
+        }
+      : filters.communicationType === "WHATSAPP"
+        ? { method: { contains: "whatsapp", mode: "insensitive" as const } }
+        : filters.communicationType === "EMAIL"
+          ? { method: { contains: "email", mode: "insensitive" as const } }
+          : filters.communicationType === "MEETING"
+            ? { method: { contains: "meeting", mode: "insensitive" as const } }
+            : {};
 
   const where: PrismaTypes.Prisma.CommunicationLogWhereInput = {
     AND: [
@@ -274,6 +300,7 @@ async function buildCustomerCommunicationReport(
       scopedUserIds ? { userId: { in: scopedUserIds } } : {},
       filters.userId ? { userId: filters.userId } : {},
       filters.customerId ? { companyId: filters.customerId } : {},
+      communicationTypeFilter,
       filters.productId
         ? {
             OR: [

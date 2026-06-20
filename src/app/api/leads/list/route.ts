@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireRequestUser } from "@/lib/request-user";
-import { getPrisma } from "@/lib/prisma";
+import { listLeadLookupOptions } from "@/lib/lead-center";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,45 +18,13 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, message: auth.message }, { status: auth.status });
     }
 
-    const prisma = getPrisma();
     const { searchParams } = new URL(request.url);
     const search = (searchParams.get("search") || searchParams.get("q") || "").trim();
     const limit = parseLimit(searchParams.get("limit"));
-    const searchFilters: Record<string, unknown>[] = [];
-
-    if (search) {
-      searchFilters.push({
-        OR: [
-          { title: { contains: search, mode: "insensitive" } },
-          { customerName: { contains: search, mode: "insensitive" } },
-          { phone: { contains: search, mode: "insensitive" } },
-          { email: { contains: search, mode: "insensitive" } },
-        ],
-      });
-    }
-
-    const where: Record<string, unknown> = {
-      ...(searchFilters.length
-        ? {
-            AND: [...searchFilters],
-          }
-        : {}),
-    };
-
-    const rows = await prisma.lead.findMany({
-      where,
-      select: {
-        id: true,
-        title: true,
-        customerName: true,
-        email: true,
-        phone: true,
-        company: {
-          select: { name: true },
-        },
-      },
-      orderBy: { updatedAt: "desc" },
-      take: limit,
+    const rows = await listLeadLookupOptions({
+      actor: { id: auth.user.id, role: auth.user.role },
+      search,
+      limit,
     });
 
     return NextResponse.json({

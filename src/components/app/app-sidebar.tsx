@@ -80,10 +80,12 @@ export function AppSidebar({
     return undefined;
   };
 
-  const formatCount = (value: number | undefined) => {
-    if (typeof value !== "number") return undefined;
-    if (!Number.isFinite(value) || Number.isNaN(value)) return undefined;
-    return value > 999 ? "999+" : String(value);
+  const shouldShowBadge = (value: number | null | undefined): value is number => typeof value === "number" && Number.isFinite(value) && !Number.isNaN(value) && value > 0;
+
+  const formatCount = (value: number | null | undefined) => {
+    if (!shouldShowBadge(value)) return undefined;
+    const normalizedValue = Math.trunc(value);
+    return normalizedValue > 99 ? "99+" : String(normalizedValue);
   };
   const navGroups = groupSidebarItems(sidebarMenus[role]);
 
@@ -149,7 +151,7 @@ export function AppSidebar({
                   const Icon = item.icon;
                   const currentCount = badgeValue(item.label);
                   const badgeText = formatCount(currentCount);
-                  const showBadge = Boolean(badgeText);
+                  const showBadge = shouldShowBadge(currentCount);
                   const tooltip = badgeText ? `${item.label} (${badgeText})` : item.label;
                   const isRewards = item.label === "Rewards";
 
