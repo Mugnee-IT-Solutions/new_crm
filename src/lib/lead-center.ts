@@ -212,18 +212,8 @@ function normalizePhone(value: unknown) {
   return String(value ?? "").trim().replace(/\s+/g, "");
 }
 
-async function getScopedLeadUserIds(prisma: ReturnType<typeof getPrisma>, actor?: LeadActor) {
-  if (!actor) return undefined;
-  if (actor.role === "ADMIN") return undefined;
-  if (!actor.id) return [];
-  if (actor.role === "MARKETER") return [actor.id];
-
-  const team = await prisma.user.findMany({
-    where: { supervisorId: actor.id, status: "ACTIVE" },
-    select: { id: true },
-  });
-
-  return [actor.id, ...team.map((member) => member.id)];
+async function getScopedLeadUserIds(_prisma: ReturnType<typeof getPrisma>, _actor?: LeadActor) {
+  return undefined;
 }
 
 function dedupe(values: string[]) {

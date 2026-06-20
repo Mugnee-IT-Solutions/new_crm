@@ -15,6 +15,7 @@ import {
   ClipboardCheck,
   Clock3,
   Eye,
+  FileBarChart,
   Mail,
   MessageCircleMore,
   MessageSquarePlus,
@@ -31,9 +32,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ConversionFunnel, LeadStatusDonut, ProductBarChart, SalesLineChart, TeamActivityDonut } from "@/components/charts/crm-charts";
+import { LeadStatusDonut, ProductBarChart, SalesLineChart } from "@/components/charts/crm-charts";
 import { AnimatedPanel } from "@/components/shared/animated-panel";
-import { ChartCard } from "@/components/shared/chart-card";
 import { DashboardCard } from "@/components/shared/dashboard-card";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
@@ -1848,72 +1848,525 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
   );
 }
 
-export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
-  const charts = chartData(workspace);
+type AdminPerformanceRow = CrmWorkspace["employees"][number] & {
+  emails: number;
+  performanceScore: number;
+  performanceScoreRaw: number;
+};
+
+const adminKpiConfig = {
+  "Total Users": {
+    icon: Users,
+    accent: "border-blue-200 bg-blue-50/70 text-blue-700",
+    iconTone: "bg-blue-100 text-blue-700",
+    helper: "System users",
+  },
+  "Total Customers": {
+    icon: BriefcaseBusiness,
+    accent: "border-emerald-200 bg-emerald-50/70 text-emerald-700",
+    iconTone: "bg-emerald-100 text-emerald-700",
+    helper: "Active customer companies",
+  },
+  "Total Leads": {
+    icon: Target,
+    accent: "border-indigo-200 bg-indigo-50/70 text-indigo-700",
+    iconTone: "bg-indigo-100 text-indigo-700",
+    helper: "Live pipeline opportunities",
+  },
+  "Total Products": {
+    icon: BriefcaseBusiness,
+    accent: "border-cyan-200 bg-cyan-50/70 text-cyan-700",
+    iconTone: "bg-cyan-100 text-cyan-700",
+    helper: "Products in CRM catalog",
+  },
+  "Follow-ups Due": {
+    icon: CalendarClock,
+    accent: "border-amber-200 bg-amber-50/70 text-amber-700",
+    iconTone: "bg-amber-100 text-amber-700",
+    helper: "Overdue and due today",
+  },
+  "Lead Conversion Rate": {
+    icon: Award,
+    accent: "border-violet-200 bg-violet-50/70 text-violet-700",
+    iconTone: "bg-violet-100 text-violet-700",
+    helper: "Won vs total leads",
+  },
+  "Total Rewards": {
+    icon: Trophy,
+    accent: "border-rose-200 bg-rose-50/70 text-rose-700",
+    iconTone: "bg-rose-100 text-rose-700",
+    helper: "Distributed reward points",
+  },
+} as const;
+
+const adminQuickActions = [
+  { label: "Add Lead", href: "/admin/leads", icon: Target, accent: "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100" },
+  { label: "Add Customer", href: "/admin/customers", icon: BriefcaseBusiness, accent: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100" },
+  { label: "Add Follow-up", href: "/admin/follow-ups", icon: PhoneForwarded, accent: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100" },
+  { label: "Generate Report", href: "/admin/reports", icon: FileBarChart, accent: "border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100" },
+] as const;
+
+function adminActivityVisual(category?: CrmWorkspace["activities"][number]["category"]) {
+  switch (category) {
+    case "CALL":
+      return { icon: PhoneCall, badge: "warning" as const, tone: "bg-amber-100 text-amber-700" };
+    case "WHATSAPP":
+      return { icon: MessageCircleMore, badge: "success" as const, tone: "bg-emerald-100 text-emerald-700" };
+    case "EMAIL":
+      return { icon: Mail, badge: "default" as const, tone: "bg-blue-100 text-blue-700" };
+    case "MEETING":
+      return { icon: CalendarClock, badge: "violet" as const, tone: "bg-violet-100 text-violet-700" };
+    case "FOLLOW_UP":
+      return { icon: PhoneForwarded, badge: "warning" as const, tone: "bg-orange-100 text-orange-700" };
+    case "LEAD":
+      return { icon: Target, badge: "default" as const, tone: "bg-cyan-100 text-cyan-700" };
+    case "QUOTATION":
+      return { icon: WalletCards, badge: "neutral" as const, tone: "bg-slate-100 text-slate-700" };
+    default:
+      return { icon: CheckCircle2, badge: "neutral" as const, tone: "bg-slate-100 text-slate-700" };
+  }
+}
+
+function AdminKpiGrid({ items }: { items: { title: keyof typeof adminKpiConfig; value: string; helper: string }[] }) {
+  return (
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+      {items.map((item, index) => {
+        const config = adminKpiConfig[item.title];
+        const Icon = config.icon;
+
+        return (
+          <motion.div
+            key={item.title}
+            data-admin-kpi
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.24, delay: index * 0.03, ease: "easeOut" }}
+            whileHover={{ y: -2 }}
+            className="h-full"
+          >
+            <Card className="h-full rounded-[18px] border border-slate-200/80 bg-white p-4 shadow-[0_14px_32px_rgba(15,23,42,0.06)]">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className={cn("inline-flex rounded-full border px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.12em]", config.accent)}>
+                    {item.title}
+                  </div>
+                  <p className="mt-4 text-[2rem] font-black leading-none tracking-[-0.03em] text-slate-950">{item.value}</p>
+                  <p className="mt-2 text-sm text-slate-500">{item.helper || config.helper}</p>
+                </div>
+                <div className={cn("flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl", config.iconTone)}>
+                  <Icon className="h-5 w-5" />
+                </div>
+              </div>
+            </Card>
+          </motion.div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AdminSalesPanel({ data }: { data: Array<{ month: string; sales: number }> }) {
+  const hasData = data.some((item) => item.sales > 0);
 
   return (
-    <>
+    <SupervisorSurfaceCard
+      title="Sales Performance"
+      subtitle="Quotation value and sales momentum across the current period."
+      action={<SupervisorHeaderAction>Current Month</SupervisorHeaderAction>}
+      className="h-full"
+      contentClassName="min-h-[360px] p-5"
+    >
+      {hasData ? (
+        <div className="h-[300px]">
+          <SalesLineChart data={data} />
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={WalletCards}
+          title="No sales trend data available"
+          description="Create quotations and close deals to view analytics."
+          className="min-h-[300px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function AdminLeadStatusPanel({ totalLeads, data }: { totalLeads: number; data: Array<{ name: string; value: number; color: string }> }) {
+  const hasData = data.some((item) => item.value > 0);
+
+  return (
+    <SupervisorSurfaceCard
+      title="Lead Status Distribution"
+      subtitle="A clean snapshot of current pipeline movement across all lead stages."
+      className="h-full"
+      contentClassName="min-h-[360px] p-5"
+    >
+      {hasData ? (
+        <div className="h-full">
+          <LeadStatusDonut total={totalLeads} data={data} detailedLegend />
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={Target}
+          title="No lead status data available"
+          description="Create and update leads to visualize their pipeline distribution here."
+          className="min-h-[300px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
+  return (
+    <SupervisorSurfaceCard
+      title="Team Performance"
+      subtitle="Monitor execution quality across roles without forcing extra scrolling."
+      action={<Badge variant="neutral">{rows.length} Team Members</Badge>}
+      className="h-full"
+    >
+      <div className="overflow-x-auto">
+        <table className="min-w-[1180px] w-full text-sm">
+          <thead className="text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
+            <tr>
+              {["Employee", "Role", "Leads", "Calls", "WhatsApp", "Emails", "Follow-ups", "Pending Tasks", "Overdue Follow-ups", "Conversion", "Performance Score"].map((heading) => (
+                <th key={heading} className="px-3 py-3 font-black">{heading}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.length ? rows.map((row) => (
+              <tr key={row.id} className="transition hover:bg-slate-50/70">
+                <td className="px-3 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-950 text-xs font-black text-white">
+                      {initials(row.name)}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate font-black text-slate-950">{row.name}</p>
+                      <p className="truncate text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.email}</p>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-3 py-4">
+                  <Badge variant={row.roleKey === "ADMIN" ? "danger" : row.roleKey === "SUPERVISOR" ? "violet" : "default"}>{row.role}</Badge>
+                </td>
+                <td className="px-3 py-4 font-semibold text-slate-700">{row.leads}</td>
+                <td className="px-3 py-4 font-semibold text-slate-700">{row.calls}</td>
+                <td className="px-3 py-4 font-semibold text-slate-700">{row.whatsapp}</td>
+                <td className="px-3 py-4 font-semibold text-slate-700">{row.emails}</td>
+                <td className="px-3 py-4 font-semibold text-slate-700">{row.followUps}</td>
+                <td className="px-3 py-4 font-semibold text-slate-700">{row.pendingTasks}</td>
+                <td className="px-3 py-4 font-semibold text-slate-700">{row.overdueFollowUps}</td>
+                <td className="px-3 py-4 font-semibold text-slate-700">{row.conversionRate}</td>
+                <td className="px-3 py-4">
+                  <div className="min-w-[156px]">
+                    <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
+                      <span>Score</span>
+                      <span>{row.performanceScore}%</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                      <div className={cn("h-full rounded-full", performanceScoreVariant(row.performanceScore))} style={{ width: `${row.performanceScore}%` }} />
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            )) : (
+              <tr>
+                <td colSpan={11} className="px-3 py-10">
+                  <SupervisorEmptyState
+                    icon={Users}
+                    title="No team members available"
+                    description="User activity and productivity metrics will appear here when your CRM team starts using the system."
+                  />
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </SupervisorSurfaceCard>
+  );
+}
+
+function AdminQuickActionsPanel() {
+  return (
+    <SupervisorSurfaceCard title="Quick Actions" className="h-full">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {adminQuickActions.map((item) => {
+          const Icon = item.icon;
+          return (
+            <Link key={item.label} href={item.href} className={cn("flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-bold transition", item.accent)}>
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white shadow-sm">
+                <Icon className="h-5 w-5" />
+              </span>
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
+      </div>
+    </SupervisorSurfaceCard>
+  );
+}
+
+function AdminSystemSummaryPanel({
+  users,
+  customers,
+  leads,
+  rewards,
+}: {
+  users: string;
+  customers: string;
+  leads: string;
+  rewards: string;
+}) {
+  const items = [
+    { label: "Users", value: users },
+    { label: "Customers", value: customers },
+    { label: "Leads", value: leads },
+    { label: "Rewards", value: rewards },
+  ];
+
+  return (
+    <SupervisorSurfaceCard title="System Monitoring Summary" className="h-full">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {items.map((item) => (
+          <div key={item.label} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 shadow-sm">
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-400">{item.label}</p>
+            <p className="mt-3 text-2xl font-black text-slate-950">{item.value}</p>
+          </div>
+        ))}
+      </div>
+    </SupervisorSurfaceCard>
+  );
+}
+
+function AdminProductIntelligencePanel({ workspace }: { workspace: CrmWorkspace }) {
+  const panels = [
+    {
+      title: "Top 5 Most Engaged Products",
+      rows: workspace.productIntelligence.topEngaged,
+      badgeVariant: "default" as const,
+      metric: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.engagementScore} score`,
+      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.leadCount} leads - ${item.followUpCount} follow-ups - ${item.quotationCount} quotes`,
+    },
+    {
+      title: "Highest Conversion Products",
+      rows: workspace.productIntelligence.highestConversion,
+      badgeVariant: "success" as const,
+      metric: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.conversionRate}% conversion`,
+      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.salesCount} sales - ${item.quotationCount} quotations`,
+    },
+    {
+      title: "Most Discussed Products",
+      rows: workspace.productIntelligence.mostDiscussed,
+      badgeVariant: "warning" as const,
+      metric: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.communicationCount} discussions`,
+      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.leadCount} companies - ${item.followUpCount} follow-ups`,
+    },
+  ] as const;
+
+  return (
+    <SupervisorSurfaceCard title="Product Intelligence" subtitle="The most valuable product signals from communication, quotation, and sales activity.">
+      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+        {panels.map((panel) => (
+          <div key={panel.title} className="rounded-[20px] border border-slate-200 bg-slate-50/70 p-4 shadow-sm">
+            <h3 className="text-sm font-black text-slate-950">{panel.title}</h3>
+            {panel.rows.length ? (
+              <div className="mt-4 space-y-3">
+                {panel.rows.slice(0, 5).map((item, index) => (
+                  <Link key={`${panel.title}-${item.id}`} href={`/products/${item.id}`} className="flex items-start justify-between gap-3 rounded-[16px] border border-slate-200 bg-white px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-blue-700">{index + 1}. {item.name}</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">{panel.description(item)}</p>
+                    </div>
+                    <Badge variant={panel.badgeVariant} className="shrink-0">{panel.metric(item)}</Badge>
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <SupervisorEmptyState
+                icon={BriefcaseBusiness}
+                title="No product intelligence yet"
+                description="Product engagement rankings will appear once your CRM has enough activity data."
+                className="mt-4 min-h-[240px]"
+              />
+            )}
+          </div>
+        ))}
+      </div>
+    </SupervisorSurfaceCard>
+  );
+}
+
+function AdminRecentActivitiesPanel({ rows }: { rows: CrmWorkspace["activities"] }) {
+  const recentRows = rows.slice(0, 10);
+
+  return (
+    <SupervisorSurfaceCard
+      title="Recent Activities"
+      subtitle="Only the latest 10 records are shown here to keep the dashboard focused."
+      action={<SupervisorHeaderAction href={rolePath("ADMIN", "communication")}>View All Activities</SupervisorHeaderAction>}
+      className="h-full"
+    >
+      {recentRows.length ? (
+        <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
+          {recentRows.map((item) => {
+            const visual = adminActivityVisual(item.category);
+            const Icon = visual.icon;
+            const customerLabel = item.customerName ?? item.detail.split("·")[0]?.trim() ?? "CRM record";
+            const employeeLabel = item.employeeName ?? item.createdBy ?? item.detail.split("·")[1]?.trim() ?? "System";
+
+            return (
+              <div key={item.id} className="rounded-[18px] border border-slate-200 bg-slate-50/80 p-4 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl", visual.tone)}>
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <p className="min-w-0 truncate text-sm font-black text-slate-950">
+                        <EntityLink href={item.href} className="font-black">{item.title}</EntityLink>
+                      </p>
+                      <Badge variant={visual.badge}>{item.badgeLabel ?? item.category ?? "Activity"}</Badge>
+                    </div>
+                    <div className="mt-2 grid gap-1 text-xs text-slate-500">
+                      <p className="truncate"><span className="font-semibold text-slate-700">Customer:</span> {customerLabel}</p>
+                      <p className="truncate"><span className="font-semibold text-slate-700">User:</span> {employeeLabel}</p>
+                      <p className="truncate"><span className="font-semibold text-slate-700">Date/Time:</span> {item.dateLabel ?? item.time} {item.timeLabel ?? ""}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={Clock3}
+          title="No recent activity available"
+          description="Communication, follow-up, and operational events will appear here automatically."
+          className="min-h-[320px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
+export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
+  const dashboardRef = React.useRef<HTMLDivElement | null>(null);
+  const charts = chartData(workspace);
+  const adminStats = React.useMemo(() => {
+    const statMap = new Map(workspace.stats.map((item) => [item.title, item]));
+    const rewardTotal = statMap.get("Reward Points")?.value ?? String(workspace.employees.reduce((sum, row) => sum + row.rewardPoints, 0));
+    const conversionRate = statMap.get("Lead Conversion")?.value ?? `${workspace.leads.length ? Math.round((workspace.leads.filter((lead) => lead.status === "Won Sale").length / workspace.leads.length) * 100) : 0}%`;
+
+    return [
+      { title: "Total Users" as const, value: statMap.get("Total Users")?.value ?? String(workspace.employees.length), helper: "System users" },
+      { title: "Total Customers" as const, value: statMap.get("Total Customers")?.value ?? String(workspace.companies.length), helper: "Active companies" },
+      { title: "Total Leads" as const, value: statMap.get("Total Leads")?.value ?? String(workspace.leads.length), helper: "All pipeline" },
+      { title: "Total Products" as const, value: String(workspace.products.length), helper: "Available products" },
+      { title: "Follow-ups Due" as const, value: String(workspace.followUpSummary.overdue + workspace.followUpSummary.today), helper: "Today and overdue" },
+      { title: "Lead Conversion Rate" as const, value: conversionRate, helper: "Won vs leads" },
+      { title: "Total Rewards" as const, value: rewardTotal, helper: "Distributed rewards" },
+    ];
+  }, [workspace]);
+  const adminTeamRows = React.useMemo<AdminPerformanceRow[]>(() => {
+    const emailCountByEmployee = new Map<string, number>();
+    for (const item of workspace.activities) {
+      if (item.category !== "EMAIL") continue;
+      const key = item.employeeId ?? item.employeeName ?? "";
+      if (!key) continue;
+      emailCountByEmployee.set(key, (emailCountByEmployee.get(key) ?? 0) + 1);
+    }
+
+    const rowsWithRaw = workspace.employees.map((row) => {
+      const emails = emailCountByEmployee.get(row.id) ?? emailCountByEmployee.get(row.name) ?? 0;
+      const numericConversion = Number.parseInt(row.conversionRate.replace(/\D/g, ""), 10) || 0;
+      const performanceScoreRaw =
+        row.sales * 30 +
+        row.leads * 8 +
+        row.calls * 4 +
+        row.whatsapp * 4 +
+        emails * 4 +
+        row.followUps * 5 +
+        numericConversion * 2 -
+        row.pendingTasks * 2 -
+        row.overdueFollowUps * 8;
+
+      return {
+        ...row,
+        emails,
+        performanceScoreRaw,
+        performanceScore: 0,
+      };
+    });
+
+    const highestRaw = Math.max(1, ...rowsWithRaw.map((row) => Math.max(row.performanceScoreRaw, 0)));
+
+    return rowsWithRaw
+      .map((row) => ({
+        ...row,
+        performanceScore: Math.max(0, Math.min(100, Math.round((Math.max(row.performanceScoreRaw, 0) / highestRaw) * 100))),
+      }))
+      .sort((left, right) => right.performanceScore - left.performanceScore || right.sales - left.sales || right.leads - left.leads);
+  }, [workspace.activities, workspace.employees]);
+
+  React.useEffect(() => {
+    if (!dashboardRef.current) return;
+
+    const context = gsap.context(() => {
+      gsap.fromTo(
+        "[data-admin-kpi]",
+        { autoAlpha: 0, y: 16 },
+        { autoAlpha: 1, y: 0, duration: 0.45, stagger: 0.05, ease: "power2.out" },
+      );
+      gsap.fromTo(
+        "[data-admin-section]",
+        { autoAlpha: 0, y: 24 },
+        { autoAlpha: 1, y: 0, duration: 0.5, stagger: 0.08, delay: 0.12, ease: "power2.out" },
+      );
+    }, dashboardRef);
+
+    return () => context.revert();
+  }, []);
+
+  return (
+    <div ref={dashboardRef} className="space-y-6">
       <PageHeader
         eyebrow="Admin Dashboard"
-        title="Business control center"
-        description="A complete view of customers, leads, revenue, team activity, rewards, and CRM system health."
-        actions={<Badge variant="neutral">Live Database</Badge>}
+        title="Business Control Center"
+        description="Monitor CRM performance, team activity, leads, customers, follow-ups, rewards, and system health from one executive dashboard."
+        actions={<SupervisorHeaderAction>Current Month</SupervisorHeaderAction>}
       />
-      <StatsGrid items={workspace.stats} />
 
-      <div className="grid gap-5 xl:grid-cols-[1.2fr_0.9fr]">
-        <ChartCard title="Sales Performance" className="min-h-80">
-          <SalesLineChart data={charts.sales} />
-        </ChartCard>
-        <ChartCard title="Lead Conversion Funnel" className="min-h-80">
-          <ConversionFunnel data={charts.funnel} />
-        </ChartCard>
+      <AdminKpiGrid items={adminStats} />
+
+      <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]" data-admin-section>
+        <AdminSalesPanel data={charts.sales} />
+        <AdminLeadStatusPanel totalLeads={workspace.leads.length} data={charts.leadStatus} />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-3">
-        <ChartCard title="Team Activity Overview">
-          <TeamActivityDonut />
-        </ChartCard>
-        <DashboardCard title="Employee Productivity" className="xl:col-span-2">
-          <TeamPerformanceTable workspace={workspace} />
-        </DashboardCard>
+      <div data-admin-section>
+        <AdminTeamPerformancePanel rows={adminTeamRows} />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1fr_0.85fr]">
-        <DashboardCard title="Quick Access">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {quickActions.map(([label, path, Icon]) => (
-              <Link key={label} href={`/admin/${path}`} className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left text-sm font-bold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-                  <Icon className="h-5 w-5" />
-                </span>
-                {label}
-              </Link>
-            ))}
-          </div>
-        </DashboardCard>
-        <DashboardCard title="System Monitoring Summary">
-          <div className="grid gap-3 sm:grid-cols-2">
-            {workspace.systemSummary.map((item) => (
-              <Card key={item.label} className="p-4">
-                <p className="text-xs font-semibold text-slate-500">{item.label}</p>
-                <p className="mt-2 text-xl font-black text-slate-950">{item.value}</p>
-              </Card>
-            ))}
-          </div>
-        </DashboardCard>
+      <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]" data-admin-section>
+        <AdminQuickActionsPanel />
+        <AdminSystemSummaryPanel
+          users={adminStats[0]?.value ?? "0"}
+          customers={adminStats[1]?.value ?? "0"}
+          leads={adminStats[2]?.value ?? "0"}
+          rewards={adminStats[6]?.value ?? "0"}
+        />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <ChartCard title="Lead Status Distribution">
-          <LeadStatusDonut total={workspace.leads.length} data={charts.leadStatus} />
-        </ChartCard>
-        <DashboardCard title="Recent Activities">
-          <CompactList rows={workspace.activities.map((item) => ({ title: item.title, href: item.href, meta: `${item.detail} - ${item.time}` }))} />
-        </DashboardCard>
+      <div className="grid gap-6 xl:grid-cols-[1.45fr_1fr]" data-admin-section>
+        <AdminProductIntelligencePanel workspace={workspace} />
+        <AdminRecentActivitiesPanel rows={workspace.activities} />
       </div>
-      <ProductIntelligenceWidget workspace={workspace} />
-    </>
+    </div>
   );
 }
 

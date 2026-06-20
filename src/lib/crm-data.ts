@@ -1705,18 +1705,23 @@ async function getScopedUserIds(role: Role, user: ShellUser) {
   return [user.id, ...team.map((member) => member.id)];
 }
 
+function getLeadScopedUserIds() {
+  return undefined;
+}
+
 export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmWorkspace> {
   const prisma = getPrisma();
   await ensureCrmFoundation();
   const scopedUserIds = await getScopedUserIds(role, user);
+  const scopedLeadUserIds = getLeadScopedUserIds();
   const today = startOfDay(new Date());
   const tomorrow = addDays(today, 1);
 
-  const leadWhere = scopedUserIds
+  const leadWhere = scopedLeadUserIds
     ? {
         OR: [
-          { assignedToId: { in: scopedUserIds } },
-          { createdById: { in: scopedUserIds } },
+          { assignedToId: { in: scopedLeadUserIds } },
+          { createdById: { in: scopedLeadUserIds } },
         ],
       }
     : {};
