@@ -1785,7 +1785,6 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
         right.followUps - left.followUps
       ));
   }, [workspace.employees]);
-  const leadStatusData = React.useMemo(() => buildSupervisorLeadStatusDataV2(workspace), [workspace]);
   const pendingFollowUps = React.useMemo(() => {
     const bucketRank: Record<string, number> = {
       Overdue: 0,
@@ -1830,9 +1829,8 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
 
       <SupervisorKpiGrid items={supervisorStats} />
 
-      <div className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]" data-supervisor-section>
+      <div data-supervisor-section>
         <SupervisorTeamPerformancePanelV2 rows={performanceRows} />
-        <SupervisorLeadStatusPanelV2 totalLeads={workspace.leads.length} data={leadStatusData} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.45fr_0.88fr_1fr]" data-supervisor-section>
