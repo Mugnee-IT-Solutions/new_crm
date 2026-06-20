@@ -31,7 +31,7 @@ import {
   WalletCards,
   Trash2,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -55,12 +55,14 @@ import {
   createFollowUpAction,
   createImportExportLogAction,
   createLeadAction,
-  createReportLogAction,
   createTaskAction,
   createUserAction,
+  deleteUserAction,
   giveManualRewardAction,
+  logCustomerCommunicationShortcutAction,
   markNotificationReadAction,
   saveSettingsAction,
+  updateUserAction,
   updateFollowUpStatusAction,
 } from "@/lib/crm-actions";
 import type {
@@ -77,6 +79,7 @@ import type {
   TaskRow,
 } from "@/lib/crm-data";
 import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
+import { DATE_PRESET_OPTIONS, REPORT_DEFINITIONS, type ReportFormat, type ReportTypeKey } from "@/lib/report-definitions";
 import { cn, formatCurrency, initials, rolePath, type Role } from "@/lib/utils";
 
 type ActionResult = { ok?: boolean; message?: string; [key: string]: unknown } | unknown;
@@ -469,6 +472,7 @@ function ActionForm({
   children,
   onDone,
   onSuccess,
+  onFailure,
   submitLabel = "Save",
   className,
   bodyClassName,
@@ -480,6 +484,7 @@ function ActionForm({
   children: React.ReactNode;
   onDone?: () => void;
   onSuccess?: (result: ActionResult, formData: FormData) => void;
+  onFailure?: (message: string) => void;
   submitLabel?: string;
   className?: string;
   bodyClassName?: string;
@@ -502,7 +507,9 @@ function ActionForm({
           try {
             const result = await action(formData);
             if (typeof result === "object" && result && "ok" in result && result.ok === false) {
-              setMessage("message" in result && typeof result.message === "string" ? result.message : "Action failed.");
+              const nextMessage = "message" in result && typeof result.message === "string" ? result.message : "Action failed.";
+              setMessage(nextMessage);
+              onFailure?.(nextMessage);
               return;
             }
             if (resetOnSuccess) {
@@ -515,7 +522,9 @@ function ActionForm({
             }
             onDone?.();
           } catch (error) {
-            setMessage(error instanceof Error ? error.message : "Action failed.");
+            const nextMessage = error instanceof Error ? error.message : "Action failed.";
+            setMessage(nextMessage);
+            onFailure?.(nextMessage);
           }
         });
       }}
@@ -546,6 +555,205 @@ function RowActions({ detailHref }: { detailHref?: string }) {
         <MoreHorizontal className="h-4 w-4" />
       </Button>
     </div>
+  );
+}
+
+type UserFeedback = { type: "success" | "error"; message: string } | null;
+
+function FloatingFeedback({ feedback }: { feedback: UserFeedback }) {
+  return (
+    <AnimatePresence>
+      {feedback ? (
+        <motion.div
+          key={`${feedback.type}-${feedback.message}`}
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 12 }}
+          transition={{ duration: 0.18 }}
+          className="fixed right-4 top-4 z-[80] max-w-sm rounded-2xl border px-4 py-3 shadow-xl"
+        >
+          <div
+            className={cn(
+              "rounded-xl px-4 py-3 text-sm font-semibold",
+              feedback.type === "success"
+                ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                : "border border-red-200 bg-red-50 text-red-700",
+            )}
+          >
+            {feedback.message}
+          </div>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
+  );
+}
+
+function UserRowActions({
+  canEdit,
+  canDelete,
+  onEdit,
+  onDelete,
+}: {
+  canEdit: boolean;
+  canDelete: boolean;
+  onEdit?: () => void;
+  onDelete?: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-end gap-1">
+      {canEdit ? (
+        <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-slate-500 transition duration-150 hover:scale-110 hover:bg-slate-100 hover:text-slate-900" onClick={onEdit} aria-label="Edit user">
+          <Edit className="h-4 w-4" />
+        </Button>
+      ) : null}
+      {canDelete ? (
+        <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-600 transition duration-150 hover:scale-110 hover:bg-red-50 hover:text-red-700" onClick={onDelete} aria-label="Delete user">
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      ) : null}
+      {!canEdit && !canDelete ? <span className="text-xs font-semibold text-slate-400">No actions</span> : null}
+    </div>
+  );
+}
+
+function UserForm({
+  employees,
+  viewerRole,
+  mode,
+  user,
+  onDone,
+  onSuccess,
+  onFailure,
+  forcedRole,
+}: {
+  employees: CrmWorkspace["employees"];
+  viewerRole: Role;
+  mode: "create" | "edit";
+  user?: CrmWorkspace["employees"][number] | null;
+  onDone: () => void;
+  onSuccess: (row: CrmWorkspace["employees"][number], mode: "create" | "edit") => void;
+  onFailure: (message: string) => void;
+  forcedRole?: Role;
+}) {
+  const defaultRole = forcedRole ?? user?.roleKey ?? "MARKETER";
+  const [roleValue, setRoleValue] = React.useState<Role>(defaultRole);
+
+  React.useEffect(() => {
+    setRoleValue(forcedRole ?? user?.roleKey ?? "MARKETER");
+  }, [forcedRole, user]);
+
+  const supervisorOptions = React.useMemo(
+    () => employees.filter((item) => item.roleKey === "SUPERVISOR"),
+    [employees],
+  );
+
+  const roleOptions = React.useMemo(() => {
+    if (viewerRole === "SUPERVISOR") {
+      return [{ value: "MARKETER" as Role, label: "Marketer" }];
+    }
+
+    if (mode === "edit" && user?.roleKey === "ADMIN") {
+      return [
+        { value: "ADMIN" as Role, label: "Admin" },
+        { value: "SUPERVISOR" as Role, label: "Supervisor" },
+        { value: "MARKETER" as Role, label: "Marketer" },
+      ];
+    }
+
+    return [
+      { value: "MARKETER" as Role, label: "Marketer" },
+      { value: "SUPERVISOR" as Role, label: "Supervisor" },
+    ];
+  }, [mode, user, viewerRole]);
+
+  return (
+    <ActionForm
+      action={mode === "create" ? createUserAction : updateUserAction}
+      submitLabel={mode === "create" ? (forcedRole === "MARKETER" ? "Create Marketer" : "Create User") : "Update User"}
+      onDone={onDone}
+      refreshOnSuccess={false}
+      onFailure={onFailure}
+      onSuccess={(result) => {
+        if (typeof result === "object" && result && "row" in result && result.row) {
+          onSuccess(result.row as CrmWorkspace["employees"][number], mode);
+        }
+      }}
+    >
+      {mode === "edit" && user ? <input type="hidden" name="userId" value={user.id} /> : null}
+      <TextField label="Full Name" name="name" required defaultValue={user?.name ?? ""} />
+      <TextField label="Email" name="email" type="email" required defaultValue={user?.email === "-" ? "" : user?.email ?? ""} />
+      <TextField label="Mobile Number (Optional)" name="mobile" defaultValue={user?.mobile === "-" ? "" : user?.mobile ?? ""} />
+      <TextField label="Designation" name="designation" defaultValue={user?.designation === "-" ? "" : user?.designation ?? (forcedRole === "MARKETER" ? "Sales Marketer" : "")} />
+      <div className={cn("grid gap-3", mode === "edit" ? "md:grid-cols-2" : undefined)}>
+        {viewerRole === "SUPERVISOR" ? (
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold uppercase text-slate-500">Role</span>
+            <Input value="Marketer" readOnly className="bg-slate-100 text-slate-500" />
+            <input type="hidden" name="role" value="MARKETER" />
+          </label>
+        ) : (
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold uppercase text-slate-500">Role</span>
+            <select
+              name="role"
+              value={roleValue}
+              onChange={(event) => setRoleValue(event.target.value as Role)}
+              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+            >
+              {roleOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+        )}
+        {mode === "edit" ? (
+          <SelectBox label="Status" name="status" defaultValue={user?.statusKey ?? "ACTIVE"}>
+            <option value="ACTIVE">Active</option>
+            <option value="INACTIVE">Inactive</option>
+          </SelectBox>
+        ) : (
+          <input type="hidden" name="status" value="ACTIVE" />
+        )}
+      </div>
+      {viewerRole === "ADMIN" && roleValue === "MARKETER" ? (
+        <SelectBox label="Supervisor" name="supervisorId" defaultValue={user?.supervisorId ?? ""}>
+          <option value="">Select</option>
+          {supervisorOptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </SelectBox>
+      ) : null}
+    </ActionForm>
+  );
+}
+
+function DeleteUserPanel({
+  user,
+  onDone,
+  onSuccess,
+  onFailure,
+}: {
+  user: CrmWorkspace["employees"][number];
+  onDone: () => void;
+  onSuccess: (id: string) => void;
+  onFailure: (message: string) => void;
+}) {
+  return (
+    <ActionForm
+      action={deleteUserAction}
+      submitLabel="Delete User"
+      onDone={onDone}
+      onFailure={onFailure}
+      onSuccess={(result) => {
+        if (typeof result === "object" && result && "id" in result && typeof result.id === "string") {
+          onSuccess(result.id);
+        }
+      }}
+      refreshOnSuccess={false}
+      resetOnSuccess={false}
+      className="space-y-4"
+    >
+      <input type="hidden" name="userId" value={user.id} />
+      <p className="text-sm text-slate-700">
+        Are you sure you want to delete <span className="font-black">{user.name}</span>?
+      </p>
+    </ActionForm>
   );
 }
 
@@ -685,6 +893,46 @@ function parseTemplateRawData(rawData: CompanyRow["rawData"] | string | unknown)
   return {};
 }
 
+type CustomerCommunicationShortcutMethod = "CALL" | "WHATSAPP" | "EMAIL";
+
+function cleanCustomerContactValue(value?: string | null) {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim();
+  return normalized && normalized !== "-" ? normalized : "";
+}
+
+function normalizeDialPhone(value?: string | null) {
+  const raw = cleanCustomerContactValue(value);
+  if (!raw) return null;
+
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length < 7 || digits.length > 15) return null;
+
+  if (raw.startsWith("+") || digits.startsWith("880")) {
+    return `+${digits}`;
+  }
+
+  if (digits.length === 11 && digits.startsWith("0")) {
+    return `+88${digits}`;
+  }
+
+  return digits;
+}
+
+function normalizeWhatsAppPhone(value?: string | null) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function normalizeEmailAddress(value?: string | null) {
+  const email = cleanCustomerContactValue(value).toLowerCase();
+  if (!email) return null;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
+}
+
+function prependUniqueById<T extends { id: string }>(rows: T[], nextRow: T) {
+  return rows.some((row) => row.id === nextRow.id) ? rows : [nextRow, ...rows];
+}
+
 function Timeline({ rows }: { rows: CrmWorkspace["activities"] }) {
   return (
     <div className="space-y-4">
@@ -746,23 +994,38 @@ function FollowUpHistoryList({ rows }: { rows: FollowUpRow[] }) {
 function CommunicationHistoryList({ rows }: { rows: CommunicationHistoryRow[] }) {
   return rows.length ? (
     <div className="space-y-3">
-      {rows.map((item) => (
-        <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <EntityLink href={item.href} className="text-sm font-black text-slate-900">{item.method}</EntityLink>
-            <StatusBadge value={item.outcome} />
+      {rows.map((item) => {
+        const isEmail = item.method.toLowerCase() === "email";
+
+        return (
+          <div key={item.id} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <EntityLink href={item.href} className="text-sm font-black text-slate-900">{item.method}</EntityLink>
+              <StatusBadge value={item.outcome} />
+            </div>
+            <p className="mt-1 text-xs font-semibold text-slate-500">{item.time} - {item.createdBy}</p>
+            {isEmail ? (
+              <>
+                <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold text-slate-500">
+                  {item.fromEmail !== "-" ? <span>From: {item.fromEmail}</span> : null}
+                  {item.toEmail !== "-" ? <span>To: {item.toEmail}</span> : null}
+                </div>
+                {item.subject !== "-" ? <p className="mt-1 text-xs font-semibold text-slate-600">Subject: {item.subject}</p> : null}
+                <p className="mt-1 whitespace-pre-wrap text-xs text-slate-500">{item.summary}</p>
+              </>
+            ) : (
+              <p className="mt-1 text-xs text-slate-500">{item.summary}</p>
+            )}
+            <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold text-slate-500">
+              {!isEmail && item.discussionTopic !== "-" ? <span>Topic: {item.discussionTopic}</span> : null}
+              {!isEmail && item.productDiscussed !== "-" ? <span>Product: {item.productDiscussed}</span> : null}
+              {item.rating !== "-" ? <span>Rating: {item.rating}</span> : null}
+              {item.nextFollowUpDate !== "-" ? <span>Next Follow-up: {item.nextFollowUpDate}</span> : null}
+            </div>
+            {!isEmail && item.notes !== "-" ? <p className="mt-2 text-[11px] text-slate-500">Notes: {item.notes}</p> : null}
           </div>
-          <p className="mt-1 text-xs font-semibold text-slate-500">{item.time} - {item.createdBy}</p>
-          <p className="mt-1 text-xs text-slate-500">{item.summary}</p>
-          <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold text-slate-500">
-            {item.discussionTopic !== "-" ? <span>Topic: {item.discussionTopic}</span> : null}
-            {item.productDiscussed !== "-" ? <span>Product: {item.productDiscussed}</span> : null}
-            {item.rating !== "-" ? <span>Rating: {item.rating}</span> : null}
-            {item.nextFollowUpDate !== "-" ? <span>Next Follow-up: {item.nextFollowUpDate}</span> : null}
-          </div>
-          {item.notes !== "-" ? <p className="mt-2 text-[11px] text-slate-500">Notes: {item.notes}</p> : null}
-        </div>
-      ))}
+        );
+      })}
     </div>
   ) : <EmptyState title="No communication history" description="Task and customer conversation logs will appear here." />;
 }
@@ -2607,7 +2870,17 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   );
 }
 
-export function CustomerProfilePage({ role, workspace, customer, history }: { role: Role; workspace: CrmWorkspace; customer?: CompanyRow; history: CustomerHistory }) {
+export function CustomerProfilePage({
+  role,
+  workspace,
+  customer,
+  history,
+}: {
+  role: Role;
+  workspace: CrmWorkspace;
+  customer?: CompanyRow;
+  history: CustomerHistory;
+}) {
   const active = customer;
   const rawData = React.useMemo<Record<string, unknown>>(() => {
     if (active?.rawData && typeof active.rawData === "object" && !Array.isArray(active.rawData)) {
@@ -2616,13 +2889,130 @@ export function CustomerProfilePage({ role, workspace, customer, history }: { ro
 
     return {};
   }, [active?.rawData]);
-  const [communicationOpen, setCommunicationOpen] = React.useState(false);
+  const [historyState, setHistoryState] = React.useState(history);
   const [followUpOpen, setFollowUpOpen] = React.useState(false);
+  const [feedback, setFeedback] = React.useState<UserFeedback>(null);
+  const [pendingShortcut, setPendingShortcut] = React.useState<CustomerCommunicationShortcutMethod | null>(null);
+
+  React.useEffect(() => {
+    setHistoryState(history);
+  }, [history]);
+
+  React.useEffect(() => {
+    if (!feedback) return undefined;
+    const timer = window.setTimeout(() => setFeedback(null), 2800);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
 
   if (!active) return <EmptyState title="Customer not found" description="The requested customer is not available in your CRM scope." />;
 
+  const callPhone = normalizeDialPhone(active.phone);
+  const whatsappPhone = normalizeWhatsAppPhone(active.whatsapp || active.phone);
+  const shortcutPending = pendingShortcut !== null;
+
+  const callHref = callPhone ? `tel:${callPhone}` : "";
+  const whatsappHref = whatsappPhone
+    ? `https://wa.me/${whatsappPhone}?text=${encodeURIComponent("Hello, this is Mugnee CRM regarding your inquiry.")}`
+    : undefined;
+  const customerEmail = normalizeEmailAddress(active.emailOptions[0] ?? active.email);
+  const gmailComposeHref = customerEmail
+    ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(customerEmail)}`
+    : undefined;
+
+  const appendCommunicationHistory = React.useCallback((result: Awaited<ReturnType<typeof logCustomerCommunicationShortcutAction>>) => {
+    if (!result?.ok || !result.communication || !result.activity) return;
+
+    setHistoryState((current) => ({
+      ...current,
+      communications: prependUniqueById(current.communications, result.communication),
+      activities: prependUniqueById(current.activities, result.activity),
+    }));
+  }, []);
+
+  const logCommunication = React.useCallback((method: CustomerCommunicationShortcutMethod, action: string) => {
+    void logCustomerCommunicationShortcutAction({
+      customerId: active.id,
+      customerName: active.name,
+      method,
+      action,
+    })
+      .then((result) => {
+        if (result?.ok) {
+          appendCommunicationHistory(result);
+          return;
+        }
+
+        if (typeof result?.message === "string") {
+          setFeedback({ type: "error", message: result.message });
+        }
+      })
+      .catch(() => {
+        setFeedback({ type: "error", message: "Failed to save communication history." });
+      });
+  }, [active.id, active.name, appendCommunicationHistory]);
+
+  const handleCommunicationShortcut = React.useCallback(async ({
+    method,
+    href,
+    action,
+  }: {
+    method: CustomerCommunicationShortcutMethod;
+    href: string;
+    action: string;
+  }) => {
+    if (!href || shortcutPending) return;
+    setPendingShortcut(method);
+
+    try {
+      const result = await logCustomerCommunicationShortcutAction({
+        customerId: active.id,
+        customerName: active.name,
+        method,
+        action,
+      });
+
+      if (result?.ok) {
+        appendCommunicationHistory(result);
+      } else if (typeof result?.message === "string") {
+        setFeedback({ type: "error", message: result.message });
+        return;
+      }
+    } catch (error) {
+      console.error("Failed to log customer communication shortcut.", error);
+      setFeedback({ type: "error", message: "Failed to save communication history." });
+      return;
+    } finally {
+      setPendingShortcut(null);
+    }
+
+    window.location.href = href;
+  }, [active.id, active.name, appendCommunicationHistory, shortcutPending]);
+
+  const scheduleWhatsappLog = React.useCallback(() => {
+    window.setTimeout(() => {
+      logCommunication("WHATSAPP", "WhatsApp chat opened from customer details page.");
+    }, 0);
+  }, [logCommunication]);
+
+  const handleInvalidWhatsappClick = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    setFeedback({ type: "error", message: "Valid WhatsApp number not found" });
+  }, []);
+
+  const scheduleEmailComposeLog = React.useCallback(() => {
+    window.setTimeout(() => {
+      logCommunication("EMAIL", "EMAIL_COMPOSE_OPENED");
+    }, 0);
+  }, [logCommunication]);
+
+  const handleInvalidEmailClick = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    setFeedback({ type: "error", message: "Valid customer email not found" });
+  }, []);
+
   return (
     <>
+      <FloatingFeedback feedback={feedback} />
       <Link href={rolePath(role, "customers")} className="inline-flex items-center gap-2 text-sm font-bold text-blue-700">
         <ArrowLeft className="h-4 w-4" />
         Back
@@ -2646,25 +3036,78 @@ export function CustomerProfilePage({ role, workspace, customer, history }: { ro
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-            {([
-              ["Call", Phone],
-              ["WhatsApp", MessageSquare],
-              ["Email", Mail],
-              ["Create Quotation", FileText],
-              ["Schedule Meeting", CalendarClock],
-            ] as const).map(([label, Icon]) => (
-              <Button key={label} variant="outline" size="sm" type="button" onClick={label === "Schedule Meeting" ? () => setFollowUpOpen(true) : label === "Call" ? () => setCommunicationOpen(true) : undefined}>
-                <Icon className="h-4 w-4" />
-                {label}
-              </Button>
-            ))}
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            disabled={!callHref || shortcutPending}
+            onClick={() => void handleCommunicationShortcut({
+              method: "CALL",
+              href: callHref,
+              action: "Call initiated from customer details page.",
+            })}
+          >
+            <Phone className="h-4 w-4" />
+            Call
+          </Button>
+          <motion.span
+            whileHover={whatsappHref && !shortcutPending ? { y: -1 } : undefined}
+            whileTap={whatsappHref && !shortcutPending ? { scale: 0.98 } : undefined}
+            transition={{ duration: 0.14, ease: "easeOut" }}
+            className="inline-flex"
+          >
+            <a
+              href={whatsappHref ?? "#"}
+              target={whatsappHref ? "_blank" : undefined}
+              rel={whatsappHref ? "noopener noreferrer" : undefined}
+              aria-disabled={!whatsappHref}
+              onClick={whatsappHref ? scheduleWhatsappLog : handleInvalidWhatsappClick}
+              className={cn(
+                buttonVariants({ variant: "outline", size: "sm" }),
+                !whatsappHref && "cursor-not-allowed border-slate-200 bg-white text-slate-400 hover:border-slate-200 hover:bg-white hover:text-slate-400",
+                shortcutPending && "pointer-events-none opacity-50",
+              )}
+            >
+              <MessageSquare className="h-4 w-4" />
+              WhatsApp
+            </a>
+          </motion.span>
+          <motion.span
+            whileHover={gmailComposeHref ? { y: -1 } : undefined}
+            whileTap={gmailComposeHref ? { scale: 0.98 } : undefined}
+            transition={{ duration: 0.14, ease: "easeOut" }}
+            className="inline-flex"
+          >
+            <a
+              href={gmailComposeHref ?? "#"}
+              target={gmailComposeHref ? "_blank" : undefined}
+              rel={gmailComposeHref ? "noopener noreferrer" : undefined}
+              aria-disabled={!gmailComposeHref}
+              onClick={gmailComposeHref ? scheduleEmailComposeLog : handleInvalidEmailClick}
+              className={cn(
+                buttonVariants({ variant: "outline", size: "sm" }),
+                !gmailComposeHref && "cursor-not-allowed border-slate-200 bg-white text-slate-400 hover:border-slate-200 hover:bg-white hover:text-slate-400",
+              )}
+            >
+              <Mail className="h-4 w-4" />
+              Email
+            </a>
+          </motion.span>
+          <Button variant="outline" size="sm" type="button">
+            <FileText className="h-4 w-4" />
+            Create Quotation
+          </Button>
+          <Button variant="outline" size="sm" type="button" onClick={() => setFollowUpOpen(true)}>
+            <CalendarClock className="h-4 w-4" />
+            Schedule Meeting
+          </Button>
           </div>
         </div>
       </Card>
 
       <div className="grid gap-4 md:grid-cols-4">
         <StatCard title="Total Leads" value={String(active.totalLeads)} helper="Customer profile" icon={Target} tone="bg-blue-100 text-blue-700" />
-        <StatCard title="Communication" value={String(history.communications.length)} helper="Company activity log" icon={MessageSquare} tone="bg-indigo-100 text-indigo-700" />
+        <StatCard title="Communication" value={String(historyState.communications.length)} helper="Company activity log" icon={MessageSquare} tone="bg-indigo-100 text-indigo-700" />
         <StatCard title="Quotations" value={String(workspace.quotations.filter((item) => item.customer === active.name).length)} helper="Customer quotes" icon={FileText} tone="bg-amber-100 text-amber-700" />
         <StatCard title="Current Progress" value="Active" helper="Sales progress" icon={Check} tone="bg-emerald-100 text-emerald-700" />
       </div>
@@ -2739,39 +3182,36 @@ export function CustomerProfilePage({ role, workspace, customer, history }: { ro
                   </Card>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <InfoLine label="Total Leads" value={active.totalLeads} />
-                    <InfoLine label="Task History" value={history.tasks.length} />
-                    <InfoLine label="Follow-up Records" value={history.followUps.length} />
-                    <InfoLine label="Timeline Activity" value={history.activities.length} />
+                    <InfoLine label="Task History" value={historyState.tasks.length} />
+                    <InfoLine label="Follow-up Records" value={historyState.followUps.length} />
+                    <InfoLine label="Timeline Activity" value={historyState.activities.length} />
                   </div>
                   <DashboardCard title="Task History">
-                    <TaskHistoryList rows={history.tasks} />
+                    <TaskHistoryList rows={historyState.tasks} />
                   </DashboardCard>
                   <DashboardCard title="Follow-up History">
-                    <FollowUpHistoryList rows={history.followUps} />
+                    <FollowUpHistoryList rows={historyState.followUps} />
                   </DashboardCard>
                 </div>
               );
             }
 
             if (value === "timeline") {
-              return <Timeline rows={history.activities} />;
+              return <Timeline rows={historyState.activities} />;
             }
 
             if (value === "communication") {
-              return <CommunicationHistoryList rows={history.communications} />;
+              return <CommunicationHistoryList rows={historyState.communications} />;
             }
 
             if (value === "followups") {
-              return <FollowUpHistoryList rows={history.followUps} />;
+              return <FollowUpHistoryList rows={historyState.followUps} />;
             }
 
-            return <Timeline rows={history.activities} />;
+            return <Timeline rows={historyState.activities} />;
           }}
         </Tabs>
       </Card>
-      <FormModal open={communicationOpen} title="Add Communication / Activity Log" onClose={() => setCommunicationOpen(false)}>
-        <CommunicationForm workspace={workspace} onDone={() => setCommunicationOpen(false)} />
-      </FormModal>
       <FormModal open={followUpOpen} title="Add Follow-up" onClose={() => setFollowUpOpen(false)}>
         <FollowUpForm workspace={workspace} onDone={() => setFollowUpOpen(false)} />
       </FormModal>
@@ -4674,7 +5114,7 @@ export function RewardsPage({ role, workspace }: { role: Role; workspace: CrmWor
       </Card>
 
       <div className="mt-5">
-        <TeamManagementTable workspace={workspace} />
+        <TeamManagementTable workspace={workspace} rows={workspace.employees} viewerRole={role} />
       </div>
 
       <FormModal title="Manual Reward" open={rewardOpen} onClose={() => setRewardOpen(false)}>
@@ -4810,28 +5250,254 @@ export function RewardsPage({ role, workspace }: { role: Role; workspace: CrmWor
 }
 
 export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
-  const reportCards = [
-    ["Customer Communication Report", "CALL history and activity report", "CUSTOMER_COMMUNICATION"],
-    ["Follow-up Report", "Due, overdue, upcoming and completed follow-ups", "FOLLOW_UP"],
-    ["Employee Performance Report", "Team productivity and conversion analytics", "EMPLOYEE_PERFORMANCE"],
-    ["Sales Report", "Revenue and quotation/sale report", "SALES"],
-    ["Reward Report", "Reward point and incentive analytics", "REWARD"],
-    ["Lead Conversion Report", "Pipeline conversion and status movement", "LEAD_CONVERSION"],
-  ] as const;
+  const [feedback, setFeedback] = React.useState<UserFeedback>(null);
+  const [activeExport, setActiveExport] = React.useState<string | null>(null);
+  const [filters, setFilters] = React.useState({
+    datePreset: "month",
+    from: "",
+    to: "",
+    userId: "",
+    customerId: "",
+    leadStatus: "",
+    followUpStatus: "",
+    taskStatus: "",
+    productId: "",
+  });
+
+  React.useEffect(() => {
+    if (!feedback) return undefined;
+    const timer = window.setTimeout(() => setFeedback(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
+
+  const reportHistory = React.useMemo(() => {
+    const reportExports = workspace.importExportLogs
+      .filter((row) => row.module === "Reports")
+      .map((row) => ({
+        ...row,
+        module: row.fileName !== "-" ? row.fileName : row.module,
+      }));
+
+    return [...reportExports, ...workspace.reportLogs];
+  }, [workspace.importExportLogs, workspace.reportLogs]);
+
+  const updateFilter = (key: keyof typeof filters, value: string) => {
+    setFilters((current) => ({ ...current, [key]: value }));
+  };
+
+  const parseFileName = (response: Response, fallback: string) => {
+    const disposition = response.headers.get("content-disposition");
+    const match = disposition?.match(/filename="?([^"]+)"?/i);
+    return match?.[1] ?? fallback;
+  };
+
+  const buildParams = (reportType: ReportTypeKey, format: ReportFormat) => {
+    const params = new URLSearchParams();
+    params.set("reportType", reportType);
+    params.set("format", format);
+    params.set("datePreset", filters.datePreset);
+    if (filters.from) params.set("from", filters.from);
+    if (filters.to) params.set("to", filters.to);
+    if (filters.userId) params.set("userId", filters.userId);
+    if (filters.customerId) params.set("customerId", filters.customerId);
+    if (filters.leadStatus) params.set("leadStatus", filters.leadStatus);
+    if (filters.followUpStatus) params.set("followUpStatus", filters.followUpStatus);
+    if (filters.taskStatus) params.set("taskStatus", filters.taskStatus);
+    if (filters.productId) params.set("productId", filters.productId);
+    return params;
+  };
+
+  const handleExport = async (reportType: ReportTypeKey, format: ReportFormat, title: string) => {
+    const exportKey = `${reportType}-${format}`;
+    setActiveExport(exportKey);
+    setFeedback(null);
+
+    try {
+      const response = await fetch(`/api/reports/export?${buildParams(reportType, format).toString()}`, {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.message ?? "Report export failed.");
+      }
+
+      const fallbackName = `${title}.${format === "print" ? "html" : format}`;
+      const fileName = parseFileName(response, fallbackName);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+
+      if (format === "print") {
+        const popup = window.open(url, "_blank", "noopener,noreferrer");
+        if (!popup) {
+          window.location.href = url;
+        }
+        window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+      } else {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => window.URL.revokeObjectURL(url), 5_000);
+      }
+
+      setFeedback({
+        type: "success",
+        message: format === "print" ? "Printable report opened successfully." : `${title} exported successfully.`,
+      });
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        message: error instanceof Error ? error.message : "Report export failed.",
+      });
+    } finally {
+      setActiveExport(null);
+    }
+  };
+
   return (
     <>
-      <PageHeader title="Reports Center" description="Generate and export customer, follow-up, employee, sales, reward, and conversion reports." />
+      <FloatingFeedback feedback={feedback} />
+      <PageHeader title="Reports Center" description="Generate CRM reports and export filtered data in PDF, Excel, CSV, or print-ready format." />
+      <FilterBar>
+        <label className="space-y-1.5">
+          <span className="text-xs font-bold uppercase text-slate-500">Date Range</span>
+          <select
+            value={filters.datePreset}
+            onChange={(event) => updateFilter("datePreset", event.target.value)}
+            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+          >
+            {DATE_PRESET_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-bold uppercase text-slate-500">Employee</span>
+          <select
+            value={filters.userId}
+            onChange={(event) => updateFilter("userId", event.target.value)}
+            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+          >
+            <option value="">All Employees</option>
+            {workspace.employees.map((employee) => (
+              <option key={employee.id} value={employee.id}>
+                {employee.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-bold uppercase text-slate-500">Customer</span>
+          <select
+            value={filters.customerId}
+            onChange={(event) => updateFilter("customerId", event.target.value)}
+            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+          >
+            <option value="">All Customers</option>
+            {workspace.companies.map((company) => (
+              <option key={company.id} value={company.id}>
+                {company.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-bold uppercase text-slate-500">Lead Status</span>
+          <select
+            value={filters.leadStatus}
+            onChange={(event) => updateFilter("leadStatus", event.target.value)}
+            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+          >
+            <option value="">All Lead Status</option>
+            {["NEW_LEAD", "CONTACTED", "INTERESTED", "FOLLOW_UP_REQUIRED", "QUOTATION_SENT", "NEGOTIATION", "WON_SALE", "LOST_SALE", "ON_HOLD"].map((status) => (
+              <option key={status} value={status}>
+                {status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-bold uppercase text-slate-500">Follow-up Status</span>
+          <select
+            value={filters.followUpStatus}
+            onChange={(event) => updateFilter("followUpStatus", event.target.value)}
+            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+          >
+            <option value="">All Follow-up Status</option>
+            {["DUE", "TODAY", "UPCOMING", "OVERDUE", "COMPLETED"].map((status) => (
+              <option key={status} value={status}>
+                {status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-bold uppercase text-slate-500">Task Status</span>
+          <select
+            value={filters.taskStatus}
+            onChange={(event) => updateFilter("taskStatus", event.target.value)}
+            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+          >
+            <option value="">All Task Status</option>
+            {["TODO", "IN_PROGRESS", "PENDING", "COMPLETED", "OVERDUE"].map((status) => (
+              <option key={status} value={status}>
+                {status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-bold uppercase text-slate-500">Product</span>
+          <select
+            value={filters.productId}
+            onChange={(event) => updateFilter("productId", event.target.value)}
+            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+          >
+            <option value="">All Products</option>
+            {workspace.products.map((product) => (
+              <option key={product.id} value={product.id}>
+                {product.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {filters.datePreset === "custom" ? (
+          <>
+            <label className="space-y-1.5">
+              <span className="text-xs font-bold uppercase text-slate-500">From</span>
+              <Input type="date" value={filters.from} onChange={(event) => updateFilter("from", event.target.value)} />
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-bold uppercase text-slate-500">To</span>
+              <Input type="date" value={filters.to} onChange={(event) => updateFilter("to", event.target.value)} />
+            </label>
+          </>
+        ) : null}
+      </FilterBar>
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        {reportCards.map(([title, description, type]) => (
+        {REPORT_DEFINITIONS.map(({ title, description, type }) => (
           <Card key={title} className="p-5">
             <div className="flex items-start gap-4"><div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700"><FileText className="h-6 w-6" /></div><div><h3 className="font-black text-slate-950">{title}</h3><p className="mt-1 text-sm text-slate-500">{description}</p></div></div>
             <div className="mt-5 grid grid-cols-2 gap-2">
-              {(["PDF", "EXCEL", "CSV", "PRINT"] as const).map((format) => (
-                <form key={format} action={createReportLogAction}>
-                  <input type="hidden" name="reportType" value={type} />
-                  <input type="hidden" name="format" value={format} />
-                  <Button type="submit" variant="outline" size="sm" className="w-full">{format === "PRINT" ? <Printer className="h-4 w-4" /> : <Download className="h-4 w-4" />}{format}</Button>
-                </form>
+              {(["pdf", "xlsx", "csv", "print"] as const).map((format) => (
+                <Button
+                  key={format}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  disabled={activeExport === `${type}-${format}`}
+                  onClick={() => handleExport(type, format, title)}
+                >
+                  {format === "print" ? <Printer className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+                  {activeExport === `${type}-${format}` ? "Loading..." : format.toUpperCase()}
+                </Button>
               ))}
             </div>
           </Card>
@@ -4865,17 +5531,33 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
           </div>
         </div>
       </DashboardCard>
-      <DataTable data={workspace.reportLogs} columns={React.useMemo<ColumnDef<(typeof workspace.reportLogs)[number]>[]>(() => [
-        { accessorKey: "module", header: "Report" },
+      <DataTable data={reportHistory} columns={React.useMemo<ColumnDef<(typeof reportHistory)[number]>[]>(() => [
+        {
+          accessorKey: "module",
+          header: "Report",
+          cell: ({ row }) => <span className="font-bold text-slate-900">{row.original.fileName !== "-" ? row.original.fileName : row.original.module}</span>,
+        },
         { accessorKey: "format", header: "Format" },
         { accessorKey: "status", header: "Status", cell: ({ row }) => <StatusBadge value={row.original.status} /> },
         { accessorKey: "createdAt", header: "Created" },
-      ], [])} searchPlaceholder="Search report logs..." />
+      ], [reportHistory])} searchPlaceholder="Search report logs..." />
     </>
   );
 }
 
-function TeamManagementTable({ workspace }: { workspace: CrmWorkspace }) {
+function TeamManagementTable({
+  workspace,
+  rows,
+  viewerRole,
+  currentUserId,
+  onEdit,
+}: {
+  workspace: CrmWorkspace;
+  rows: CrmWorkspace["employees"];
+  viewerRole: Role;
+  currentUserId?: string;
+  onEdit?: (row: CrmWorkspace["employees"][number]) => void;
+}) {
   const columns = React.useMemo<ColumnDef<(typeof workspace.employees)[number]>[]>(
     () => [
       { accessorKey: "name", header: "Employee Name", cell: ({ row }) => <span className="font-bold text-slate-900">{row.original.name}</span> },
@@ -4885,49 +5567,117 @@ function TeamManagementTable({ workspace }: { workspace: CrmWorkspace }) {
       { accessorKey: "sales", header: "Sales" },
       { accessorKey: "rewardPoints", header: "Reward Points" },
       { accessorKey: "status", header: "Status", cell: ({ row }) => <StatusBadge value={row.original.status} /> },
-      { id: "Action", header: "Action", cell: () => <RowActions /> },
+      {
+        id: "Action",
+        header: "Action",
+        cell: ({ row }) => {
+          const canEdit = viewerRole === "ADMIN"
+            ? true
+            : row.original.roleKey === "MARKETER" && row.original.supervisorId === currentUserId;
+
+          return <UserRowActions canEdit={canEdit && Boolean(onEdit)} canDelete={false} onEdit={onEdit ? () => onEdit(row.original) : undefined} />;
+        },
+      },
     ],
-    [],
+    [currentUserId, onEdit, viewerRole],
   );
 
-  return <DataTable data={workspace.employees} columns={columns} searchPlaceholder="Search employee..." />;
+  return <DataTable data={rows} columns={columns} searchPlaceholder="Search employee..." />;
 }
 
-export function TeamPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
+export function TeamPage({ role, workspace, currentUserId }: { role: Role; workspace: CrmWorkspace; currentUserId?: string }) {
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [editUser, setEditUser] = React.useState<CrmWorkspace["employees"][number] | null>(null);
+  const [feedback, setFeedback] = React.useState<UserFeedback>(null);
+  const [employees, setEmployees] = React.useState<CrmWorkspace["employees"]>(() => workspace.employees);
   const headerActions = role === "ADMIN"
     ? pageActions([{ label: "Add Employee", icon: Plus, variant: "default", href: "/admin/users" }])
     : role === "SUPERVISOR"
       ? pageActions([{ label: "Create Marketer", icon: Plus, variant: "default", onClick: () => setCreateOpen(true) }])
       : undefined;
 
+  React.useEffect(() => {
+    setEmployees(workspace.employees);
+  }, [workspace.employees]);
+
+  React.useEffect(() => {
+    if (!feedback) return undefined;
+    const timer = window.setTimeout(() => setFeedback(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
+
   return (
     <>
+      <FloatingFeedback feedback={feedback} />
       <PageHeader title="Team Management" description="Monitor employees, activity level, sales, and reward performance." actions={headerActions} />
       <div className="grid gap-4 md:grid-cols-4">
-        <StatCard title="Total Employees" value={String(workspace.employees.length)} helper="Team users" icon={UserPlus} tone="bg-blue-100 text-blue-700" />
-        <StatCard title="Active Employees" value={String(workspace.employees.filter((item) => item.status === "Active").length)} helper="Currently active" icon={Check} tone="bg-emerald-100 text-emerald-700" />
-        <StatCard title="Best Performer" value={workspace.employees[0]?.name ?? "-"} helper={`${workspace.employees[0]?.rewardPoints ?? 0} reward points`} icon={WalletCards} tone="bg-amber-100 text-amber-700" />
-        <StatCard title="Low Activity" value={String(workspace.employees.filter((item) => item.leads === 0).length)} helper="Needs coaching" icon={Settings} tone="bg-red-100 text-red-700" />
+        <StatCard title="Total Employees" value={String(employees.length)} helper="Team users" icon={UserPlus} tone="bg-blue-100 text-blue-700" />
+        <StatCard title="Active Employees" value={String(employees.filter((item) => item.statusKey === "ACTIVE").length)} helper="Currently active" icon={Check} tone="bg-emerald-100 text-emerald-700" />
+        <StatCard title="Best Performer" value={employees[0]?.name ?? "-"} helper={`${employees[0]?.rewardPoints ?? 0} reward points`} icon={WalletCards} tone="bg-amber-100 text-amber-700" />
+        <StatCard title="Low Activity" value={String(employees.filter((item) => item.leads === 0).length)} helper="Needs coaching" icon={Settings} tone="bg-red-100 text-red-700" />
       </div>
-      <Card className="p-5"><TeamManagementTable workspace={workspace} /></Card>
+      <Card className="p-5">
+        <TeamManagementTable
+          workspace={workspace}
+          rows={employees}
+          viewerRole={role}
+          currentUserId={currentUserId}
+          onEdit={(row) => setEditUser(row)}
+        />
+      </Card>
       <DetailsDrawer title="Employee Profile" open={drawerOpen} onClose={() => setDrawerOpen(false)}><p className="text-sm text-slate-500">Employee detail drawer is ready for selected employee context.</p></DetailsDrawer>
       <FormModal title="Create Marketer" open={createOpen} onClose={() => setCreateOpen(false)}>
-        <ActionForm action={createUserAction} onDone={() => setCreateOpen(false)} submitLabel="Create Marketer">
-          <input type="hidden" name="role" value="MARKETER" />
-          <TextField label="Full Name" name="name" required />
-          <TextField label="Email" name="email" type="email" required />
-          <TextField label="Mobile Number (Optional)" name="mobile" />
-          <TextField label="Designation" name="designation" defaultValue="Sales Marketer" />
-        </ActionForm>
+        <UserForm
+          employees={employees}
+          viewerRole="SUPERVISOR"
+          mode="create"
+          forcedRole="MARKETER"
+          onDone={() => setCreateOpen(false)}
+          onFailure={(message) => setFeedback({ type: "error", message })}
+          onSuccess={(row) => {
+            setEmployees((current) => [row, ...current]);
+            setFeedback({ type: "success", message: "Marketer created successfully." });
+          }}
+        />
+      </FormModal>
+      <FormModal title="Edit User" open={Boolean(editUser)} onClose={() => setEditUser(null)}>
+        {editUser ? (
+          <UserForm
+            employees={employees}
+            viewerRole={role}
+            mode="edit"
+            user={editUser}
+            onDone={() => setEditUser(null)}
+            onFailure={(message) => setFeedback({ type: "error", message })}
+            onSuccess={(row) => {
+              setEmployees((current) => current.map((item) => (item.id === row.id ? { ...item, ...row } : item)));
+              setFeedback({ type: "success", message: "User updated successfully." });
+            }}
+          />
+        ) : null}
       </FormModal>
     </>
   );
 }
 
-export function UsersPage({ workspace }: { workspace: CrmWorkspace }) {
+export function UsersPage({ workspace, currentUserId }: { workspace: CrmWorkspace; currentUserId?: string }) {
   const [open, setOpen] = React.useState(false);
+  const [editUser, setEditUser] = React.useState<CrmWorkspace["employees"][number] | null>(null);
+  const [deleteUser, setDeleteUser] = React.useState<CrmWorkspace["employees"][number] | null>(null);
+  const [feedback, setFeedback] = React.useState<UserFeedback>(null);
+  const [users, setUsers] = React.useState<CrmWorkspace["employees"]>(() => workspace.employees);
+
+  React.useEffect(() => {
+    setUsers(workspace.employees);
+  }, [workspace.employees]);
+
+  React.useEffect(() => {
+    if (!feedback) return undefined;
+    const timer = window.setTimeout(() => setFeedback(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
+
   const columns = React.useMemo<ColumnDef<(typeof workspace.employees)[number]>[]>(
     () => [
       { accessorKey: "name", header: "Name", cell: ({ row }) => <span className="font-bold text-slate-900">{row.original.name}</span> },
@@ -4935,28 +5685,72 @@ export function UsersPage({ workspace }: { workspace: CrmWorkspace }) {
       { accessorKey: "mobile", header: "Mobile" },
       { accessorKey: "role", header: "Role", cell: ({ row }) => <StatusBadge value={row.original.role} /> },
       { accessorKey: "status", header: "Status", cell: ({ row }) => <StatusBadge value={row.original.status} /> },
-      { id: "Action", header: "Action", cell: () => <RowActions /> },
+      {
+        id: "Action",
+        header: "Action",
+        cell: ({ row }) => (
+          <UserRowActions
+            canEdit
+            canDelete={row.original.id !== currentUserId}
+            onEdit={() => setEditUser(row.original)}
+            onDelete={() => setDeleteUser(row.original)}
+          />
+        ),
+      },
     ],
-    [],
+    [currentUserId],
   );
 
   return (
     <>
+      <FloatingFeedback feedback={feedback} />
       <PageHeader title="Users & Roles" description="Create users, assign roles, and manage permission controls." actions={pageActions([{ label: "Create User", icon: Plus, variant: "default", onClick: () => setOpen(true) }])} />
       <Card className="p-5">
         <Tabs defaultValue="users" tabs={[{ label: "Users", value: "users" }, { label: "Roles", value: "roles" }, { label: "Permissions", value: "permissions" }]}>
-          {(value) => value === "users" ? <DataTable data={workspace.employees} columns={columns} searchPlaceholder="Search user..." /> : <PermissionsPage workspace={workspace} embedded />}
+          {(value) => value === "users" ? <DataTable data={users} columns={columns} searchPlaceholder="Search user..." /> : <PermissionsPage workspace={workspace} embedded />}
         </Tabs>
       </Card>
       <FormModal title="Create User" open={open} onClose={() => setOpen(false)}>
-        <ActionForm action={createUserAction} onDone={() => setOpen(false)} submitLabel="Create User">
-          <TextField label="Full Name" name="name" />
-          <TextField label="Email" name="email" type="email" required />
-          <TextField label="Mobile Number (Optional)" name="mobile" />
-          <TextField label="Designation" name="designation" />
-          <SelectBox label="Role" name="role" defaultValue="MARKETER"><option value="MARKETER">Marketer</option><option value="SUPERVISOR">Supervisor</option></SelectBox>
-          <SelectBox label="Supervisor" name="supervisorId"><EntityOptions workspace={workspace} type="supervisors" /></SelectBox>
-        </ActionForm>
+        <UserForm
+          employees={users}
+          viewerRole="ADMIN"
+          mode="create"
+          onDone={() => setOpen(false)}
+          onFailure={(message) => setFeedback({ type: "error", message })}
+          onSuccess={(row) => {
+            setUsers((current) => [row, ...current]);
+            setFeedback({ type: "success", message: "User created successfully." });
+          }}
+        />
+      </FormModal>
+      <FormModal title="Edit User" open={Boolean(editUser)} onClose={() => setEditUser(null)}>
+        {editUser ? (
+          <UserForm
+            employees={users}
+            viewerRole="ADMIN"
+            mode="edit"
+            user={editUser}
+            onDone={() => setEditUser(null)}
+            onFailure={(message) => setFeedback({ type: "error", message })}
+            onSuccess={(row) => {
+              setUsers((current) => current.map((item) => (item.id === row.id ? { ...item, ...row } : item)));
+              setFeedback({ type: "success", message: "User updated successfully." });
+            }}
+          />
+        ) : null}
+      </FormModal>
+      <FormModal title="Delete User" open={Boolean(deleteUser)} onClose={() => setDeleteUser(null)} panelClassName="max-w-md">
+        {deleteUser ? (
+          <DeleteUserPanel
+            user={deleteUser}
+            onDone={() => setDeleteUser(null)}
+            onFailure={(message) => setFeedback({ type: "error", message })}
+            onSuccess={(id) => {
+              setUsers((current) => current.filter((item) => item.id !== id));
+              setFeedback({ type: "success", message: "User deleted successfully." });
+            }}
+          />
+        ) : null}
       </FormModal>
     </>
   );
@@ -5073,7 +5867,16 @@ function CompactSchedule({ rows }: { rows: { id: string; title: string; meta: st
   return <div className="space-y-2">{rows.slice(0, 10).map((row) => <div key={row.id} className="rounded-xl bg-slate-50 p-3"><p className="text-sm font-bold text-slate-900"><EntityLink href={row.href} className="font-bold">{row.title}</EntityLink></p><p className="text-xs text-slate-500">{row.meta}</p></div>)}</div>;
 }
 
-export function SettingsPage() {
+export function SettingsPage({
+  initialSettings,
+}: {
+  initialSettings: {
+    company: string;
+    email: string;
+    phone: string;
+    address: string;
+  };
+}) {
   return (
     <>
       <PageHeader title="Settings" description="Company settings, lead status, reward rules, targets, notifications, and import/export configuration." />
@@ -5085,7 +5888,12 @@ export function SettingsPage() {
           <h2 className="text-lg font-black text-slate-950">Company Settings</h2>
           <ActionForm action={saveSettingsAction} submitLabel="Save Changes">
             <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_260px]">
-              <div className="space-y-4"><TextField label="Company Name" name="company" defaultValue="Mugnee Solutions" /><TextField label="Email" name="email" defaultValue="info@mugnee.com" /><TextField label="Phone" name="phone" defaultValue="01712345678" /><TextField label="Address" name="address" defaultValue="House #12, Road #5, Dhanmondi, Dhaka-1205" /></div>
+              <div className="space-y-4">
+                <TextField label="Company Name" name="company" defaultValue={initialSettings.company} />
+                <TextField label="Email" name="email" defaultValue={initialSettings.email} />
+                <TextField label="Phone" name="phone" defaultValue={initialSettings.phone} />
+                <TextField label="Address" name="address" defaultValue={initialSettings.address} />
+              </div>
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-center"><div className="mx-auto flex h-24 w-32 items-center justify-center rounded-2xl bg-white text-blue-700 shadow-sm"><span className="text-lg font-black">MUGNEE</span></div><Button className="mt-4" type="button" variant="outline">Change Logo</Button></div>
             </div>
           </ActionForm>

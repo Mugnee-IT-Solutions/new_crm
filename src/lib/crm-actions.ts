@@ -1,16 +1,43 @@
 "use server";
 
+import { format } from "date-fns";
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import type * as Prisma from "@prisma/client";
 import { getCurrentSession } from "@/lib/auth";
 import { createProductEntry, deleteProductEntry, updateProductEntry } from "@/lib/product-center";
+import type { EmployeeRow } from "@/lib/crm-data";
+import { createSetupToken, hashPassword, verifyPassword } from "@/lib/password-auth";
 import { getPrisma } from "@/lib/prisma";
 import { roleHome, type Role } from "@/lib/utils";
 
 const DEFAULT_ADMIN_EMAIL = "admin@crm.com";
 const DEFAULT_ADMIN_PASSWORD = "Crm@admin1234";
 const DEFAULT_ADMIN_MOBILE = "01700000001";
+const AUTH_SETUP_WINDOW_MS = 10 * 60 * 1000;
+const LOGIN_OTP_WINDOW_MS = 5 * 60 * 1000;
+
+type OtpPurpose = "FIRST_LOGIN" | "PASSWORD_RESET";
+
+function isAuthUpgradeUnavailable(error: unknown) {
+  const message = String((error as { message?: string })?.message ?? "");
+  const code = String((error as { code?: string })?.code ?? "");
+
+  return (
+    code === "P2021" ||
+    code === "P2022" ||
+    message.includes("Unknown argument `firstLogin`") ||
+    message.includes("Unknown argument `passwordNotSet`") ||
+    message.includes("Unknown argument `lastLoginAt`") ||
+    message.includes("Unknown argument `authSetupToken`") ||
+    message.includes("Unknown argument `purpose`") ||
+    message.includes("does not exist in the current database")
+  );
+}
+
+function authUpgradeMessage() {
+  return "Database auth upgrade is pending. Run prisma migrate deploy and restart the app.";
+}
 
 function normalizeMobile(value: FormDataEntryValue | null) {
   const digits = String(value ?? "").replace(/\D/g, "");
@@ -257,6 +284,31 @@ function followUpStatusForDate(date: Date) {
   return "UPCOMING" as const;
 }
 
+const quickCommunicationMethodLabels = {
+  CALL: "Phone Call",
+  WHATSAPP: "WhatsApp",
+  EMAIL: "Email",
+} as const;
+
+type QuickCommunicationMethod = keyof typeof quickCommunicationMethodLabels;
+
+function isQuickCommunicationMethod(value: string): value is QuickCommunicationMethod {
+  return value in quickCommunicationMethodLabels;
+}
+
+function quickCommunicationLabel(method: QuickCommunicationMethod) {
+  return quickCommunicationMethodLabels[method];
+}
+
+function revalidateCustomerViews(customerId?: string) {
+  [
+    "/admin/customers",
+    "/supervisor/customers",
+    "/marketer/customers",
+    customerId ? `/customers/${customerId}` : undefined,
+  ].filter((path): path is string => Boolean(path)).forEach((path) => revalidatePath(path));
+}
+
 async function actionUser() {
   const session = await getCurrentSession();
   if (!session.mobile) throw new Error("You must be logged in.");
@@ -324,6 +376,60 @@ function revalidateProductViews(productId?: string) {
   if (productId) {
     revalidatePath(`/products/${productId}`);
   }
+}
+
+function revalidateUserViews() {
+  [
+    "/admin/users",
+    "/admin/team",
+    "/supervisor/team",
+    "/admin/dashboard",
+    "/supervisor/dashboard",
+  ].forEach((path) => revalidatePath(path));
+}
+
+function mapEmployeeActionRow(user: {
+  id: string;
+  name: string;
+  email: string | null;
+  mobile: string;
+  role: Role;
+  status: "ACTIVE" | "INACTIVE";
+  designation: string | null;
+  supervisorId?: string | null;
+}): EmployeeRow {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email ?? "-",
+    mobile: user.mobile.startsWith("email:") ? "-" : user.mobile,
+    role: user.role === "ADMIN" ? "Admin" : user.role === "SUPERVISOR" ? "Supervisor" : "Marketer",
+    roleKey: user.role,
+    status: user.status === "ACTIVE" ? "Active" : "Inactive",
+    statusKey: user.status,
+    designation: user.designation ?? "-",
+    supervisorId: user.supervisorId ?? null,
+    leads: 0,
+    calls: 0,
+    whatsapp: 0,
+    meetings: 0,
+    followUps: 0,
+    pendingTasks: 0,
+    overdueFollowUps: 0,
+    sales: 0,
+    rewardPoints: 0,
+    conversionRate: "0%",
+  };
+}
+
+function normalizeUserRole(value?: string) {
+  if (value === "ADMIN" || value === "SUPERVISOR" || value === "MARKETER") return value;
+  return undefined;
+}
+
+function normalizeUserStatus(value?: string) {
+  if (value === "ACTIVE" || value === "INACTIVE") return value;
+  return undefined;
 }
 
 async function resolveTaskAssignee(prisma: ReturnType<typeof getPrisma>, user: { id: string; role: Role }, requestedAssignedToId?: string) {
@@ -607,79 +713,192 @@ export async function adminPasswordLoginAction(formData: FormData) {
   }
 
   const admin = await ensureOfficeAdmin();
-  const store = await cookies();
-  store.set("crm_role", "ADMIN", { path: "/", maxAge: 60 * 60 * 24, sameSite: "lax" });
-  store.set("crm_mobile", admin.mobile, { path: "/", maxAge: 60 * 60 * 24, sameSite: "lax" });
+  await safeUpdateLastLogin(getPrisma(), admin.id);
+  await setSessionCookies("ADMIN", admin.mobile);
 
   return { ok: true, redirectTo: roleHome.ADMIN };
 }
 
 export async function sendOtpAction(formData: FormData) {
-  const login = normalizeLoginIdentifier(formData.get("login") ?? formData.get("mobile"));
-  const prisma = getPrisma();
-  const isEmailLogin = login.includes("@");
-  const user = await prisma.user.findFirst({
-    where: {
-      status: "ACTIVE",
-      OR: isEmailLogin ? [{ email: login }, { mobile: internalMobileForEmail(login) }] : [{ mobile: login }],
-    },
-  });
+  try {
+    const login = normalizeLoginIdentifier(formData.get("login") ?? formData.get("mobile"));
+    const purpose = normalizeOtpPurpose(formData.get("purpose"));
+    const prisma = getPrisma();
+    const user = await findTeamUserByLogin(prisma, login);
 
-  if (!user || user.status !== "ACTIVE") {
-    return { ok: false, message: "No active CRM user exists for this email or mobile number." };
+    if (!user || user.status !== "ACTIVE") {
+      return { ok: false, message: "No active CRM user exists for this email or mobile number." };
+    }
+
+    if (purpose === "FIRST_LOGIN" && !user.firstLogin && !user.passwordNotSet && user.passwordHash) {
+      return { ok: false, message: "Password is already set. Use your password to log in." };
+    }
+
+    return issueTeamOtp({ prisma, user, login, purpose });
+  } catch (error) {
+    if (isAuthUpgradeUnavailable(error)) {
+      return { ok: false, message: authUpgradeMessage() };
+    }
+    throw error;
   }
-
-  const otp = String(Math.floor(100000 + Math.random() * 900000));
-  const emailTarget = user.email ?? (isEmailLogin ? login : undefined);
-  const emailSent = emailTarget ? await sendLoginOtpEmail(emailTarget, otp) : false;
-  const shouldShowOtp = process.env.CRM_SHOW_LOGIN_OTP === "true" || (!emailSent && process.env.CRM_SHOW_LOGIN_OTP !== "false");
-
-  await prisma.oTP.create({
-    data: {
-      mobile: login,
-      otp,
-      userId: user.id,
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-    },
-  });
-
-  return {
-    ok: true,
-    message: emailSent ? `OTP sent to ${emailTarget}.` : shouldShowOtp ? `Login OTP: ${otp}` : "OTP sent to your account.",
-    otp: shouldShowOtp ? otp : undefined,
-  };
 }
 
 export async function verifyOtpAction(formData: FormData) {
-  const login = normalizeLoginIdentifier(formData.get("login") ?? formData.get("mobile"));
-  const otp = text(formData, "otp");
-  const prisma = getPrisma();
+  try {
+    const login = normalizeLoginIdentifier(formData.get("login") ?? formData.get("mobile"));
+    const otp = text(formData, "otp");
+    const purpose = normalizeOtpPurpose(formData.get("purpose"));
+    const prisma = getPrisma();
 
-  if (!otp) return { ok: false, message: "Enter the OTP." };
+    if (!otp) return { ok: false, message: "Enter the OTP." };
 
-  const record = await prisma.oTP.findFirst({
-    where: {
-      mobile: login,
-      otp,
-      used: false,
-      expiresAt: { gt: new Date() },
-      user: { status: "ACTIVE" },
-    },
-    include: { user: true },
-    orderBy: { createdAt: "desc" },
-  });
+    const record = await prisma.oTP.findFirst({
+      where: {
+        mobile: login,
+        otp,
+        purpose,
+        used: false,
+        expiresAt: { gt: new Date() },
+        user: { status: "ACTIVE" },
+      },
+      include: { user: true },
+      orderBy: { createdAt: "desc" },
+    });
 
-  if (!record?.user) {
-    return { ok: false, message: "OTP is invalid or expired." };
+    if (!record?.user) {
+      return { ok: false, message: "OTP is invalid or expired." };
+    }
+
+    await prisma.oTP.update({ where: { id: record.id }, data: { used: true } });
+    const setupToken = createSetupToken();
+    await prisma.user.update({
+      where: { id: record.user.id },
+      data: {
+        authSetupToken: setupToken,
+        authSetupPurpose: purpose,
+        authSetupExpiresAt: new Date(Date.now() + AUTH_SETUP_WINDOW_MS),
+      },
+    });
+
+    return {
+      ok: true,
+      setupToken,
+      message: purpose === "PASSWORD_RESET" ? "OTP verified. Set your new password." : "OTP verified. Set your password to continue.",
+      nextStep: "SET_PASSWORD",
+    };
+  } catch (error) {
+    if (isAuthUpgradeUnavailable(error)) {
+      return { ok: false, message: authUpgradeMessage() };
+    }
+    throw error;
   }
+}
 
-  await prisma.oTP.update({ where: { id: record.id }, data: { used: true } });
+export async function teamPasswordLoginAction(formData: FormData) {
+  try {
+    const login = normalizeLoginIdentifier(formData.get("login") ?? formData.get("email") ?? formData.get("mobile"));
+    const password = String(formData.get("password") ?? "");
+    const prisma = getPrisma();
 
-  const store = await cookies();
-  store.set("crm_role", record.user.role, { path: "/", maxAge: 60 * 60 * 24, sameSite: "lax" });
-  store.set("crm_mobile", record.user.mobile, { path: "/", maxAge: 60 * 60 * 24, sameSite: "lax" });
+    if (!login) {
+      return { ok: false, message: "Enter your email or mobile number." };
+    }
 
-  return { ok: true, redirectTo: roleHome[record.user.role as Role] };
+    if (!password.trim()) {
+      return { ok: false, message: "Enter your password." };
+    }
+
+    const user = await findTeamUserByLogin(prisma, login);
+    if (!user) {
+      return { ok: false, message: "No active CRM user exists for this email or mobile number." };
+    }
+
+    if (user.firstLogin || user.passwordNotSet || !user.passwordHash) {
+      return { ok: false, message: "Password is not set for this account yet. Use First Login to get an OTP." };
+    }
+
+    const matched = verifyPassword(password, user.passwordHash);
+    if (!matched) {
+      return { ok: false, message: "Email/mobile or password is incorrect." };
+    }
+
+    await safeUpdateLastLogin(prisma, user.id);
+    await setSessionCookies(user.role as Role, user.mobile);
+    return { ok: true, redirectTo: roleHome[user.role as Role] };
+  } catch (error) {
+    if (isAuthUpgradeUnavailable(error)) {
+      return { ok: false, message: authUpgradeMessage() };
+    }
+    throw error;
+  }
+}
+
+export async function completeTeamPasswordSetupAction(formData: FormData) {
+  try {
+    const login = normalizeLoginIdentifier(formData.get("login") ?? formData.get("mobile") ?? formData.get("email"));
+    const purpose = normalizeOtpPurpose(formData.get("purpose"));
+    const password = String(formData.get("password") ?? "");
+    const confirmPassword = String(formData.get("confirmPassword") ?? "");
+    const setupToken = text(formData, "setupToken");
+    const prisma = getPrisma();
+
+    if (!login) {
+      return { ok: false, message: "Login identifier is required." };
+    }
+
+    if (!setupToken) {
+      return { ok: false, message: "Your setup session expired. Please request a new OTP." };
+    }
+
+    const passwordError = validateTeamPassword(password);
+    if (passwordError) {
+      return { ok: false, message: passwordError };
+    }
+
+    if (password !== confirmPassword) {
+      return { ok: false, message: "Password and confirm password do not match." };
+    }
+
+    const user = await findTeamUserByLogin(prisma, login);
+    if (!user) {
+      return { ok: false, message: "No active CRM user exists for this email or mobile number." };
+    }
+
+    if (
+      user.authSetupToken !== setupToken ||
+      user.authSetupPurpose !== purpose ||
+      !user.authSetupExpiresAt ||
+      user.authSetupExpiresAt <= new Date()
+    ) {
+      return { ok: false, message: "Your setup session expired. Please verify OTP again." };
+    }
+
+    const passwordHash = hashPassword(password);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash,
+        firstLogin: false,
+        passwordNotSet: false,
+        authSetupToken: null,
+        authSetupPurpose: null,
+        authSetupExpiresAt: null,
+        lastLoginAt: new Date(),
+      },
+    });
+
+    await setSessionCookies(user.role as Role, user.mobile);
+    return {
+      ok: true,
+      message: purpose === "PASSWORD_RESET" ? "Password updated successfully." : "Password set successfully.",
+      redirectTo: roleHome[user.role as Role],
+    };
+  } catch (error) {
+    if (isAuthUpgradeUnavailable(error)) {
+      return { ok: false, message: authUpgradeMessage() };
+    }
+    throw error;
+  }
 }
 
 export async function createLeadAction(formData: FormData) {
@@ -1564,6 +1783,123 @@ export async function createCommunicationAction(formData: FormData) {
   return { ok: true, id: log.id };
 }
 
+export async function logCustomerCommunicationShortcutAction(input: {
+  customerId: string;
+  customerName: string;
+  method: string;
+  action: string;
+}) {
+  const user = await actionUser();
+  const customerId = input.customerId.trim();
+  const customerName = input.customerName.trim();
+  const action = input.action.trim();
+  const method = input.method.trim().toUpperCase();
+
+  if (!customerId) {
+    return { ok: false, message: "Customer id is required." };
+  }
+
+  if (!action) {
+    return { ok: false, message: "Action text is required." };
+  }
+
+  if (!isQuickCommunicationMethod(method)) {
+    return { ok: false, message: "Unsupported communication method." };
+  }
+
+  const prisma = getPrisma();
+  const createdAt = new Date();
+  const methodLabel = quickCommunicationLabel(method);
+  const metadata = {
+    customerId,
+    customerName,
+    userId: user.id,
+    userName: user.name,
+    method,
+    action,
+    createdAt: createdAt.toISOString(),
+  };
+
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.customerCompany.update({
+      where: { id: customerId },
+      data: { lastCommunication: createdAt },
+    });
+
+    const communication = await tx.communicationLog.create({
+      data: {
+        company: { connect: { id: customerId } },
+        user: { connect: { id: user.id } },
+        method: methodLabel,
+        note: action,
+        communicationAt: createdAt,
+        outcome: "Opened",
+      },
+    });
+
+    const timeline = await tx.activityTimeline.create({
+      data: {
+        title: `${methodLabel} Opened`,
+        description: action,
+        entity: "CommunicationLog",
+        entityId: communication.id,
+        userId: user.id,
+        companyId: customerId,
+        communicationLogId: communication.id,
+        metadata,
+      },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId: user.id,
+        action,
+        entity: "CommunicationLog",
+        entityId: communication.id,
+        metadata,
+      },
+    });
+
+    return {
+      communicationId: communication.id,
+      timelineId: timeline.id,
+    };
+  });
+
+  revalidateCustomerViews(customerId);
+  revalidatePath("/");
+
+  const time = format(createdAt, "dd/MM/yyyy hh:mm a");
+
+  return {
+    ok: true,
+    communication: {
+      id: result.communicationId,
+      href: `/customers/${customerId}`,
+      method: methodLabel,
+      summary: action,
+      subject: "-",
+      fromEmail: "-",
+      toEmail: "-",
+      discussionTopic: "-",
+      productDiscussed: "-",
+      outcome: "Opened",
+      rating: "-",
+      nextFollowUpDate: "-",
+      notes: "-",
+      createdBy: user.name,
+      time,
+    },
+    activity: {
+      id: result.timelineId,
+      href: `/customers/${customerId}`,
+      title: `${methodLabel} Opened`,
+      detail: `${action} by ${user.name}`,
+      time,
+    },
+  };
+}
+
 export async function createUserAction(formData: FormData) {
   const user = await actionUser();
   if (!["ADMIN", "SUPERVISOR"].includes(user.role)) {
@@ -1619,6 +1955,16 @@ export async function createUserAction(formData: FormData) {
         designation: text(formData, "designation"),
         supervisorId,
       },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        mobile: true,
+        role: true,
+        status: true,
+        designation: true,
+        supervisorId: true,
+      },
     });
     await addTimeline({
       title: "User Created",
@@ -1627,9 +1973,9 @@ export async function createUserAction(formData: FormData) {
       entityId: created.id,
       userId: user.id,
     });
-    revalidatePath("/");
-    return { ok: true, id: created.id };
-    } catch (error) {
+    revalidateUserViews();
+    return { ok: true, id: created.id, row: mapEmployeeActionRow(created) };
+  } catch (error) {
     try {
       const { PrismaClientKnownRequestError } = await import("@prisma/client/runtime/client");
       if (error instanceof PrismaClientKnownRequestError && error.code === "P2002") {
@@ -1644,30 +1990,312 @@ export async function createUserAction(formData: FormData) {
   }
 }
 
+function normalizeOtpPurpose(value: FormDataEntryValue | null): OtpPurpose {
+  return value === "PASSWORD_RESET" ? "PASSWORD_RESET" : "FIRST_LOGIN";
+}
+
+function validateTeamPassword(password: string) {
+  if (password.trim().length < 8) {
+    return "Password must be at least 8 characters long.";
+  }
+
+  return "";
+}
+
+async function setSessionCookies(role: Role, mobile: string) {
+  const store = await cookies();
+  store.set("crm_role", role, { path: "/", maxAge: 60 * 60 * 24, sameSite: "lax" });
+  store.set("crm_mobile", mobile, { path: "/", maxAge: 60 * 60 * 24, sameSite: "lax" });
+}
+
+async function safeUpdateLastLogin(prisma: ReturnType<typeof getPrisma>, userId: string) {
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { lastLoginAt: new Date() },
+    });
+  } catch (error) {
+    if (!isAuthUpgradeUnavailable(error)) {
+      throw error;
+    }
+  }
+}
+
+async function findTeamUserByLogin(prisma: ReturnType<typeof getPrisma>, login: string) {
+  const isEmailLogin = login.includes("@");
+
+  return prisma.user.findFirst({
+    where: {
+      status: "ACTIVE",
+      role: { in: ["SUPERVISOR", "MARKETER"] },
+      OR: isEmailLogin ? [{ email: login }, { mobile: internalMobileForEmail(login) }] : [{ mobile: login }],
+    },
+  });
+}
+
+async function issueTeamOtp(params: {
+  prisma: ReturnType<typeof getPrisma>;
+  user: {
+    id: string;
+    email?: string | null;
+  };
+  login: string;
+  purpose: OtpPurpose;
+}) {
+  const otp = String(Math.floor(100000 + Math.random() * 900000));
+  const emailTarget = params.user.email;
+
+  if (!emailTarget) {
+    return { ok: false as const, message: "This user account does not have an email address for OTP delivery." };
+  }
+
+  const emailSent = await sendLoginOtpEmail(emailTarget, otp);
+  const shouldShowOtp = process.env.CRM_SHOW_LOGIN_OTP === "true" || (!emailSent && process.env.CRM_SHOW_LOGIN_OTP !== "false");
+
+  try {
+    await params.prisma.oTP.create({
+      data: {
+        mobile: params.login,
+        otp,
+        purpose: params.purpose,
+        userId: params.user.id,
+        expiresAt: new Date(Date.now() + LOGIN_OTP_WINDOW_MS),
+      },
+    });
+  } catch (error) {
+    if (isAuthUpgradeUnavailable(error)) {
+      return { ok: false as const, message: authUpgradeMessage() };
+    }
+    throw error;
+  }
+
+  return {
+    ok: true as const,
+    message: emailSent ? `OTP sent to ${emailTarget}.` : shouldShowOtp ? `Login OTP: ${otp}` : "OTP sent to your account.",
+    otp: shouldShowOtp ? otp : undefined,
+  };
+}
+
+export async function updateUserAction(formData: FormData) {
+  const actor = await actionUser();
+  if (!["ADMIN", "SUPERVISOR"].includes(actor.role)) {
+    return { ok: false, message: "You are not allowed to update users." };
+  }
+
+  const prisma = getPrisma();
+  const userId = text(formData, "userId");
+  if (!userId) {
+    return { ok: false, message: "User id is required." };
+  }
+
+  const existing = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      mobile: true,
+      role: true,
+      status: true,
+      designation: true,
+      supervisorId: true,
+    },
+  });
+
+  if (!existing) {
+    return { ok: false, message: "User not found." };
+  }
+
+  const requestedRole = normalizeUserRole(text(formData, "role")) ?? existing.role;
+  const requestedStatus = normalizeUserStatus(text(formData, "status")) ?? existing.status;
+  const email = normalizeEmail(formData.get("email"));
+  const typedMobile = normalizeMobile(formData.get("mobile"));
+  const mobile = typedMobile || internalMobileForEmail(email);
+
+  if (!email) {
+    return { ok: false, message: "Valid email is required." };
+  }
+
+  if (actor.role === "SUPERVISOR") {
+    if (existing.role !== "MARKETER" || existing.supervisorId !== actor.id) {
+      return { ok: false, message: "Supervisor can update only their marketers." };
+    }
+
+    if (requestedRole !== existing.role) {
+      return { ok: false, message: "Supervisor cannot change user roles." };
+    }
+  }
+
+  if (actor.role === "ADMIN") {
+    const allowedRoles = existing.role === "ADMIN"
+      ? ["ADMIN", "SUPERVISOR", "MARKETER"]
+      : ["SUPERVISOR", "MARKETER"];
+
+    if (!allowedRoles.includes(requestedRole)) {
+      return { ok: false, message: "Selected role is not allowed for this user." };
+    }
+
+    if (existing.role === "ADMIN" && requestedRole !== "ADMIN") {
+      const adminCount = await prisma.user.count({ where: { role: "ADMIN" } });
+      if (adminCount <= 1) {
+        return { ok: false, message: "Last remaining Admin role cannot be changed." };
+      }
+    }
+  }
+
+  const supervisorId = actor.role === "SUPERVISOR"
+    ? actor.id
+    : requestedRole === "MARKETER"
+      ? text(formData, "supervisorId") || null
+      : null;
+
+  if (supervisorId) {
+    const supervisor = await prisma.user.findFirst({
+      where: { id: supervisorId, role: "SUPERVISOR", status: "ACTIVE" },
+      select: { id: true },
+    });
+
+    if (!supervisor) {
+      return { ok: false, message: "Selected supervisor was not found." };
+    }
+  }
+
+  try {
+    const updated = await prisma.user.update({
+      where: { id: existing.id },
+      data: {
+        name: text(formData, "name") ?? existing.name,
+        email,
+        mobile,
+        designation: text(formData, "designation") ?? null,
+        role: requestedRole as never,
+        status: requestedStatus as never,
+        supervisorId,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        mobile: true,
+        role: true,
+        status: true,
+        designation: true,
+        supervisorId: true,
+      },
+    });
+
+    await addTimeline({
+      title: "User Updated",
+      description: `${updated.name} profile updated`,
+      entity: "User",
+      entityId: updated.id,
+      userId: actor.id,
+    });
+
+    revalidateUserViews();
+    return { ok: true, id: updated.id, row: mapEmployeeActionRow(updated) };
+  } catch (error) {
+    try {
+      const { PrismaClientKnownRequestError } = await import("@prisma/client/runtime/client");
+      if (error instanceof PrismaClientKnownRequestError && error.code === "P2002") {
+        const target = Array.isArray(error.meta?.target) ? error.meta.target.join(", ") : "mobile or email";
+        return { ok: false, message: `A user with this ${target} already exists.` };
+      }
+    } catch {
+      // Fall through to the generic error below.
+    }
+
+    throw error;
+  }
+}
+
+export async function deleteUserAction(formData: FormData) {
+  const actor = await actionUser();
+  if (actor.role !== "ADMIN") {
+    return { ok: false, message: "Only Admin can delete users." };
+  }
+
+  const prisma = getPrisma();
+  const userId = text(formData, "userId");
+  if (!userId) {
+    return { ok: false, message: "User id is required." };
+  }
+
+  if (userId === actor.id) {
+    return { ok: false, message: "You cannot delete your own account." };
+  }
+
+  const existing = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, name: true, role: true },
+  });
+
+  if (!existing) {
+    return { ok: false, message: "User not found." };
+  }
+
+  if (existing.role === "ADMIN") {
+    const adminCount = await prisma.user.count({ where: { role: "ADMIN" } });
+    if (adminCount <= 1) {
+      return { ok: false, message: "Last remaining Admin cannot be deleted." };
+    }
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.user.updateMany({
+        where: { supervisorId: existing.id },
+        data: { supervisorId: null },
+      });
+
+      await tx.user.delete({
+        where: { id: existing.id },
+      });
+    });
+
+    await addTimeline({
+      title: "User Deleted",
+      description: existing.name,
+      entity: "User",
+      entityId: existing.id,
+      userId: actor.id,
+    });
+
+    revalidateUserViews();
+    return { ok: true, id: existing.id };
+  } catch (error) {
+    try {
+      const { PrismaClientKnownRequestError } = await import("@prisma/client/runtime/client");
+      if (error instanceof PrismaClientKnownRequestError && error.code === "P2003") {
+        return { ok: false, message: "This user has linked CRM records and cannot be deleted yet." };
+      }
+    } catch {
+      // Fall through to the generic error below.
+    }
+
+    throw error;
+  }
+}
+
 export async function saveSettingsAction(formData: FormData) {
   const user = await actionUser();
   if (user.role !== "ADMIN") return { ok: false, message: "Only Admin can update settings." };
 
   const prisma = getPrisma();
+  const companyProfile = {
+    company: text(formData, "company"),
+    email: text(formData, "email"),
+    phone: text(formData, "phone"),
+    address: text(formData, "address"),
+  };
+
   await prisma.systemSetting.upsert({
     where: { key: "company.profile" },
-    update: {
-      value: {
-        company: text(formData, "company"),
-        email: text(formData, "email"),
-        phone: text(formData, "phone"),
-        address: text(formData, "address"),
-      },
-    },
+    update: { value: companyProfile },
     create: {
       key: "company.profile",
       group: "company",
-      value: {
-        company: text(formData, "company"),
-        email: text(formData, "email"),
-        phone: text(formData, "phone"),
-        address: text(formData, "address"),
-      },
+      value: companyProfile,
     },
   });
   revalidatePath("/");

@@ -88,8 +88,8 @@ async function main() {
   await prisma.oTP.deleteMany();
   await prisma.user.deleteMany();
 
-  const admin = await prisma.user.create({ data: roles.admin });
-  const supervisor = await prisma.user.create({ data: roles.supervisor });
+  const admin = await prisma.user.create({ data: { ...roles.admin, firstLogin: false, passwordNotSet: false } });
+  const supervisor = await prisma.user.create({ data: { ...roles.supervisor, firstLogin: true, passwordNotSet: true } });
   const marketers = [];
 
   for (const [index, marketer] of roles.marketers.entries()) {
@@ -99,6 +99,8 @@ async function main() {
         mobile: marketer[1],
         email: `${marketer[0].toLowerCase().replace(/\s+/g, ".")}@mugnee.com`,
         role: "MARKETER",
+        firstLogin: true,
+        passwordNotSet: true,
         designation: marketer[2],
         supervisorId: supervisor.id,
         avatar: `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(marketer[0])}`,

@@ -69,8 +69,8 @@ function EntityLink({ href, children, className }: { href?: string | null; child
 function CompactList({ rows }: { rows: { title: string; meta: string; status?: string; href?: string | null }[] }) {
   return (
     <div className="space-y-3">
-      {rows.length ? rows.map((row) => (
-        <div key={`${row.title}-${row.meta}`} className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+      {rows.length ? rows.map((row, index) => (
+        <div key={`${row.href ?? row.title}-${row.meta}-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
           <div className="min-w-0">
             <p className="truncate text-sm font-bold text-slate-800">
               <EntityLink href={row.href} className="font-bold">{row.title}</EntityLink>

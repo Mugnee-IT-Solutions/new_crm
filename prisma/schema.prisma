@@ -135,6 +135,13 @@ model User {
   name                String
   email               String?              @unique
   mobile              String               @unique
+  passwordHash        String?
+  firstLogin          Boolean              @default(true)
+  passwordNotSet      Boolean              @default(true)
+  lastLoginAt         DateTime?
+  authSetupToken      String?              @unique
+  authSetupPurpose    String?
+  authSetupExpiresAt  DateTime?
   role                Role
   status              UserStatus           @default(ACTIVE)
   avatar              String?
@@ -176,6 +183,7 @@ model OTP {
   id        String   @id @default(cuid())
   mobile    String
   otp       String
+  purpose   String   @default("LOGIN")
   expiresAt DateTime
   used      Boolean  @default(false)
   userId    String?

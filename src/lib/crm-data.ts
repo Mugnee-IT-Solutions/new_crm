@@ -43,6 +43,7 @@ export type CompanyRow = {
   name: string;
   contactPerson: string;
   email: string;
+  emailOptions: string[];
   phone: string;
   phone2: string;
   whatsapp: string;
@@ -267,6 +268,9 @@ export type CommunicationHistoryRow = {
   href?: string;
   method: string;
   summary: string;
+  subject: string;
+  fromEmail: string;
+  toEmail: string;
   discussionTopic: string;
   productDiscussed: string;
   outcome: string;
@@ -300,7 +304,11 @@ export type EmployeeRow = {
   email: string;
   mobile: string;
   role: string;
+  roleKey: Role;
   status: string;
+  statusKey: "ACTIVE" | "INACTIVE";
+  designation: string;
+  supervisorId?: string | null;
   leads: number;
   calls: number;
   whatsapp: number;
@@ -747,6 +755,20 @@ function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+function isValidEmail(value?: string | null) {
+  return Boolean(value && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim().toLowerCase()));
+}
+
+function uniqueEmails(values: Array<string | null | undefined>) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value?.trim().toLowerCase() ?? "")
+        .filter((value) => isValidEmail(value)),
+    ),
+  );
+}
+
 function splitLeadContacts(value?: string | null) {
   if (!value) return [];
   return value
@@ -827,17 +849,24 @@ function mapFollowUpRow(followUp: FollowUpRecord): FollowUpRow {
 }
 
 function mapCommunicationHistoryRow(log: CommunicationHistoryRecord): CommunicationHistoryRow {
+  const fromEmail = (log as { productDiscussed?: string | null }).productDiscussed ?? "-";
+  const toEmail = log.followUpNote ?? "-";
+  const subject = (log as { discussionTopic?: string | null }).discussionTopic ?? "-";
+
   return {
     id: log.id,
     href: linkedEntityHref({ leadId: log.leadId, companyId: log.companyId }),
     method: log.method,
     summary: log.note,
-    discussionTopic: (log as { discussionTopic?: string | null }).discussionTopic ?? "-",
-    productDiscussed: (log as { productDiscussed?: string | null }).productDiscussed ?? "-",
+    subject,
+    fromEmail,
+    toEmail,
+    discussionTopic: subject,
+    productDiscussed: fromEmail,
     outcome: log.outcome ?? "-",
     rating: typeof log.rating === "number" ? String(log.rating) : "-",
     nextFollowUpDate: dateLabel(log.nextFollowUpDate, "dd/MM/yyyy hh:mm a"),
-    notes: log.followUpNote ?? "-",
+    notes: toEmail,
     createdBy: log.user?.name ?? "-",
     time: dateLabel(log.communicationAt, "dd/MM/yyyy hh:mm a"),
   };
@@ -910,12 +939,22 @@ function mapCompanyRow(company: ExistingCustomerRecord): CompanyRow {
   const rawCity = readRawField(raw, ["City / Zilla", "City/Zilla", "City", "Zilla"]);
   const rawAddress = readRawField(raw, ["Address"]);
   const addressCity = inferCityFromAddress(company.address);
+  const emailOptions = uniqueEmails([
+    primaryContact?.email,
+    rawPrimaryEmail,
+    readRawField(raw, ["Email 2", "Contact Person 1 Email 2"]),
+    readRawField(raw, ["Contact Person 1 Email 1", "Contact Person 1 Mail", "Email 1"]),
+    readRawField(raw, ["Contact Person 2 Email 1", "Contact Person 2 Mail"]),
+    readRawField(raw, ["Contact Person 2 Email 2"]),
+    ...company.contacts.map((contact) => contact.email),
+  ]);
 
   return {
     id: company.id,
     name: company.name,
     contactPerson: company.contactPerson ?? primaryContact?.name ?? "-",
     email: primaryContact?.email ?? rawPrimaryEmail ?? "-",
+    emailOptions,
     phone: company.phone || primaryContact?.mobile || regular?.number || rawPrimaryPhone || "-",
     phone2: rawPhone2 || (company.phoneNumbers[1]?.number ? company.phoneNumbers[1].number : "-"),
     whatsapp: primaryContact?.whatsapp ?? whatsapp?.number ?? "-",
@@ -1721,7 +1760,11 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
       email: employee.email ?? "-",
       mobile: employee.mobile.startsWith("email:") ? "-" : employee.mobile,
       role: labelize(employee.role),
+      roleKey: employee.role,
       status: labelize(employee.status),
+      statusKey: employee.status,
+      designation: employee.designation ?? "-",
+      supervisorId: employee.supervisorId ?? null,
       leads: total,
       calls,
       whatsapp,
