@@ -666,26 +666,45 @@ async function sendLoginOtpEmail(to: string, otp: string) {
   }
 }
 
-async function ensureOfficeAdmin() {
-  const prisma = getPrisma();
+async function ensureOfficeAdmin(prisma = getPrisma()) {
   const adminEmail = (process.env.CRM_ADMIN_EMAIL ?? DEFAULT_ADMIN_EMAIL).toLowerCase();
   const adminMobile = process.env.CRM_ADMIN_MOBILE ?? DEFAULT_ADMIN_MOBILE;
 
-  const existing =
-    (await prisma.user.findUnique({ where: { email: adminEmail } })) ??
-    (await prisma.user.findUnique({ where: { mobile: adminMobile } })) ??
-    (await prisma.user.findFirst({ where: { role: "ADMIN" }, orderBy: { createdAt: "asc" } }));
+  const existing = await prisma.user.findFirst({
+    where: {
+      OR: [
+        { email: adminEmail },
+        { mobile: adminMobile },
+        { role: "ADMIN" },
+      ],
+    },
+    orderBy: { createdAt: "asc" },
+  });
 
   if (existing) {
+    const canonicalName = existing.name?.trim() ? existing.name : "CRM Admin";
+    const canonicalDesignation = existing.designation ?? "Administrator";
+    const requiresSync =
+      existing.name !== canonicalName ||
+      existing.email !== adminEmail ||
+      existing.mobile !== adminMobile ||
+      existing.role !== "ADMIN" ||
+      existing.status !== "ACTIVE" ||
+      existing.designation !== canonicalDesignation;
+
+    if (!requiresSync) {
+      return existing;
+    }
+
     return prisma.user.update({
       where: { id: existing.id },
       data: {
-        name: existing.name || "CRM Admin",
+        name: canonicalName,
         email: adminEmail,
         mobile: adminMobile,
         role: "ADMIN",
         status: "ACTIVE",
-        designation: existing.designation ?? "Administrator",
+        designation: canonicalDesignation,
       },
     });
   }
@@ -707,13 +726,14 @@ export async function adminPasswordLoginAction(formData: FormData) {
   const password = String(formData.get("password") ?? "");
   const adminEmail = (process.env.CRM_ADMIN_EMAIL ?? DEFAULT_ADMIN_EMAIL).toLowerCase();
   const adminPassword = process.env.CRM_ADMIN_PASSWORD ?? DEFAULT_ADMIN_PASSWORD;
+  const prisma = getPrisma();
 
   if (login !== adminEmail || password !== adminPassword) {
     return { ok: false, message: "Admin email or password is incorrect." };
   }
 
-  const admin = await ensureOfficeAdmin();
-  await safeUpdateLastLogin(getPrisma(), admin.id);
+  const admin = await ensureOfficeAdmin(prisma);
+  await safeUpdateLastLogin(prisma, admin.id);
   await setSessionCookies("ADMIN", admin.mobile);
 
   return { ok: true, redirectTo: roleHome.ADMIN };

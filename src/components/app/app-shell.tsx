@@ -336,7 +336,7 @@ export function AppShell({
           ) : null}
         </AnimatePresence>
 
-        <div className={cn("transition-all duration-300", collapsed ? "lg:pl-[82px]" : "lg:pl-[248px]")}>
+        <div className={cn("transition-[padding] duration-300", collapsed ? "lg:pl-[82px]" : "lg:pl-[248px]")}>
           <AppHeader role={role} user={shellUser} unreadCount={notificationCenter.unreadCount} onOpenSidebar={() => setMobileOpen(true)} />
           <motion.main
             key={pathname}

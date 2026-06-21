@@ -60,6 +60,12 @@ export function AppSidebar({
   sidebarCounts?: SidebarCounts;
 }) {
   const pathname = usePathname();
+  const sidebarControlAction = onNavigate ?? onToggle;
+  const sidebarControlLabel = onNavigate
+    ? "Close sidebar"
+    : collapsed
+      ? "Expand sidebar"
+      : "Collapse sidebar";
   const counts = sidebarCounts ?? {
     followUps: followUpCount,
     leads: 0,
@@ -92,9 +98,8 @@ export function AppSidebar({
   return (
     <aside
       className={cn(
-        "flex h-full flex-col bg-[linear-gradient(180deg,#08163a_0%,#0b1d4d_48%,#091126_100%)] text-white shadow-2xl transition-all duration-300",
+        "relative flex h-full flex-col overflow-visible bg-[linear-gradient(180deg,#08163a_0%,#0b1d4d_48%,#091126_100%)] text-white shadow-2xl transition-[width] duration-300",
         collapsed ? "w-[82px]" : "w-[248px]",
-        "relative overflow-hidden",
       )}
     >
       <div className="flex h-20 items-center gap-2 px-4">
@@ -118,13 +123,13 @@ export function AppSidebar({
         variant="ghost"
         size="icon"
         className={cn(
-          "absolute right-[-18px] top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 rounded-full border border-white/20 bg-[#0d2a6d] text-white shadow-lg transition duration-300 hover:bg-[#16398d]",
-          "lg:inline-flex",
+          "absolute right-0 top-1/2 z-20 h-10 w-10 translate-x-1/2 -translate-y-1/2 rounded-full border border-white/20 bg-[#0d2a6d] text-white shadow-lg transition duration-300 hover:bg-[#16398d]",
+          onNavigate ? "inline-flex" : "hidden lg:inline-flex",
         )}
-        onClick={onToggle}
-        aria-label="Toggle sidebar"
+        onClick={sidebarControlAction}
+        aria-label={sidebarControlLabel}
       >
-        {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+        {onNavigate ? <ChevronLeft className="h-4 w-4" /> : collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
       </Button>
 
       <nav className="flex-1 overflow-y-auto px-3 pb-4 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
@@ -232,14 +237,6 @@ export function AppSidebar({
         </div>
       </nav>
 
-      <button
-        type="button"
-        onClick={onNavigate}
-        className="absolute right-3 top-3 rounded-full bg-white/10 p-2 text-white lg:hidden"
-        aria-label="Close sidebar"
-      >
-        <ChevronLeft className="h-4 w-4" />
-      </button>
     </aside>
   );
 }

@@ -3,7 +3,7 @@
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import gsap from "gsap";
-import { ArrowLeft, KeyRound, MailCheck, ShieldCheck, Sparkles, Target, Timer, TrendingUp } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, KeyRound, MailCheck, ShieldCheck, Sparkles, Target, Timer, TrendingUp } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
@@ -44,6 +44,8 @@ export function LoginForm() {
     tone: "info",
     message: "Admin uses password. Team users log in with password, or use OTP for first login and password reset.",
   });
+  const [showPrimaryPassword, setShowPrimaryPassword] = React.useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = React.useState(false);
   const [teamFlow, setTeamFlow] = React.useState<TeamFlow>("login");
   const [teamPurpose, setTeamPurpose] = React.useState<TeamPurpose>("FIRST_LOGIN");
   const [setupToken, setSetupToken] = React.useState("");
@@ -51,7 +53,7 @@ export function LoginForm() {
   const form = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      login: "admin@crm.com",
+      login: "",
       password: "",
       confirmPassword: "",
     },
@@ -81,6 +83,8 @@ export function LoginForm() {
     setSetupToken("");
     setTeamFlow("login");
     setTeamPurpose("FIRST_LOGIN");
+    setShowPrimaryPassword(false);
+    setShowConfirmPassword(false);
     form.setValue("password", "");
     form.setValue("confirmPassword", "");
     setFeedback({
@@ -134,7 +138,8 @@ export function LoginForm() {
           return;
         }
 
-        window.location.assign(result.redirectTo);
+        setFeedback({ tone: "success", message: "Admin login successful. Opening dashboard..." });
+        window.location.replace(result.redirectTo);
       } catch (error) {
         console.error("Admin login failed unexpectedly.", error);
         setFeedback({ tone: "error", message: "Admin login failed. Please try again." });
@@ -159,7 +164,7 @@ export function LoginForm() {
         }
 
         setFeedback({ tone: "success", message: "Login successful. Opening dashboard..." });
-        window.location.assign(result.redirectTo);
+        window.location.replace(result.redirectTo);
       } catch (error) {
         console.error("Team password login failed unexpectedly.", error);
         setFeedback({ tone: "error", message: "Login failed. Please try again." });
@@ -222,7 +227,7 @@ export function LoginForm() {
         }
 
         setFeedback({ tone: "success", message: result.message ?? "Password saved successfully." });
-        window.location.assign(result.redirectTo);
+        window.location.replace(result.redirectTo);
       } catch (error) {
         console.error("Team password setup failed unexpectedly.", error);
         setFeedback({ tone: "error", message: "Password setup failed. Please try again." });
@@ -330,7 +335,7 @@ export function LoginForm() {
                 <input
                   id="login"
                   className="h-11 flex-1 px-3 text-sm outline-none"
-                  placeholder="admin@crm.com"
+                  autoComplete="username"
                   {...form.register("login")}
                 />
                 {!isAdminLogin && teamFlow === "verify-otp" ? (
@@ -349,13 +354,23 @@ export function LoginForm() {
                 <label className="text-sm font-semibold text-slate-700" htmlFor="password">
                   Admin Password
                 </label>
-                <Input
-                  id="password"
-                  type="password"
-                  className="mt-2 h-11"
-                  placeholder="Crm@admin1234"
-                  {...form.register("password")}
-                />
+                <div className="relative mt-2">
+                  <Input
+                    id="password"
+                    type={showPrimaryPassword ? "text" : "password"}
+                    className="h-11 pr-12"
+                    autoComplete="current-password"
+                    {...form.register("password")}
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 transition hover:text-slate-900"
+                    onClick={() => setShowPrimaryPassword((value) => !value)}
+                    aria-label={showPrimaryPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPrimaryPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
             ) : null}
 
@@ -364,13 +379,24 @@ export function LoginForm() {
                 <label className="text-sm font-semibold text-slate-700" htmlFor="password">
                   Password
                 </label>
-                <Input
-                  id="password"
-                  type="password"
-                  className="mt-2 h-11"
-                  placeholder="Enter your password"
-                  {...form.register("password")}
-                />
+                <div className="relative mt-2">
+                  <Input
+                    id="password"
+                    type={showPrimaryPassword ? "text" : "password"}
+                    className="h-11 pr-12"
+                    placeholder="Enter your password"
+                    autoComplete="current-password"
+                    {...form.register("password")}
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 transition hover:text-slate-900"
+                    onClick={() => setShowPrimaryPassword((value) => !value)}
+                    aria-label={showPrimaryPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPrimaryPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                   <Button type="button" variant="ghost" className="h-8 px-0 text-blue-700 hover:bg-transparent hover:text-blue-800" onClick={() => requestOtp("FIRST_LOGIN")} disabled={submitting}>
                     <MailCheck className="h-4 w-4" />
@@ -426,25 +452,47 @@ export function LoginForm() {
                   <label className="text-sm font-semibold text-slate-700" htmlFor="password">
                     New Password
                   </label>
-                  <Input
-                    id="password"
-                    type="password"
-                    className="mt-2 h-11"
-                    placeholder="Minimum 8 characters"
-                    {...form.register("password")}
-                  />
+                  <div className="relative mt-2">
+                    <Input
+                      id="password"
+                      type={showPrimaryPassword ? "text" : "password"}
+                      className="h-11 pr-12"
+                      placeholder="Minimum 8 characters"
+                      autoComplete="new-password"
+                      {...form.register("password")}
+                    />
+                    <button
+                      type="button"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 transition hover:text-slate-900"
+                      onClick={() => setShowPrimaryPassword((value) => !value)}
+                      aria-label={showPrimaryPassword ? "Hide password" : "Show password"}
+                    >
+                      {showPrimaryPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="text-sm font-semibold text-slate-700" htmlFor="confirmPassword">
                     Confirm Password
                   </label>
-                  <Input
-                    id="confirmPassword"
-                    type="password"
-                    className="mt-2 h-11"
-                    placeholder="Retype your password"
-                    {...form.register("confirmPassword")}
-                  />
+                  <div className="relative mt-2">
+                    <Input
+                      id="confirmPassword"
+                      type={showConfirmPassword ? "text" : "password"}
+                      className="h-11 pr-12"
+                      placeholder="Retype your password"
+                      autoComplete="new-password"
+                      {...form.register("confirmPassword")}
+                    />
+                    <button
+                      type="button"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 transition hover:text-slate-900"
+                      onClick={() => setShowConfirmPassword((value) => !value)}
+                      aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                    >
+                      {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : null}
