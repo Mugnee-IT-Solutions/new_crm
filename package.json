@@ -13,7 +13,9 @@
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "prisma db seed"
+    "prisma:seed": "prisma db seed",
+    "prisma:seed:demo": "node -e \"process.env.CRM_ENABLE_DEMO_SEED='true';require('./prisma/seed.js')\"",
+    "admin:create": "node scripts/create-admin.mjs"
   },
   "prisma": {
     "seed": "node prisma/seed.js"

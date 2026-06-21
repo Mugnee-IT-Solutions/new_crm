@@ -3,6 +3,11 @@ const { PrismaClient } = require("@prisma/client");
 const { PrismaPg } = require("@prisma/adapter-pg");
 const { syncDatabaseUrlEnv } = require("./database-url");
 
+if (process.env.CRM_ENABLE_DEMO_SEED !== "true") {
+  console.log("Demo seeding is disabled by default. Use `npm run prisma:seed:demo` only in non-production environments.");
+  process.exit(0);
+}
+
 const connectionString = syncDatabaseUrlEnv();
 if (!connectionString) {
   throw new Error("DATABASE_URL is required for seeding.");
@@ -12,7 +17,7 @@ const adapter = new PrismaPg({ connectionString });
 const prisma = new PrismaClient({ adapter });
 
 const roles = {
-  admin: { name: "Admin User", email: "admin@mugnee.com", mobile: "01700000001", role: "ADMIN", designation: "System Admin" },
+  admin: { name: "Admin User", email: "admin@crm.com", mobile: "01700000001", role: "ADMIN", designation: "System Admin" },
   supervisor: { name: "Sadia Akter", email: "sadia@mugnee.com", mobile: "01700000002", role: "SUPERVISOR", designation: "Sales Supervisor" },
   marketers: [
     ["John Doe", "01700000003", "Senior Marketer"],

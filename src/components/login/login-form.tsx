@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import gsap from "gsap";
 import { ArrowLeft, KeyRound, MailCheck, ShieldCheck, Sparkles, Target, Timer, TrendingUp } from "lucide-react";
@@ -36,7 +35,6 @@ function normalizeLogin(value: string) {
 }
 
 export function LoginForm() {
-  const router = useRouter();
   const brandRef = React.useRef<HTMLDivElement>(null);
   const inputsRef = React.useRef<Array<HTMLInputElement | null>>([]);
   const [otp, setOtp] = React.useState(["", "", "", "", "", ""]);
@@ -96,60 +94,78 @@ export function LoginForm() {
   const requestOtp = React.useCallback((purpose: TeamPurpose) => {
     void form.handleSubmit(async ({ login }) => {
       setSubmitting(true);
-      const formData = new FormData();
-      formData.set("login", normalizeLogin(login));
-      formData.set("purpose", purpose);
-      const result = await sendOtpAction(formData);
-      setSubmitting(false);
+      try {
+        const formData = new FormData();
+        formData.set("login", normalizeLogin(login));
+        formData.set("purpose", purpose);
+        const result = await sendOtpAction(formData);
 
-      if (!result.ok) {
-        setFeedback({ tone: "error", message: result.message ?? "OTP could not be sent." });
-        return;
+        if (!result.ok) {
+          setFeedback({ tone: "error", message: result.message ?? "OTP could not be sent." });
+          return;
+        }
+
+        setTeamPurpose(purpose);
+        setTeamFlow("verify-otp");
+        setTimer(90);
+        setOtp(["", "", "", "", "", ""]);
+        setFeedback({ tone: "success", message: result.message ?? "OTP sent successfully." });
+        window.setTimeout(() => inputsRef.current[0]?.focus(), 60);
+      } catch (error) {
+        console.error("Failed to request team OTP.", error);
+        setFeedback({ tone: "error", message: "OTP request failed. Please try again." });
+      } finally {
+        setSubmitting(false);
       }
-
-      setTeamPurpose(purpose);
-      setTeamFlow("verify-otp");
-      setTimer(90);
-      setOtp(["", "", "", "", "", ""]);
-      setFeedback({ tone: "success", message: result.message ?? "OTP sent successfully." });
-      window.setTimeout(() => inputsRef.current[0]?.focus(), 60);
     })();
   }, [form]);
 
   function handleAdminLogin() {
     void form.handleSubmit(async ({ login, password }) => {
       setSubmitting(true);
-      const formData = new FormData();
-      formData.set("login", normalizeLogin(login));
-      formData.set("password", password ?? "");
-      const result = await adminPasswordLoginAction(formData);
-      setSubmitting(false);
+      try {
+        const formData = new FormData();
+        formData.set("login", normalizeLogin(login));
+        formData.set("password", password ?? "");
+        const result = await adminPasswordLoginAction(formData);
 
-      if (!result.ok || !result.redirectTo) {
-        setFeedback({ tone: "error", message: result.message ?? "Admin login failed." });
-        return;
+        if (!result.ok || !result.redirectTo) {
+          setFeedback({ tone: "error", message: result.message ?? "Admin login failed." });
+          return;
+        }
+
+        window.location.assign(result.redirectTo);
+      } catch (error) {
+        console.error("Admin login failed unexpectedly.", error);
+        setFeedback({ tone: "error", message: "Admin login failed. Please try again." });
+      } finally {
+        setSubmitting(false);
       }
-
-      router.push("/dashboard");
     })();
   }
 
   function handleTeamPasswordLogin() {
     void form.handleSubmit(async ({ login, password }) => {
       setSubmitting(true);
-      const formData = new FormData();
-      formData.set("login", normalizeLogin(login));
-      formData.set("password", password ?? "");
-      const result = await teamPasswordLoginAction(formData);
-      setSubmitting(false);
+      try {
+        const formData = new FormData();
+        formData.set("login", normalizeLogin(login));
+        formData.set("password", password ?? "");
+        const result = await teamPasswordLoginAction(formData);
 
-      if (!result.ok || !result.redirectTo) {
-        setFeedback({ tone: "error", message: result.message ?? "Login failed." });
-        return;
+        if (!result.ok || !result.redirectTo) {
+          setFeedback({ tone: "error", message: result.message ?? "Login failed." });
+          return;
+        }
+
+        setFeedback({ tone: "success", message: "Login successful. Opening dashboard..." });
+        window.location.assign(result.redirectTo);
+      } catch (error) {
+        console.error("Team password login failed unexpectedly.", error);
+        setFeedback({ tone: "error", message: "Login failed. Please try again." });
+      } finally {
+        setSubmitting(false);
       }
-
-      setFeedback({ tone: "success", message: "Login successful. Opening dashboard..." });
-      router.push("/dashboard");
     })();
   }
 
@@ -162,45 +178,57 @@ export function LoginForm() {
   function handleOtpVerify() {
     void form.handleSubmit(async ({ login }) => {
       setSubmitting(true);
-      const formData = new FormData();
-      formData.set("login", normalizeLogin(login));
-      formData.set("otp", otp.join(""));
-      formData.set("purpose", teamPurpose);
-      const result = await verifyOtpAction(formData);
-      setSubmitting(false);
+      try {
+        const formData = new FormData();
+        formData.set("login", normalizeLogin(login));
+        formData.set("otp", otp.join(""));
+        formData.set("purpose", teamPurpose);
+        const result = await verifyOtpAction(formData);
 
-      if (!result.ok || typeof result.setupToken !== "string") {
-        setFeedback({ tone: "error", message: result.message ?? "OTP verification failed." });
-        return;
+        if (!result.ok || typeof result.setupToken !== "string") {
+          setFeedback({ tone: "error", message: result.message ?? "OTP verification failed." });
+          return;
+        }
+
+        setSetupToken(result.setupToken);
+        setTeamFlow("set-password");
+        form.setValue("password", "");
+        form.setValue("confirmPassword", "");
+        setFeedback({ tone: "success", message: result.message ?? "OTP verified." });
+      } catch (error) {
+        console.error("OTP verification failed unexpectedly.", error);
+        setFeedback({ tone: "error", message: "OTP verification failed. Please try again." });
+      } finally {
+        setSubmitting(false);
       }
-
-      setSetupToken(result.setupToken);
-      setTeamFlow("set-password");
-      form.setValue("password", "");
-      form.setValue("confirmPassword", "");
-      setFeedback({ tone: "success", message: result.message ?? "OTP verified." });
     })();
   }
 
   function handlePasswordSetup() {
     void form.handleSubmit(async ({ login, password, confirmPassword }) => {
       setSubmitting(true);
-      const formData = new FormData();
-      formData.set("login", normalizeLogin(login));
-      formData.set("password", password ?? "");
-      formData.set("confirmPassword", confirmPassword ?? "");
-      formData.set("purpose", teamPurpose);
-      formData.set("setupToken", setupToken);
-      const result = await completeTeamPasswordSetupAction(formData);
-      setSubmitting(false);
+      try {
+        const formData = new FormData();
+        formData.set("login", normalizeLogin(login));
+        formData.set("password", password ?? "");
+        formData.set("confirmPassword", confirmPassword ?? "");
+        formData.set("purpose", teamPurpose);
+        formData.set("setupToken", setupToken);
+        const result = await completeTeamPasswordSetupAction(formData);
 
-      if (!result.ok || !result.redirectTo) {
-        setFeedback({ tone: "error", message: result.message ?? "Password setup failed." });
-        return;
+        if (!result.ok || !result.redirectTo) {
+          setFeedback({ tone: "error", message: result.message ?? "Password setup failed." });
+          return;
+        }
+
+        setFeedback({ tone: "success", message: result.message ?? "Password saved successfully." });
+        window.location.assign(result.redirectTo);
+      } catch (error) {
+        console.error("Team password setup failed unexpectedly.", error);
+        setFeedback({ tone: "error", message: "Password setup failed. Please try again." });
+      } finally {
+        setSubmitting(false);
       }
-
-      setFeedback({ tone: "success", message: result.message ?? "Password saved successfully." });
-      router.push("/dashboard");
     })();
   }
 

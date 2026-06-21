@@ -769,7 +769,18 @@ export async function verifyOtpAction(formData: FormData) {
       return { ok: false, message: "OTP is invalid or expired." };
     }
 
-    await prisma.oTP.update({ where: { id: record.id }, data: { used: true } });
+    await prisma.oTP.updateMany({
+      where: {
+        userId: record.user.id,
+        mobile: login,
+        purpose,
+        used: false,
+      },
+      data: {
+        used: true,
+        expiresAt: new Date(),
+      },
+    });
     const setupToken = createSetupToken();
     await prisma.user.update({
       where: { id: record.user.id },
@@ -884,6 +895,19 @@ export async function completeTeamPasswordSetupAction(formData: FormData) {
         authSetupPurpose: null,
         authSetupExpiresAt: null,
         lastLoginAt: new Date(),
+      },
+    });
+
+    await prisma.oTP.updateMany({
+      where: {
+        userId: user.id,
+        mobile: login,
+        purpose,
+        used: false,
+      },
+      data: {
+        used: true,
+        expiresAt: new Date(),
       },
     });
 
