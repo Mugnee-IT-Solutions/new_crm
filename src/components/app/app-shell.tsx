@@ -8,7 +8,6 @@ import { gsap } from "gsap";
 import { ChevronLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { AppHeader } from "@/components/app/app-header";
 import { AppSidebar } from "@/components/app/app-sidebar";
-import { Button } from "@/components/ui/button";
 import { cn, roleLabels, type Role, type ShellUser } from "@/lib/utils";
 import type { CrmWorkspace } from "@/lib/crm-data";
 
@@ -307,19 +306,18 @@ export function AppShell({
           />
         </div>
 
-        <Button
+        <button
           type="button"
-          variant="ghost"
-          size="icon"
           className={cn(
             "fixed top-1/2 z-50 hidden h-10 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/20 bg-[#0d2a6d] text-white shadow-lg transition-[left,background-color] duration-300 hover:bg-[#16398d] lg:inline-flex",
+            "items-center justify-center",
             collapsed ? "left-[82px]" : "left-[248px]",
           )}
           onClick={() => setCollapsed((value) => !value)}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-        </Button>
+        </button>
 
         <AnimatePresence>
           {mobileOpen ? (
@@ -340,16 +338,14 @@ export function AppShell({
               className="h-full w-[280px]"
               onClick={(event) => event.stopPropagation()}
             >
-              <Button
+              <button
                 type="button"
-                variant="ghost"
-                size="icon"
-                className="absolute right-3 top-3 z-10 h-10 w-10 rounded-full border border-white/20 bg-[#0d2a6d] text-white shadow-lg hover:bg-[#16398d]"
+                className="absolute right-3 top-3 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-[#0d2a6d] text-white shadow-lg hover:bg-[#16398d]"
                 onClick={() => setMobileOpen(false)}
                 aria-label="Close sidebar"
               >
                 <ChevronLeft className="h-4 w-4" />
-              </Button>
+              </button>
               <AppSidebar
                 role={role}
                 collapsed={false}
