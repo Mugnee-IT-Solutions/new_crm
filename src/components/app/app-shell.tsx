@@ -5,8 +5,10 @@ import * as React from "react";
 import { usePathname } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { gsap } from "gsap";
+import { ChevronLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { AppHeader } from "@/components/app/app-header";
 import { AppSidebar } from "@/components/app/app-sidebar";
+import { Button } from "@/components/ui/button";
 import { cn, roleLabels, type Role, type ShellUser } from "@/lib/utils";
 import type { CrmWorkspace } from "@/lib/crm-data";
 
@@ -302,9 +304,22 @@ export function AppShell({
             collapsed={collapsed}
             followUpCount={followUpCount}
             sidebarCounts={counts}
-            onToggle={() => setCollapsed((value) => !value)}
           />
         </div>
+
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "fixed top-1/2 z-50 hidden h-10 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/20 bg-[#0d2a6d] text-white shadow-lg transition-[left,background-color] duration-300 hover:bg-[#16398d] lg:inline-flex",
+            collapsed ? "left-[82px]" : "left-[248px]",
+          )}
+          onClick={() => setCollapsed((value) => !value)}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+        </Button>
 
         <AnimatePresence>
           {mobileOpen ? (
@@ -315,6 +330,7 @@ export function AppShell({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.18 }}
             className="fixed inset-0 z-50 bg-slate-950/40 lg:hidden"
+            onClick={() => setMobileOpen(false)}
           >
             <motion.div
               initial={{ x: -24, opacity: 0.9 }}
@@ -322,13 +338,23 @@ export function AppShell({
               exit={{ x: -24, opacity: 0.9 }}
               transition={{ duration: 0.22, ease: "easeOut" }}
               className="h-full w-[280px]"
+              onClick={(event) => event.stopPropagation()}
             >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-3 top-3 z-10 h-10 w-10 rounded-full border border-white/20 bg-[#0d2a6d] text-white shadow-lg hover:bg-[#16398d]"
+                onClick={() => setMobileOpen(false)}
+                aria-label="Close sidebar"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
               <AppSidebar
                 role={role}
                 collapsed={false}
                 followUpCount={followUpCount}
                 sidebarCounts={counts}
-                onToggle={() => setCollapsed((value) => !value)}
                 onNavigate={() => setMobileOpen(false)}
               />
             </motion.div>

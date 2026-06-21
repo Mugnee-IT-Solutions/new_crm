@@ -3,8 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { ChevronLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { isActiveRoute, sidebarMenus } from "@/lib/navigation";
 import { cn, type Role } from "@/lib/utils";
 import type { CrmWorkspace } from "@/lib/crm-data";
@@ -48,24 +46,16 @@ export function AppSidebar({
   role,
   collapsed,
   followUpCount = 0,
-  onToggle,
   onNavigate,
   sidebarCounts,
 }: {
   role: Role;
   collapsed: boolean;
   followUpCount?: number;
-  onToggle: () => void;
   onNavigate?: () => void;
   sidebarCounts?: SidebarCounts;
 }) {
   const pathname = usePathname();
-  const sidebarControlAction = onNavigate ?? onToggle;
-  const sidebarControlLabel = onNavigate
-    ? "Close sidebar"
-    : collapsed
-      ? "Expand sidebar"
-      : "Collapse sidebar";
   const counts = sidebarCounts ?? {
     followUps: followUpCount,
     leads: 0,
@@ -117,20 +107,6 @@ export function AppSidebar({
         </Link>
         </motion.div>
       </div>
-
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className={cn(
-          "absolute right-0 top-1/2 z-20 h-10 w-10 translate-x-1/2 -translate-y-1/2 rounded-full border border-white/20 bg-[#0d2a6d] text-white shadow-lg transition duration-300 hover:bg-[#16398d]",
-          onNavigate ? "inline-flex" : "hidden lg:inline-flex",
-        )}
-        onClick={sidebarControlAction}
-        aria-label={sidebarControlLabel}
-      >
-        {onNavigate ? <ChevronLeft className="h-4 w-4" /> : collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-      </Button>
 
       <nav className="flex-1 overflow-y-auto px-3 pb-4 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         <div className="flex min-h-full flex-col gap-3">
