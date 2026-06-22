@@ -1,5 +1,6 @@
 import { FollowUpStatus, Priority, TaskStatus } from "@prisma/client";
 import { format } from "date-fns";
+import { buildCustomerScopeWhere, hasCustomerAccess } from "@/lib/customer-ownership";
 import { getPrisma } from "@/lib/prisma";
 import type { Role } from "@/lib/utils";
 
@@ -870,6 +871,9 @@ export async function createTaskEntry(actor: TaskActor, input: {
   let companyName = input.companyName?.trim();
 
   if (companyId) {
+    if (!(await hasCustomerAccess(prisma, { id: actor.id, role: actor.role }, companyId))) {
+      throw new TaskInputError("You are not allowed to use this customer record.", 403);
+    }
     const company = await prisma.customerCompany.findUnique({
       where: { id: companyId },
       select: { id: true, name: true },
@@ -883,7 +887,12 @@ export async function createTaskEntry(actor: TaskActor, input: {
     companyName = company.name;
   } else if (companyName) {
     const matchedCompany = await prisma.customerCompany.findFirst({
-      where: { name: { equals: normalizeText(companyName), mode: "insensitive" } },
+      where: {
+        AND: [
+          await buildCustomerScopeWhere(prisma, { id: actor.id, role: actor.role }),
+          { name: { equals: normalizeText(companyName), mode: "insensitive" } },
+        ],
+      },
       select: { id: true, name: true },
     });
 

@@ -1,5 +1,7 @@
 import type * as Prisma from "@prisma/client";
 import { addDays, endOfMonth, endOfWeek, format, isBefore, isSameDay, startOfDay, startOfMonth, startOfWeek } from "date-fns";
+import { buildCustomerScopeWhere } from "@/lib/customer-ownership";
+import { getScopedLeadUserIds } from "@/lib/lead-ownership";
 import { getPrisma } from "@/lib/prisma";
 import { getTodayWorkQueue } from "@/lib/task-center";
 import { type Role, type ShellUser } from "@/lib/utils";
@@ -51,6 +53,7 @@ export type CompanyRow = {
   industry: string;
   address: string;
   website: string;
+  assignedToId?: string | null;
   assignedTo: string;
   status: string;
   totalLeads: number;
@@ -1295,6 +1298,7 @@ function mapCompanyRow(company: ExistingCustomerRecord): CompanyRow {
     industry: company.industry || rawIndustry || "General",
     address: company.address ?? rawAddress ?? "-",
     website: company.website ?? "-",
+    assignedToId: company.assignedToId,
     assignedTo: company.assignedTo?.name ?? "-",
     status: labelize(company.status),
     totalLeads: Math.max(company.totalLeads, company.leads.length),
@@ -1705,15 +1709,11 @@ async function getScopedUserIds(role: Role, user: ShellUser) {
   return [user.id, ...team.map((member) => member.id)];
 }
 
-function getLeadScopedUserIds() {
-  return undefined;
-}
-
 export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmWorkspace> {
   const prisma = getPrisma();
   await ensureCrmFoundation();
   const scopedUserIds = await getScopedUserIds(role, user);
-  const scopedLeadUserIds = getLeadScopedUserIds();
+  const scopedLeadUserIds = await getScopedLeadUserIds(prisma, { id: user.id ?? "", role });
   const today = startOfDay(new Date());
   const tomorrow = addDays(today, 1);
 
@@ -1721,12 +1721,20 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     ? {
         OR: [
           { assignedToId: { in: scopedLeadUserIds } },
-          { createdById: { in: scopedLeadUserIds } },
+          {
+            AND: [
+              { assignedToId: null },
+              { createdById: { in: scopedLeadUserIds } },
+            ],
+          },
         ],
       }
     : {};
 
-  const companyWhere: Prisma.Prisma.CustomerCompanyWhereInput = {};
+  const companyWhere: Prisma.Prisma.CustomerCompanyWhereInput = await buildCustomerScopeWhere(
+    prisma,
+    { id: user.id ?? "", role },
+  );
 
   const taskWhere: Prisma.Prisma.TaskWhereInput = scopedUserIds
     ? {
@@ -1891,8 +1899,16 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
       take: 100,
     }),
     prisma.rewardRule.findMany({ orderBy: { createdAt: "asc" } }),
-    prisma.importExportLog.findMany({ orderBy: { createdAt: "desc" }, take: 50 }),
-    prisma.reportLog.findMany({ orderBy: { createdAt: "desc" }, take: 50 }),
+    prisma.importExportLog.findMany({
+      where: scopedUserIds ? { requestedById: { in: scopedUserIds } } : {},
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
+    prisma.reportLog.findMany({
+      where: scopedUserIds ? { requestedById: { in: scopedUserIds } } : {},
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
     prisma.lead.count({ where: leadWhere }),
     prisma.customerCompany.count({ where: companyWhere }),
     prisma.todayPlan.count({ where: planWidgetWhere }),
@@ -2409,9 +2425,48 @@ export async function getFollowUpPageData(role: Role, user: ShellUser, query?: F
 export async function getLeadDetail(id: string, role: Role, user: ShellUser) {
   const prisma = getPrisma();
   const workspace = await getCrmWorkspace(role, user);
+  const scopedUserIds = await getScopedUserIds(role, user);
   const lookup = decodeURIComponent(id);
   const lookupSlug = slugify(lookup);
-  const record = await prisma.lead.findFirst({
+  const scopedLead = workspace.leads.find((item) => item.id === lookup || slugify(item.title) === lookupSlug || slugify(item.customerName) === lookupSlug);
+  const allowedLeadIds = new Set(workspace.leads.map((item) => item.id));
+  const record = scopedLead
+    ? await prisma.lead.findFirst({
+        where: { id: scopedLead.id },
+        include: {
+          company: {
+            select: {
+              id: true,
+              name: true,
+              contacts: {
+                select: {
+                  id: true,
+                  name: true,
+                  mobile: true,
+                  email: true,
+                  isPrimary: true,
+                  whatsapp: true,
+                },
+              },
+            },
+          },
+          interestedProduct: true,
+          assignedTo: true,
+          communications: scopedUserIds ? { where: { userId: { in: scopedUserIds } } } : true,
+          followUps: scopedUserIds ? { where: { assignedToId: { in: scopedUserIds } } } : true,
+          quotations: scopedUserIds
+            ? {
+                where: {
+                  OR: [
+                    { createdById: { in: scopedUserIds } },
+                    { lead: { assignedToId: { in: scopedUserIds } } },
+                  ],
+                },
+              }
+            : true,
+        },
+      })
+    : await prisma.lead.findFirst({
     where: {
       OR: [
         { id: lookup },
@@ -2438,12 +2493,21 @@ export async function getLeadDetail(id: string, role: Role, user: ShellUser) {
       },
       interestedProduct: true,
       assignedTo: true,
-      communications: true,
-      followUps: true,
-      quotations: true,
+      communications: scopedUserIds ? { where: { userId: { in: scopedUserIds } } } : true,
+      followUps: scopedUserIds ? { where: { assignedToId: { in: scopedUserIds } } } : true,
+      quotations: scopedUserIds
+        ? {
+            where: {
+              OR: [
+                { createdById: { in: scopedUserIds } },
+                { lead: { assignedToId: { in: scopedUserIds } } },
+              ],
+            },
+          }
+        : true,
     },
   });
-  const lead = record ? {
+  const lead = record && allowedLeadIds.has(record.id) ? {
     id: record.id,
     companyId: record.companyId,
     title: record.title || record.customerName,
@@ -2468,7 +2532,7 @@ export async function getLeadDetail(id: string, role: Role, user: ShellUser) {
     salesProgress: progressFromLead(record.status),
     notes: record.notes ?? "-",
     createdAt: dateLabel(record.createdAt, "dd/MM/yyyy hh:mm a"),
-  } satisfies LeadRow : workspace.leads.find((item) => item.id === lookup || slugify(item.title) === lookupSlug || slugify(item.customerName) === lookupSlug);
+  } satisfies LeadRow : scopedLead;
   return {
     workspace,
     lead,
@@ -2479,6 +2543,7 @@ export async function getLeadDetail(id: string, role: Role, user: ShellUser) {
 export async function getCustomerDetail(id: string, role: Role, user: ShellUser) {
   const prisma = getPrisma();
   const workspace = await getCrmWorkspace(role, user);
+  const scopedUserIds = await getScopedUserIds(role, user);
   const lookup = decodeURIComponent(id);
   const lookupSlug = slugify(lookup);
   const scopeCustomer = workspace.companies.find((item) => item.id === lookup || slugify(item.name) === lookupSlug);
@@ -2516,27 +2581,46 @@ export async function getCustomerDetail(id: string, role: Role, user: ShellUser)
 
   const [tasks, followUps, communications, timeline] = await Promise.all([
     prisma.task.findMany({
-      where: {
-        OR: [
-          { companyId: scopedCustomer.id },
-          { companyName: { equals: scopedCustomer.name, mode: "insensitive" } },
-        ],
-      },
+      where: combineWhere(
+        scopedUserIds
+          ? {
+              OR: [
+                { assignedToId: { in: scopedUserIds } },
+                { assignedById: { in: scopedUserIds } },
+              ],
+            }
+          : undefined,
+        {
+          OR: [
+            { companyId: scopedCustomer.id },
+            { companyName: { equals: scopedCustomer.name, mode: "insensitive" as const } },
+          ],
+        },
+      ),
       include: taskInclude,
       orderBy: { updatedAt: "desc" },
     }),
     prisma.followUp.findMany({
-      where: { companyId: scopedCustomer.id },
+      where: combineWhere(
+        scopedUserIds ? { assignedToId: { in: scopedUserIds } } : undefined,
+        { companyId: scopedCustomer.id },
+      ),
       include: followUpInclude,
       orderBy: { updatedAt: "desc" },
     }),
     prisma.communicationLog.findMany({
-      where: { companyId: scopedCustomer.id },
+      where: combineWhere(
+        scopedUserIds ? { userId: { in: scopedUserIds } } : undefined,
+        { companyId: scopedCustomer.id },
+      ),
       include: communicationHistoryInclude,
       orderBy: { communicationAt: "desc" },
     }),
     prisma.activityTimeline.findMany({
-      where: { companyId: scopedCustomer.id },
+      where: combineWhere(
+        scopedUserIds ? { userId: { in: scopedUserIds } } : undefined,
+        { companyId: scopedCustomer.id },
+      ),
       include: { user: true },
       orderBy: { createdAt: "desc" },
     }),

@@ -1,5 +1,7 @@
 import * as XLSX from "xlsx";
 import type * as PrismaTypes from "@prisma/client";
+import { buildCustomerScopeWhere } from "@/lib/customer-ownership";
+import { getScopedLeadUserIds } from "@/lib/lead-ownership";
 import { getPrisma } from "@/lib/prisma";
 import { type Role } from "@/lib/utils";
 import { CUSTOMER_TEMPLATE_RAW_KEYS } from "@/lib/customer-transfer";
@@ -203,10 +205,26 @@ function toCsvSection(title: string, rows: Array<Record<string, unknown>>, heade
 }
 
 export async function exportAllCrmData(
-  _actor: FullExportActor,
+  actor: FullExportActor,
   format: FullExportFormat,
 ): Promise<FullExportResult> {
   const prisma = getPrisma();
+  const scopedUserIds = await getScopedLeadUserIds(prisma, actor);
+  const customerWhere = await buildCustomerScopeWhere(prisma, actor);
+  const leadWhere = scopedUserIds
+    ? {
+        OR: [
+          { assignedToId: { in: scopedUserIds } },
+          {
+            AND: [
+              { assignedToId: null },
+              { createdById: { in: scopedUserIds } },
+            ],
+          },
+        ],
+      }
+    : {};
+  const followUpWhere = scopedUserIds ? { assignedToId: { in: scopedUserIds } } : {};
 
   const today = new Date();
   const fileDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -214,6 +232,7 @@ export async function exportAllCrmData(
 
   const [rawCustomers, rawLeads, rawProducts, rawFollowUps] = await Promise.all([
     prisma.customerCompany.findMany({
+      where: customerWhere,
       orderBy: { name: "asc" },
       include: {
         assignedTo: { select: { name: true } },
@@ -224,6 +243,7 @@ export async function exportAllCrmData(
       },
     }),
     prisma.lead.findMany({
+      where: leadWhere,
       orderBy: { createdAt: "desc" },
       include: {
         company: { select: { name: true } },
@@ -232,6 +252,7 @@ export async function exportAllCrmData(
     }),
     prisma.productService.findMany({ orderBy: { name: "asc" } }),
     prisma.followUp.findMany({
+      where: followUpWhere,
       orderBy: { followUpDate: "desc" },
       include: {
         company: { select: { name: true } },
@@ -265,7 +286,7 @@ export async function exportAllCrmData(
         type: "EXPORT",
         module: "IMPORT_EXPORT",
         format: "CSV",
-        requestedById: _actor.id,
+        requestedById: actor.id,
         fileName,
         status: "COMPLETED",
         processedRows: totalRows,
@@ -295,7 +316,7 @@ export async function exportAllCrmData(
       type: "EXPORT",
       module: "IMPORT_EXPORT",
       format: "EXCEL",
-      requestedById: _actor.id,
+      requestedById: actor.id,
       fileName,
       status: "COMPLETED",
       processedRows: totalRows,

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { hasCustomerAccess, resolveCustomerOwnerId } from "@/lib/customer-ownership";
 import { getPrisma } from "@/lib/prisma";
 import { requireRequestUser } from "@/lib/request-user";
 
@@ -217,6 +218,9 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
     }
 
     const prisma = getPrisma();
+    if (!(await hasCustomerAccess(prisma, { id: auth.user.id, role: auth.user.role }, id))) {
+      return NextResponse.json({ success: false, message: "You are not allowed to access this customer." }, { status: 403 });
+    }
     const customer = await prisma.customerCompany.findUnique({
       where: { id },
       include: {
@@ -271,6 +275,9 @@ export async function PATCH(_: Request, context: { params: Promise<{ id: string 
 
     const payload = await parsePayload(_);
     const prisma = getPrisma();
+    if (!(await hasCustomerAccess(prisma, { id: auth.user.id, role: auth.user.role }, id))) {
+      return NextResponse.json({ success: false, message: "You are not allowed to update this customer." }, { status: 403 });
+    }
     const existing = (await prisma.customerCompany.findUnique({ where: { id } })) as CustomerRecord | null;
     if (!existing) {
       return NextResponse.json({ success: false, message: "Customer not found." }, { status: 404 });
@@ -308,18 +315,14 @@ export async function PATCH(_: Request, context: { params: Promise<{ id: string 
     const totalLeads = payload.totalLeads === undefined ? existing.totalLeads : normalizeToInt(payload.totalLeads, existing.totalLeads);
     const lastCommunication = payload.lastCommunication === undefined ? existing.lastCommunication : parseDate(payload.lastCommunication);
     const resolvedAssignedToId = normalizeLastAssigned(payload.assignedToId);
-
-    const assignedToPatch = resolvedAssignedToId === null
-      ? { disconnect: true }
-      : resolvedAssignedToId
-        ? (await prisma.user.findFirst({ where: { id: resolvedAssignedToId, status: "ACTIVE" }, select: { id: true } }))
-          ? { connect: { id: resolvedAssignedToId } }
-          : null
-        : undefined;
-
-    if (resolvedAssignedToId && !assignedToPatch) {
-      return NextResponse.json({ success: false, message: "Assigned marketer not found." }, { status: 400 });
-    }
+    const nextOwnerId = payload.assignedToId === undefined
+      ? undefined
+      : await resolveCustomerOwnerId(
+          prisma,
+          { id: auth.user.id, role: auth.user.role },
+          resolvedAssignedToId ?? undefined,
+          { requireSelectionForElevated: true },
+        );
 
     const data: Record<string, unknown> = {
       ...(hasCompanyName ? { name: name || existing.name } : {}),
@@ -333,7 +336,7 @@ export async function PATCH(_: Request, context: { params: Promise<{ id: string 
       notes: hasNote ? notes : existing.notes,
       totalLeads,
       lastCommunication,
-      ...(assignedToPatch ? { assignedTo: assignedToPatch } : {}),
+      ...(nextOwnerId ? { assignedTo: { connect: { id: nextOwnerId } } } : {}),
       rawData: mergeRawTemplate(existing.rawData, payload),
     };
 
@@ -367,6 +370,9 @@ export async function DELETE(_: Request, context: { params: Promise<{ id: string
     }
 
     const prisma = getPrisma();
+    if (!(await hasCustomerAccess(prisma, { id: auth.user.id, role: auth.user.role }, id))) {
+      return NextResponse.json({ success: false, message: "You are not allowed to delete this customer." }, { status: 403 });
+    }
     const existing = await prisma.customerCompany.findUnique({ where: { id } });
     if (!existing) {
       return NextResponse.json({ success: false, message: "Customer not found." }, { status: 404 });

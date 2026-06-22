@@ -13,7 +13,7 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
     }
 
     const { id } = await context.params;
-    const row = await getLeadById(id);
+    const row = await getLeadById(id, { id: auth.user.id, role: auth.user.role });
     if (!row) {
       return NextResponse.json({ success: false, message: "Lead not found." }, { status: 404 });
     }
@@ -64,7 +64,7 @@ export async function DELETE(_: Request, context: { params: Promise<{ id: string
     }
 
     const { id } = await context.params;
-    const result = await deleteLeadEntry(id);
+    const result = await deleteLeadEntry({ id: auth.user.id, role: auth.user.role }, id);
     return NextResponse.json({ success: true, id: result.id });
   } catch (error) {
     const status = error instanceof LeadInputError ? error.status : 500;

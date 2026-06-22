@@ -14,6 +14,7 @@ export async function POST(request: Request) {
 
     const formData = await request.formData();
     const file = formData.get("file");
+    const assignedToId = typeof formData.get("assignedToId") === "string" ? String(formData.get("assignedToId") ?? "").trim() : undefined;
 
     if (!(file instanceof File)) {
       return NextResponse.json({ success: false, message: "Excel or CSV file is required." }, { status: 400 });
@@ -34,6 +35,7 @@ export async function POST(request: Request) {
     const result = await importCustomersFromFile(buffer, fileName, {
       id: auth.user.id,
       role: auth.user.role,
+      assignedToId,
     });
 
     return NextResponse.json(result);

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { buildCustomerScopeWhere, getCustomerAssignableOwners, resolveCustomerOwnerId } from "@/lib/customer-ownership";
 import { getPrisma } from "@/lib/prisma";
 import { requireRequestUser } from "@/lib/request-user";
 
@@ -211,21 +212,25 @@ export async function GET(request: Request) {
     const prisma = getPrisma();
     const { searchParams } = new URL(request.url);
     const search = (searchParams.get("search") || "").trim();
-
-    const where = search
-      ? {
-          OR: [
-            { name: { contains: search, mode: "insensitive" as const } },
-            { contactPerson: { contains: search, mode: "insensitive" as const } },
-            { phone: { contains: search, mode: "insensitive" as const } },
-          ],
-        }
-      : {};
+    const city = (searchParams.get("city") || "").trim();
+    const industry = (searchParams.get("industry") || "").trim();
+    const assignedToId = (searchParams.get("assignedToId") || "").trim();
+    const where = await buildCustomerScopeWhere(
+      prisma,
+      { id: auth.user.id, role: auth.user.role },
+      {
+        search,
+        city,
+        industry,
+        assignedToId,
+      },
+    );
+    const assignableOwners = await getCustomerAssignableOwners(prisma, { id: auth.user.id, role: auth.user.role });
 
     const rows = await prisma.customerCompany.findMany({
       where,
       include: {
-        assignedTo: { select: { name: true } },
+        assignedTo: { select: { name: true, email: true } },
         contacts: {
           orderBy: { createdAt: "asc" },
           take: 3,
@@ -260,13 +265,22 @@ export async function GET(request: Request) {
       lastCommunication: Date | null;
       assignedToId: string | null;
       rawData?: unknown;
-      assignedTo: { name: string } | null;
+      assignedTo: { name: string | null; email?: string | null } | null;
       contacts: { email: string | null; whatsapp: string | null }[];
       phoneNumbers: { number: string; whatsapp: boolean }[];
     }>;
 
     return NextResponse.json({
       success: true,
+      summary: {
+        count: rows.length,
+        selectedOwnerId: assignedToId || "all",
+      },
+      ownerOptions: assignableOwners.map((owner) => ({
+        id: owner.id,
+        name: owner.name,
+        role: owner.role,
+      })),
       rows: rows.map((row) => {
         const raw = (row.rawData && typeof row.rawData === "object" && !Array.isArray(row.rawData))
           ? row.rawData as Record<string, unknown>
@@ -281,6 +295,8 @@ export async function GET(request: Request) {
 
         return {
           ...row,
+          assignedToId: row.assignedToId,
+          assignedTo: row.assignedTo?.name?.trim() || row.assignedTo?.email?.trim() || "-",
           email: primaryEmail ?? (typeof rawEmail === "string" ? rawEmail.trim() : rawEmail?.toString() ?? null),
           phone: row.phone || row.phoneNumbers[0]?.number || "",
           whatsapp: row.phoneNumbers.find((item) => item.whatsapp)?.number ?? "",
@@ -325,6 +341,12 @@ export async function POST(request: Request) {
     }
 
     const prisma = getPrisma();
+    const ownerId = await resolveCustomerOwnerId(
+      prisma,
+      { id: auth.user.id, role: auth.user.role },
+      assignedToId,
+      { requireSelectionForElevated: true },
+    );
     const matches = await prisma.customerCompany.findMany({
       where: {
         name: {
@@ -339,17 +361,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, message: "Multiple customers match this company name." }, { status: 409 });
     }
 
-    const assignedTo = assignedToId
-      ? await prisma.user.findFirst({
-          where: { id: assignedToId, status: "ACTIVE" },
-          select: { id: true },
-        })
-      : null;
-
-    if (assignedToId && !assignedTo) {
-      return NextResponse.json({ success: false, message: "Assigned marketer not found." }, { status: 400 });
-    }
-
     const data = {
       name,
       contactPerson: rawContactPerson || templateContactPerson || undefined,
@@ -361,7 +372,7 @@ export async function POST(request: Request) {
       totalLeads: normalizeToInt(payload.totalLeads, 0),
       lastCommunication: parseDate(payload.lastCommunication),
       rawData,
-      ...(assignedTo ? { assignedTo: { connect: { id: assignedTo.id } } } : {}),
+      assignedTo: { connect: { id: ownerId } },
     };
 
     if (matches.length === 1) {

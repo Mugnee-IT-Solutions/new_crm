@@ -827,6 +827,33 @@ function getAssignableUserOptions(workspace: CrmWorkspace, role: Role, mode: "ta
   return Array.from(options.values());
 }
 
+function getCustomerOwnerOptions(workspace: CrmWorkspace, role: Role): AssigneeOption[] {
+  const options = new Map<string, AssigneeOption>();
+  const addOption = (id: string | undefined, label: string | undefined) => {
+    const normalizedId = id?.trim();
+    const normalizedLabel = label?.trim();
+    if (!normalizedId || !normalizedLabel || options.has(normalizedId)) return;
+    options.set(normalizedId, { id: normalizedId, label: normalizedLabel });
+  };
+
+  if (role === "MARKETER") {
+    addOption(workspace.user.id, workspace.user.name ? `${workspace.user.name} (Me)` : undefined);
+    return Array.from(options.values());
+  }
+
+  for (const employee of workspace.employees) {
+    if (employee.roleKey === "MARKETER") {
+      addOption(employee.id, `${employee.name} (${employee.role})`);
+    }
+  }
+
+  if (role === "SUPERVISOR" && options.size === 0) {
+    addOption(workspace.user.id, workspace.user.name ? `${workspace.user.name} (Me)` : undefined);
+  }
+
+  return Array.from(options.values());
+}
+
 function InfoLine({ label, value, progress }: { label: string; value: React.ReactNode; progress?: number }) {
   return (
     <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
@@ -1365,6 +1392,7 @@ function LeadForm({
   onSuccess?: (row: LeadRow) => void;
   onDone: () => void;
 }) {
+  const viewerRole = workspace.user.role;
   const [values, setValues] = React.useState<LeadFormValues>(() => toLeadFormValues(lead));
   const [pending, startTransition] = React.useTransition();
   const [message, setMessage] = React.useState("");
@@ -1413,7 +1441,7 @@ function LeadForm({
               phoneNumbers: values.phoneNumbers,
               emails: values.emails,
               productInterestId: values.productInterestId,
-              assignedToId: values.assignedToId,
+              assignedToId: viewerRole === "MARKETER" ? workspace.user.id : (values.assignedToId || undefined),
               priority: values.priority,
               score: Number(values.score),
               purchaseProbability: Number(values.purchaseProbability),
@@ -1516,13 +1544,15 @@ function LeadForm({
             <EntityOptions workspace={workspace} type="products" />
           </select>
         </label>
-        <label className="space-y-1.5">
-          <span className="text-sm font-semibold text-slate-700">Assigned Marketer</span>
-          <select value={values.assignedToId} onChange={(event) => updateValue("assignedToId", event.target.value)} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
-            <option value="">Auto assign</option>
-            {marketers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-        </label>
+        {viewerRole !== "MARKETER" ? (
+          <label className="space-y-1.5">
+            <span className="text-sm font-semibold text-slate-700">Assigned Marketer</span>
+            <select value={values.assignedToId} onChange={(event) => updateValue("assignedToId", event.target.value)} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+              <option value="">Select marketer</option>
+              {marketers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+        ) : null}
         <label className="space-y-1.5">
           <span className="text-sm font-semibold text-slate-700">Priority</span>
           <select value={values.priority} onChange={(event) => updateValue("priority", event.target.value)} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
@@ -1658,6 +1688,8 @@ function FollowUpForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
 }
 
 function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: () => void }) {
+  const ownerOptions = React.useMemo(() => getCustomerOwnerOptions(workspace, workspace.user.role), [workspace]);
+
   return (
     <ActionForm action={createCustomerAction} onDone={onDone} submitLabel="Save Customer">
       <div className="grid gap-3 sm:grid-cols-2">
@@ -1688,7 +1720,14 @@ function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
         <TextField label="Email 2" name="cp2Email2" />
         <TextField label="Lead Source" name="leadSource" />
       </div>
-      <SelectBox label="Assigned Marketer" name="assignedToId"><EntityOptions workspace={workspace} type="marketers" /></SelectBox>
+      {workspace.user.role === "MARKETER" ? (
+        <input type="hidden" name="assignedToId" value={workspace.user.id ?? ""} />
+      ) : (
+        <SelectBox label="Assigned Marketer" name="assignedToId">
+          <option value="">Select marketer</option>
+          {ownerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </SelectBox>
+      )}
     </ActionForm>
   );
 }
@@ -1720,6 +1759,7 @@ type CustomerTemplateEditValues = {
   cp2Email1: string;
   cp2Email2: string;
   leadSource: string;
+  assignedToId: string;
 };
 
 const EMPTY_CUSTOMER_TEMPLATE_VALUES: CustomerTemplateEditValues = {
@@ -1749,6 +1789,7 @@ const EMPTY_CUSTOMER_TEMPLATE_VALUES: CustomerTemplateEditValues = {
   cp2Email1: "",
   cp2Email2: "",
   leadSource: "",
+  assignedToId: "",
 };
 
 function buildCustomerTemplateValues(customer: CompanyRow): CustomerTemplateEditValues {
@@ -1781,6 +1822,7 @@ function buildCustomerTemplateValues(customer: CompanyRow): CustomerTemplateEdit
     cp2Email1: toDisplayValue(readTemplateField(raw, ["Contact Person 2 Email 1", "Contact Person 2 Email", "Email 1 (2)", "Secondary Email 1"])),
     cp2Email2: toDisplayValue(readTemplateField(raw, ["Contact Person 2 Email 2", "Contact Person 2 Mail", "Email 2 (2)", "Secondary Email 2"])),
     leadSource: toDisplayValue(readTemplateField(raw, ["Lead Source", "Source"])),
+    assignedToId: customer.assignedToId ?? "",
   };
 }
 
@@ -1870,11 +1912,13 @@ function CustomerViewModal({
 }
 
 function CustomerEditModal({
+  workspace,
   customer,
   open,
   onDone,
   onClose,
 }: {
+  workspace: CrmWorkspace;
   customer: CompanyRow | null;
   open: boolean;
   onDone: (customer: CompanyRow | null) => void;
@@ -1884,6 +1928,7 @@ function CustomerEditModal({
   const [pending, setPending] = React.useState(false);
   const [message, setMessage] = React.useState("");
   const [pendingMessage, setPendingMessage] = React.useState("");
+  const ownerOptions = React.useMemo(() => getCustomerOwnerOptions(workspace, workspace.user.role), [workspace]);
 
   React.useEffect(() => {
     setValues(customer ? buildCustomerTemplateValues(customer) : EMPTY_CUSTOMER_TEMPLATE_VALUES);
@@ -1944,6 +1989,7 @@ function CustomerEditModal({
           cp2Email1: values.cp2Email1.trim(),
           cp2Email2: values.cp2Email2.trim(),
           leadSource: values.leadSource.trim(),
+          ...(workspace.user.role !== "MARKETER" ? { assignedToId: values.assignedToId } : {}),
         }),
       });
 
@@ -2209,6 +2255,20 @@ function CustomerEditModal({
               className="h-10 px-3 text-[13px]"
             />
           </label>
+          {workspace.user.role !== "MARKETER" ? (
+            <label className="block space-y-1.5">
+              <span className="text-xs font-semibold text-slate-700">Assigned Marketer</span>
+              <select
+                name="assignedToId"
+                value={values.assignedToId}
+                onChange={(event) => updateField("assignedToId", event.target.value)}
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+              >
+                <option value="">Select marketer</option>
+                {ownerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </label>
+          ) : null}
         </div>
         {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
         {pendingMessage ? <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700">{pendingMessage}</p> : null}
@@ -2354,6 +2414,7 @@ function LeadRowActions({
 }
 
 export function LeadsPage({ workspace }: { role: Role; workspace: CrmWorkspace }) {
+  const viewerRole = workspace.user.role;
   const { refreshLeadCount } = useTaskCounterContext();
   const [open, setOpen] = React.useState(false);
   const [editLead, setEditLead] = React.useState<LeadRow | null>(null);
@@ -2379,7 +2440,7 @@ export function LeadsPage({ workspace }: { role: Role; workspace: CrmWorkspace }
     status: true,
     score: true,
     purchaseProbability: true,
-    assignedTo: true,
+    assignedTo: viewerRole !== "MARKETER",
     priority: true,
     followUpDate: true,
     createdAt: true,
@@ -2444,7 +2505,13 @@ export function LeadsPage({ workspace }: { role: Role; workspace: CrmWorkspace }
     return () => window.clearTimeout(timer);
   }, [feedback]);
 
-  const visibleKeys = React.useMemo(() => LEAD_COLUMN_OPTIONS.filter((item) => visibleColumns[item.key]).map((item) => item.key), [visibleColumns]);
+  const visibleKeys = React.useMemo(
+    () => LEAD_COLUMN_OPTIONS
+      .filter((item) => item.key !== "assignedTo" || viewerRole !== "MARKETER")
+      .filter((item) => visibleColumns[item.key])
+      .map((item) => item.key),
+    [viewerRole, visibleColumns],
+  );
 
   const handleExport = async () => {
     setExporting(true);
@@ -2453,6 +2520,10 @@ export function LeadsPage({ workspace }: { role: Role; workspace: CrmWorkspace }
         format: "xlsx",
         columns: visibleKeys.join(","),
       });
+      if (search.trim()) params.set("search", search.trim());
+      if (statusFilter !== "all") params.set("status", statusFilter);
+      if (priorityFilter !== "all") params.set("priority", priorityFilter);
+      if (viewerRole !== "MARKETER" && assignedToId !== "all") params.set("assignedToId", assignedToId);
       const response = await fetch(`/api/leads/export?${params.toString()}`);
       if (!response.ok) {
         const result = await response.json().catch(() => null);
@@ -2482,8 +2553,23 @@ export function LeadsPage({ workspace }: { role: Role; workspace: CrmWorkspace }
 
     setImporting(true);
     try {
+      const importOwnerId = viewerRole === "MARKETER"
+        ? workspace.user.id ?? ""
+        : assignedToId !== "all"
+          ? assignedToId
+          : marketers.length === 1
+            ? marketers[0].id
+            : "";
+
+      if (viewerRole !== "MARKETER" && !importOwnerId) {
+        throw new Error("Select a marketer before importing leads.");
+      }
+
       const formData = new FormData();
       formData.set("file", file);
+      if (importOwnerId) {
+        formData.set("assignedToId", importOwnerId);
+      }
       const response = await fetch("/api/leads/import", { method: "POST", body: formData });
       const result = await response.json();
       if (!response.ok || !result.success) {
@@ -2540,13 +2626,15 @@ export function LeadsPage({ workspace }: { role: Role; workspace: CrmWorkspace }
             <option value="URGENT">Important</option>
           </select>
         </label>
-        <label className="space-y-1.5">
-          <span className="text-xs font-bold uppercase text-slate-500">Assigned To</span>
-          <select value={assignedToId} onChange={(event) => { setPage(1); setAssignedToId(event.target.value); }} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
-            <option value="all">All Marketers</option>
-            {marketers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-        </label>
+        {viewerRole !== "MARKETER" ? (
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold uppercase text-slate-500">Assigned To</span>
+            <select value={assignedToId} onChange={(event) => { setPage(1); setAssignedToId(event.target.value); }} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+              <option value="all">All Marketers</option>
+              {marketers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+        ) : null}
         <label className="space-y-1.5">
           <span className="text-xs font-bold uppercase text-slate-500">Search</span>
           <Input value={search} onChange={(event) => { setPage(1); setSearch(event.target.value); }} placeholder="Search lead, company, phone, email..." />
@@ -2559,7 +2647,7 @@ export function LeadsPage({ workspace }: { role: Role; workspace: CrmWorkspace }
           </Button>
           {columnMenuOpen ? (
             <div className="absolute right-0 z-20 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
-              {LEAD_COLUMN_OPTIONS.map((column) => (
+              {LEAD_COLUMN_OPTIONS.filter((column) => column.key !== "assignedTo" || viewerRole !== "MARKETER").map((column) => (
                 <label key={column.key} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
                   <input
                     type="checkbox"
@@ -2587,7 +2675,7 @@ export function LeadsPage({ workspace }: { role: Role; workspace: CrmWorkspace }
                 {visibleColumns.status ? <th className="px-4 py-3 font-bold">Status</th> : null}
                 {visibleColumns.score ? <th className="px-4 py-3 font-bold">Lead Score</th> : null}
                 {visibleColumns.purchaseProbability ? <th className="px-4 py-3 font-bold">Probability</th> : null}
-                {visibleColumns.assignedTo ? <th className="px-4 py-3 font-bold">Assigned To</th> : null}
+                {viewerRole !== "MARKETER" && visibleColumns.assignedTo ? <th className="px-4 py-3 font-bold">Assigned To</th> : null}
                 {visibleColumns.priority ? <th className="px-4 py-3 font-bold">Priority</th> : null}
                 {visibleColumns.followUpDate ? <th className="px-4 py-3 font-bold">Follow-up Date</th> : null}
                 {visibleColumns.createdAt ? <th className="px-4 py-3 font-bold">Created At</th> : null}
@@ -2609,7 +2697,7 @@ export function LeadsPage({ workspace }: { role: Role; workspace: CrmWorkspace }
                   {visibleColumns.status ? <td className="px-4 py-3"><StatusBadge value={lead.status} /></td> : null}
                   {visibleColumns.score ? <td className="px-4 py-3 font-semibold text-slate-700">{lead.score}</td> : null}
                   {visibleColumns.purchaseProbability ? <td className="px-4 py-3 font-semibold text-slate-700">{lead.purchaseProbability}%</td> : null}
-                  {visibleColumns.assignedTo ? <td className="px-4 py-3 text-slate-700">{lead.assignedTo}</td> : null}
+                  {viewerRole !== "MARKETER" && visibleColumns.assignedTo ? <td className="px-4 py-3 text-slate-700">{lead.assignedTo}</td> : null}
                   {visibleColumns.priority ? <td className="px-4 py-3"><StatusBadge value={lead.priority} /></td> : null}
                   {visibleColumns.followUpDate ? <td className="px-4 py-3 text-slate-700">{lead.followUpDate}</td> : null}
                   {visibleColumns.createdAt ? <td className="px-4 py-3 text-slate-700">{lead.createdAt}</td> : null}
@@ -2810,6 +2898,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [customers, setCustomers] = React.useState<CompanyRow[]>(() => workspace.companies);
+  const [filteredCount, setFilteredCount] = React.useState(workspace.companies.length);
   const [viewCustomer, setViewCustomer] = React.useState<CompanyRow | null>(null);
   const [editCustomer, setEditCustomer] = React.useState<CompanyRow | null>(null);
   const [deleteCustomer, setDeleteCustomer] = React.useState<CompanyRow | null>(null);
@@ -2821,9 +2910,22 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   const [exportingFormat, setExportingFormat] = React.useState<"xlsx" | "csv" | null>(null);
   const [exportMenuOpen, setExportMenuOpen] = React.useState(false);
   const [feedback, setFeedback] = React.useState<{ type: "success" | "error"; title: string; message: string } | null>(null);
+  const [filters, setFilters] = React.useState({
+    search: "",
+    city: "",
+    industry: "",
+    assignedToId: "all",
+  });
+  const ownerOptions = React.useMemo(() => getCustomerOwnerOptions(workspace, role), [role, workspace]);
 
   const refreshCustomers = React.useCallback(async () => {
-    const response = await fetch("/api/customers", { cache: "no-store" });
+    const params = new URLSearchParams();
+    if (filters.search.trim()) params.set("search", filters.search.trim());
+    if (filters.city.trim()) params.set("city", filters.city.trim());
+    if (filters.industry.trim()) params.set("industry", filters.industry.trim());
+    if (filters.assignedToId && filters.assignedToId !== "all") params.set("assignedToId", filters.assignedToId);
+
+    const response = await fetch(`/api/customers?${params.toString()}`, { cache: "no-store" });
     const result = await response.json();
 
     if (!response.ok || !result.success || !Array.isArray(result.rows)) {
@@ -2832,10 +2934,11 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
 
     const rows = result.rows as CompanyRow[];
     setCustomers(rows);
+    setFilteredCount(typeof result.summary?.count === "number" ? result.summary.count : rows.length);
     setViewCustomer((current) => current ? rows.find((item) => item.id === current.id) ?? null : null);
     setEditCustomer((current) => current ? rows.find((item) => item.id === current.id) ?? null : null);
     setDeleteCustomer((current) => current ? rows.find((item) => item.id === current.id) ?? null : null);
-  }, []);
+  }, [filters.assignedToId, filters.city, filters.industry, filters.search]);
 
   const handleViewCustomer = React.useCallback((customer: CompanyRow) => {
     setViewCustomer(customer);
@@ -2851,17 +2954,23 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   }, []);
 
   const columns = React.useMemo<ColumnDef<CompanyRow>[]>(
-    () => [
-      { accessorKey: "name", header: "Company Name", cell: ({ row }) => <EntityLink href={`/customers/${row.original.id}`} className="font-bold">{row.original.name}</EntityLink> },
-      { accessorKey: "contactPerson", header: "Contact Person" },
-      { accessorKey: "phone", header: "Primary Phone" },
-      { accessorKey: "phone2", header: "Phone 2" },
-      { accessorKey: "email", header: "Primary Email" },
-      { accessorKey: "cityOrZilla", header: "City / Zilla" },
-      { accessorKey: "address", header: "Address" },
-      { accessorKey: "industry", header: "Industry" },
-      { accessorKey: "assignedTo", header: "Assigned" },
-      {
+    () => {
+      const baseColumns: ColumnDef<CompanyRow>[] = [
+        { accessorKey: "name", header: "Company Name", cell: ({ row }) => <EntityLink href={`/customers/${row.original.id}`} className="font-bold">{row.original.name}</EntityLink> },
+        { accessorKey: "contactPerson", header: "Contact Person" },
+        { accessorKey: "phone", header: "Primary Phone" },
+        { accessorKey: "phone2", header: "Phone 2" },
+        { accessorKey: "email", header: "Primary Email" },
+        { accessorKey: "cityOrZilla", header: "City / Zilla" },
+        { accessorKey: "address", header: "Address" },
+        { accessorKey: "industry", header: "Industry" },
+      ];
+
+      if (role !== "MARKETER") {
+        baseColumns.push({ accessorKey: "assignedTo", header: "Owner / Marketer" });
+      }
+
+      baseColumns.push({
         id: "Action",
         header: "Action",
         cell: ({ row }) => (
@@ -2872,13 +2981,16 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
             onDelete={handleDeleteCustomer}
           />
         ),
-      },
-    ],
-    [handleViewCustomer, handleDeleteCustomer, handleEditCustomer],
+      });
+
+      return baseColumns;
+    },
+    [handleViewCustomer, handleDeleteCustomer, handleEditCustomer, role],
   );
 
   React.useEffect(() => {
     setCustomers(workspace.companies);
+    setFilteredCount(workspace.companies.length);
   }, [workspace.companies]);
 
   React.useEffect(() => {
@@ -2931,8 +3043,23 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
     setFeedback(null);
 
     try {
+      const importOwnerId = role === "MARKETER"
+        ? workspace.user.id ?? ""
+        : filters.assignedToId !== "all"
+          ? filters.assignedToId
+          : ownerOptions.length === 1
+            ? ownerOptions[0].id
+            : "";
+
+      if (role !== "MARKETER" && !importOwnerId) {
+        throw new Error("Select a marketer before importing customers.");
+      }
+
       const formData = new FormData();
       formData.append("file", file);
+      if (importOwnerId) {
+        formData.append("assignedToId", importOwnerId);
+      }
 
       const response = await fetch("/api/customers/import", {
         method: "POST",
@@ -2968,10 +3095,17 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
     setFeedback(null);
 
     try {
-      const response = await fetch(`/api/export/all${format === "csv" ? "?format=csv" : ""}`);
+      const params = new URLSearchParams();
+      if (format === "csv") params.set("format", "csv");
+      if (filters.search.trim()) params.set("search", filters.search.trim());
+      if (filters.city.trim()) params.set("city", filters.city.trim());
+      if (filters.industry.trim()) params.set("industry", filters.industry.trim());
+      if (filters.assignedToId && filters.assignedToId !== "all") params.set("assignedToId", filters.assignedToId);
+
+      const response = await fetch(`/api/customers/export?${params.toString()}`);
       if (!response.ok) {
         const result = await response.json().catch(() => null);
-        throw new Error(result?.message ?? "Full export failed.");
+        throw new Error(result?.message ?? "Customer export failed.");
       }
 
       const blob = await response.blob();
@@ -2991,7 +3125,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
       setFeedback({
         type: "success",
         title: "Export ready",
-        message: `Full ${format.toUpperCase()} export downloaded successfully.`,
+        message: `Customer ${format.toUpperCase()} export downloaded successfully.`,
       });
     } catch (error) {
       setFeedback({
@@ -3110,12 +3244,71 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
           </motion.div>
         ) : null}
       </AnimatePresence>
+      <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold uppercase text-slate-500">Search</span>
+            <Input
+              value={filters.search}
+              onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
+              placeholder="Search company, contact, phone..."
+            />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold uppercase text-slate-500">City / Zilla</span>
+            <Input
+              value={filters.city}
+              onChange={(event) => setFilters((current) => ({ ...current, city: event.target.value }))}
+              placeholder="Filter by city"
+            />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold uppercase text-slate-500">Industry</span>
+            <Input
+              value={filters.industry}
+              onChange={(event) => setFilters((current) => ({ ...current, industry: event.target.value }))}
+              placeholder="Filter by industry"
+            />
+          </label>
+          {role !== "MARKETER" ? (
+            <label className="space-y-1.5">
+              <span className="text-xs font-bold uppercase text-slate-500">Marketer</span>
+              <select
+                value={filters.assignedToId}
+                onChange={(event) => setFilters((current) => ({ ...current, assignedToId: event.target.value }))}
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+              >
+                <option value="all">All Marketers</option>
+                {ownerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </label>
+          ) : null}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
+          <p className="font-semibold text-slate-600">
+            Showing <span className="font-black text-slate-900">{filteredCount}</span> visible customers
+            {role !== "MARKETER" && filters.assignedToId !== "all"
+              ? <span className="text-slate-500"> for the selected marketer</span>
+              : null}
+          </p>
+          {(filters.search || filters.city || filters.industry || (role !== "MARKETER" && filters.assignedToId !== "all")) ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setFilters({ search: "", city: "", industry: "", assignedToId: "all" })}
+            >
+              Reset Filters
+            </Button>
+          ) : null}
+        </div>
+      </div>
       <DataTable data={customers} columns={columns} searchPlaceholder="Search customer..." />
       <FormModal open={open} title="Create Customer / Company" onClose={() => setOpen(false)}>
         <CustomerForm workspace={workspace} onDone={handleCreateDone} />
       </FormModal>
       <CustomerViewModal open={Boolean(viewCustomer)} customer={viewCustomer} onClose={() => setViewCustomer(null)} />
-      <CustomerEditModal customer={editCustomer} open={Boolean(editCustomer)} onDone={handleEditDone} onClose={() => setEditCustomer(null)} />
+      <CustomerEditModal workspace={workspace} customer={editCustomer} open={Boolean(editCustomer)} onDone={handleEditDone} onClose={() => setEditCustomer(null)} />
       <FormModal open={Boolean(deleteCustomer)} title="Delete Customer" onClose={() => !deleting && setDeleteCustomer(null)} panelClassName="max-w-md">
         {deleteCustomer ? (
           <div className="space-y-4">

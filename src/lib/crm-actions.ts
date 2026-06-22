@@ -9,6 +9,8 @@ import { createProductEntry, deleteProductEntry, updateProductEntry } from "@/li
 import type { EmployeeRow } from "@/lib/crm-data";
 import { createSetupToken, hashPassword, verifyPassword } from "@/lib/password-auth";
 import { getPrisma } from "@/lib/prisma";
+import { hasCustomerAccess, resolveCustomerOwnerId } from "@/lib/customer-ownership";
+import { hasLeadAccess } from "@/lib/lead-ownership";
 import { roleHome, type Role } from "@/lib/utils";
 
 const DEFAULT_ADMIN_EMAIL = "admin@crm.com";
@@ -1001,7 +1003,9 @@ export async function createCustomerAction(formData: FormData) {
   const user = await actionUser();
   const prisma = getPrisma();
   const rawData = buildCustomerTemplateRaw(formData);
-  const assignedToId = await resolveOptionalMarketerAssignee(prisma, { id: user.id, role: user.role as Role }, text(formData, "assignedToId"));
+  const assignedToId = await resolveCustomerOwnerId(prisma, { id: user.id, role: user.role as Role }, text(formData, "assignedToId"), {
+    requireSelectionForElevated: true,
+  });
   const companyName = rawData["Company Name"]?.trim() || "New Company";
   const existingSl = rawData["SL"]?.trim?.() || "";
   const nextSl = existingSl || String((await prisma.customerCompany.count()) + 1);
@@ -1640,6 +1644,7 @@ export async function createTodayPlanAction(formData: FormData) {
 export async function createFollowUpAction(formData: FormData) {
   const user = await actionUser();
   const prisma = getPrisma();
+  const actor = { id: user.id, role: user.role as Role };
   const linkedTaskId = text(formData, "taskId");
   if (linkedTaskId && !(await hasTaskAccess(prisma, user, linkedTaskId))) {
     return { ok: false, message: "You are not allowed to create follow-up for this task." };
@@ -1647,6 +1652,12 @@ export async function createFollowUpAction(formData: FormData) {
 
   const leadId = text(formData, "leadId");
   const companyId = text(formData, "companyId");
+  if (leadId && !(await hasLeadAccess(prisma, actor, leadId))) {
+    return { ok: false, message: "You are not allowed to use this lead record." };
+  }
+  if (companyId && !(await hasCustomerAccess(prisma, actor, companyId))) {
+    return { ok: false, message: "You are not allowed to use this customer record." };
+  }
   let requestedAssignedToId = text(formData, "assignedToId");
   if (!requestedAssignedToId && linkedTaskId) {
     const linkedTask = await prisma.task.findUnique({
@@ -1740,6 +1751,28 @@ export async function createFollowUpAction(formData: FormData) {
 
 export async function updateFollowUpStatusById(user: { id: string; role: Role }, id: string, status: string) {
   const prisma = getPrisma();
+  const visible = await prisma.followUp.findFirst({
+    where: user.role === "ADMIN"
+      ? { id }
+      : user.role === "MARKETER"
+        ? { id, assignedToId: user.id }
+        : {
+            id,
+            assignedTo: {
+              is: {
+                OR: [
+                  { id: user.id },
+                  { supervisorId: user.id, role: "MARKETER", status: "ACTIVE" },
+                ],
+              },
+            },
+          },
+    select: { id: true },
+  });
+
+  if (!visible) {
+    throw new Error("Follow-up not found or you do not have access.");
+  }
 
   const followUp = await prisma.followUp.update({
     where: { id },
@@ -1779,12 +1812,23 @@ export async function updateFollowUpStatusAction(formData: FormData) {
 export async function createCommunicationAction(formData: FormData) {
   const user = await actionUser();
   const prisma = getPrisma();
+  const companyId = text(formData, "companyId");
+  const leadId = text(formData, "leadId");
+  if (companyId && !(await hasCustomerAccess(prisma, { id: user.id, role: user.role as Role }, companyId))) {
+    return { ok: false, message: "You are not allowed to use this customer record." };
+  }
+  if (leadId && !(await hasLeadAccess(prisma, { id: user.id, role: user.role as Role }, leadId))) {
+    return { ok: false, message: "You are not allowed to use this lead record." };
+  }
   const nextFollowUpDate = dateValue(formData, "nextFollowUpDate");
   const taskId = text(formData, "taskId");
+  if (taskId && !(await hasTaskAccess(prisma, user, taskId))) {
+    return { ok: false, message: "You are not allowed to use this task record." };
+  }
   const log = await prisma.communicationLog.create({
     data: {
-      ...(text(formData, "companyId") ? { company: { connect: { id: text(formData, "companyId") as string } } } : {}),
-      ...(text(formData, "leadId") ? { lead: { connect: { id: text(formData, "leadId") as string } } } : {}),
+      ...(companyId ? { company: { connect: { id: companyId } } } : {}),
+      ...(leadId ? { lead: { connect: { id: leadId } } } : {}),
       ...(taskId ? { task: { connect: { id: taskId } } } : {}),
       user: { connect: { id: user.id } },
       method: text(formData, "method") ?? "Phone Call",

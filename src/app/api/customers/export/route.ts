@@ -15,6 +15,10 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const requestedFormat = searchParams.get("format");
     const format: CustomerExportFormat = requestedFormat === "csv" ? "csv" : "xlsx";
+    const search = searchParams.get("search")?.trim() ?? undefined;
+    const city = searchParams.get("city")?.trim() ?? undefined;
+    const industry = searchParams.get("industry")?.trim() ?? undefined;
+    const assignedToId = searchParams.get("assignedToId")?.trim() ?? undefined;
 
     const result = await exportCustomers(
       {
@@ -22,6 +26,12 @@ export async function GET(request: Request) {
         role: auth.user.role,
       },
       format,
+      {
+        search,
+        city,
+        industry,
+        assignedToId,
+      },
     );
 
     return new NextResponse(result.buffer, {

@@ -2,6 +2,8 @@ import * as XLSX from "xlsx";
 import type * as Prisma from "@prisma/client";
 import { getPrisma } from "@/lib/prisma";
 import type { LeadRow } from "@/lib/crm-data";
+import { buildCustomerScopeWhere } from "@/lib/customer-ownership";
+import { buildLeadScopeWhere, getScopedLeadUserIds, resolveLeadOwnerId } from "@/lib/lead-ownership";
 import type { Role } from "@/lib/utils";
 
 export const LEAD_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
@@ -9,6 +11,7 @@ export const LEAD_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
 export type LeadActor = {
   id: string;
   role: Role;
+  assignedToId?: string;
 };
 
 type LeadStatusValue =
@@ -212,10 +215,6 @@ function normalizePhone(value: unknown) {
   return String(value ?? "").trim().replace(/\s+/g, "");
 }
 
-async function getScopedLeadUserIds(_prisma: ReturnType<typeof getPrisma>, _actor?: LeadActor) {
-  return undefined;
-}
-
 function dedupe(values: string[]) {
   return values.filter((value, index, array) => value && array.indexOf(value) === index);
 }
@@ -249,21 +248,11 @@ function mapLeadRow(lead: LeadRecord): LeadRow {
 }
 
 async function resolveAssignedToId(prisma: ReturnType<typeof getPrisma>, actor: LeadActor, requestedAssignedToId?: string) {
-  const requested = requestedAssignedToId?.trim();
-  const fallbackId = actor.role === "MARKETER" ? actor.id : undefined;
-  const targetId = requested || fallbackId;
-  if (!targetId) return undefined;
-
-  const user = await prisma.user.findFirst({
-    where: { id: targetId, role: "MARKETER", status: "ACTIVE" },
-    select: { id: true },
-  });
-
-  if (!user) {
-    throw new LeadInputError("Selected marketer was not found.");
+  try {
+    return await resolveLeadOwnerId(prisma, actor, requestedAssignedToId);
+  } catch (error) {
+    throw new LeadInputError(error instanceof Error ? error.message : "Selected marketer was not found.");
   }
-
-  return user.id;
 }
 
 function validateLeadInput(input: LeadInput) {
@@ -314,7 +303,12 @@ function buildLeadWhere(query: LeadListQuery, scopedUserIds?: string[]): Prisma.
       ? {
           OR: [
             { assignedToId: { in: scopedUserIds } },
-            { createdById: { in: scopedUserIds } },
+            {
+              AND: [
+                { assignedToId: null },
+                { createdById: { in: scopedUserIds } },
+              ],
+            },
           ],
         }
       : {}),
@@ -403,9 +397,12 @@ export async function listLeads(query: LeadListQuery, actor?: LeadActor): Promis
   };
 }
 
-export async function getLeadById(id: string) {
+export async function getLeadById(id: string, actor?: LeadActor) {
   const prisma = getPrisma();
-  const row = await prisma.lead.findUnique({ where: { id }, include: leadInclude });
+  const row = await prisma.lead.findFirst({
+    where: await buildLeadScopeWhere(prisma, actor, { leadId: id }),
+    include: leadInclude,
+  });
   return row ? mapLeadRow(row) : null;
 }
 
@@ -413,6 +410,10 @@ export async function createLeadEntry(actor: LeadActor, input: LeadInput) {
   const prisma = getPrisma();
   const normalized = validateLeadInput(input);
   const assignedToId = await resolveAssignedToId(prisma, actor, input.assignedToId);
+
+  if (normalized.companyId && !(await hasCustomerAccessForLead(prisma, actor, normalized.companyId))) {
+    throw new LeadInputError("You are not allowed to use this customer record.", 403);
+  }
 
   const created = await prisma.lead.create({
     data: {
@@ -439,13 +440,20 @@ export async function createLeadEntry(actor: LeadActor, input: LeadInput) {
 
 export async function updateLeadEntry(actor: LeadActor, id: string, input: LeadInput) {
   const prisma = getPrisma();
-  const existing = await prisma.lead.findUnique({ where: { id }, select: { id: true, createdById: true } });
+  const existing = await prisma.lead.findFirst({
+    where: await buildLeadScopeWhere(prisma, actor, { leadId: id }),
+    select: { id: true, createdById: true },
+  });
   if (!existing) {
     throw new LeadInputError("Lead not found.", 404);
   }
 
   const normalized = validateLeadInput(input);
   const assignedToId = await resolveAssignedToId(prisma, actor, input.assignedToId);
+
+  if (normalized.companyId && !(await hasCustomerAccessForLead(prisma, actor, normalized.companyId))) {
+    throw new LeadInputError("You are not allowed to use this customer record.", 403);
+  }
 
   const updated = await prisma.lead.update({
     where: { id },
@@ -470,9 +478,12 @@ export async function updateLeadEntry(actor: LeadActor, id: string, input: LeadI
   return mapLeadRow(updated);
 }
 
-export async function deleteLeadEntry(id: string) {
+export async function deleteLeadEntry(actor: LeadActor, id: string) {
   const prisma = getPrisma();
-  const existing = await prisma.lead.findUnique({ where: { id }, select: { id: true } });
+  const existing = await prisma.lead.findFirst({
+    where: await buildLeadScopeWhere(prisma, actor, { leadId: id }),
+    select: { id: true },
+  });
   if (!existing) {
     throw new LeadInputError("Lead not found.", 404);
   }
@@ -542,6 +553,10 @@ function mapImportedLeadRow(row: Record<string, unknown>, rowNumber: number): Pa
 
 export async function importLeadsFromFile(buffer: Buffer, fileName: string, actor: LeadActor): Promise<LeadImportResult> {
   const prisma = getPrisma();
+  const scopedLeadUsers = await getScopedLeadUserIds(prisma, actor);
+  if (actor.role !== "MARKETER" && !actor.assignedToId?.trim()) {
+    throw new LeadInputError("Select a marketer before importing leads.");
+  }
   const rows = readWorkbookRows(buffer, fileName);
   const failed: LeadImportFailure[] = [];
   let inserted = 0;
@@ -561,14 +576,24 @@ export async function importLeadsFromFile(buffer: Buffer, fileName: string, acto
     }
 
     const company = parsed.companyName
-      ? await prisma.customerCompany.findFirst({ where: { name: { equals: parsed.companyName, mode: "insensitive" } }, select: { id: true } })
+      ? await prisma.customerCompany.findFirst({
+          where: {
+            AND: [
+              await buildCustomerScopeWhere(prisma, actor),
+              { name: { equals: parsed.companyName, mode: "insensitive" } },
+            ],
+          },
+          select: { id: true },
+        })
       : null;
     const product = parsed.productName
       ? await prisma.productService.findFirst({ where: { name: { equals: parsed.productName, mode: "insensitive" } }, select: { id: true } })
       : null;
-    const assigned = parsed.assignedMarketer
-      ? await prisma.user.findFirst({ where: { name: { equals: parsed.assignedMarketer, mode: "insensitive" }, role: "MARKETER", status: "ACTIVE" }, select: { id: true } })
-      : null;
+    const assigned = actor.role === "MARKETER"
+      ? { id: actor.id }
+      : actor.assignedToId
+        ? { id: actor.assignedToId }
+        : null;
 
     const payload: LeadInput = {
       customerName: parsed.customerName,
@@ -587,8 +612,13 @@ export async function importLeadsFromFile(buffer: Buffer, fileName: string, acto
     try {
       const existing = await prisma.lead.findFirst({
         where: {
-          customerName: { equals: parsed.customerName, mode: "insensitive" },
-          ...(company?.id ? { companyId: company.id } : {}),
+          AND: [
+            buildLeadWhere({}, scopedLeadUsers),
+            {
+              customerName: { equals: parsed.customerName, mode: "insensitive" },
+              ...(company?.id ? { companyId: company.id } : {}),
+            },
+          ],
         },
         select: { id: true },
       });
@@ -640,9 +670,30 @@ function pickVisibleValue(row: LeadRow, key: string) {
   }
 }
 
-export async function exportLeads(format: LeadExportFormat, visibleColumns?: string[]) {
+async function hasCustomerAccessForLead(
+  prisma: ReturnType<typeof getPrisma>,
+  actor: LeadActor,
+  customerId: string,
+) {
+  const record = await prisma.customerCompany.findFirst({
+    where: await buildCustomerScopeWhere(prisma, actor, { customerId }),
+    select: { id: true },
+  });
+
+  return Boolean(record);
+}
+
+export async function exportLeads(
+  actor: LeadActor,
+  format: LeadExportFormat,
+  visibleColumns?: string[],
+  query?: LeadListQuery,
+) {
   const prisma = getPrisma();
+  const scopedUserIds = await getScopedLeadUserIds(prisma, actor);
+  const where = buildLeadWhere(query ?? {}, scopedUserIds);
   const leads = await prisma.lead.findMany({
+    where,
     include: leadInclude,
     orderBy: { updatedAt: "desc" },
   });

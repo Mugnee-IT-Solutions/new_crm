@@ -15,7 +15,17 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const format: LeadExportFormat = searchParams.get("format") === "csv" ? "csv" : "xlsx";
     const visibleColumns = searchParams.get("columns")?.split(",").map((item) => item.trim()).filter(Boolean);
-    const result = await exportLeads(format, visibleColumns);
+    const result = await exportLeads(
+      { id: auth.user.id, role: auth.user.role },
+      format,
+      visibleColumns,
+      {
+        search: searchParams.get("search") ?? undefined,
+        status: searchParams.get("status") ?? undefined,
+        priority: searchParams.get("priority") ?? undefined,
+        assignedToId: searchParams.get("assignedToId") ?? undefined,
+      },
+    );
 
     return new NextResponse(result.buffer, {
       status: 200,

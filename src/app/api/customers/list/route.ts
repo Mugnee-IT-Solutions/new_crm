@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { buildCustomerScopeWhere } from "@/lib/customer-ownership";
 import { getPrisma } from "@/lib/prisma";
 import { requireRequestUser } from "@/lib/request-user";
 
@@ -22,19 +23,12 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const search = (searchParams.get("search") || searchParams.get("q") || "").trim();
     const limit = parseLimit(searchParams.get("limit"));
-    const queryMode = "insensitive" as const;
 
-    const where = {
-      ...(search
-        ? {
-            OR: [
-              { name: { contains: search, mode: queryMode } },
-              { contactPerson: { contains: search, mode: queryMode } },
-              { phone: { contains: search, mode: queryMode } },
-            ],
-          }
-        : {}),
-    };
+    const where = await buildCustomerScopeWhere(
+      prisma,
+      { id: auth.user.id, role: auth.user.role },
+      { search },
+    );
 
     const rows = await prisma.customerCompany.findMany({
       where,

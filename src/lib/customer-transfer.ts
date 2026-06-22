@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { buildCustomerScopeWhere, resolveCustomerOwnerId } from "@/lib/customer-ownership";
 import { getPrisma } from "@/lib/prisma";
 import type { Role } from "@/lib/utils";
 import type * as Prisma from "@prisma/client";
@@ -72,6 +73,7 @@ const CUSTOMER_IMPORT_TEMPLATE_HEADER_LEN = CUSTOMER_TEMPLATE_COLUMNS.length;
 export type CustomerTransferActor = {
   id: string;
   role: Role;
+  assignedToId?: string;
 };
 
 export type CustomerImportFailure = {
@@ -557,6 +559,12 @@ function readRawValue(raw: Record<string, unknown>, keys: string[]) {
 export async function importCustomersFromFile(buffer: Buffer, fileName: string, actor: CustomerTransferActor): Promise<CustomerImportResult> {
   const prisma = getPrisma();
   const format = fileName.toLowerCase().endsWith(".csv") ? "CSV" : "EXCEL";
+  const ownerId = await resolveCustomerOwnerId(
+    prisma,
+    { id: actor.id, role: actor.role },
+    actor.assignedToId,
+    { requireSelectionForElevated: true },
+  );
   const parsed = parseWorkbookRows(buffer, fileName);
   const rows = parsed.rows;
   const failed = [...parsed.failed];
@@ -581,9 +589,15 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
   }
 
   const companyNames = rows.map((row) => row.companyName);
+  const scopedExistingWhere = await buildCustomerScopeWhere(prisma, { id: actor.id, role: actor.role });
   const existingCompanies = await prisma.customerCompany.findMany({
     where: {
-      OR: companyNames.map((name) => ({ name: { equals: name, mode: "insensitive" } })),
+      AND: [
+        scopedExistingWhere,
+        {
+          OR: companyNames.map((name) => ({ name: { equals: name, mode: "insensitive" } })),
+        },
+      ],
     },
     include: {
       contacts: { orderBy: { createdAt: "asc" } },
@@ -640,9 +654,7 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
     }
 
     const existing = existingByName.get(rowKey);
-    const assignedRelation = actor.role === "MARKETER"
-      ? { assignedTo: { connect: { id: actor.id } } }
-      : undefined;
+    const assignedRelation = { assignedTo: { connect: { id: ownerId } } };
 
     const mergedRawData = existing
       ? mergeRawData((existing as { rawData?: Prisma.Prisma.JsonValue }).rawData, row.rawData)
@@ -714,10 +726,20 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
   };
 }
 
-export async function exportCustomers(actor: CustomerTransferActor, format: CustomerExportFormat) {
+export async function exportCustomers(
+  actor: CustomerTransferActor,
+  format: CustomerExportFormat,
+  filters?: {
+    search?: string;
+    city?: string;
+    industry?: string;
+    assignedToId?: string;
+  },
+) {
   const prisma = getPrisma();
+  const where = await buildCustomerScopeWhere(prisma, { id: actor.id, role: actor.role }, filters);
   const companies = await prisma.customerCompany.findMany({
-    where: {},
+    where,
     include: {
       assignedTo: true,
       contacts: { orderBy: { createdAt: "asc" } },

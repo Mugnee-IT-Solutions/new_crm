@@ -18,6 +18,7 @@ import {
   startOfMonth,
   startOfWeek,
 } from "date-fns";
+import { getMarketerScopeUserIds } from "@/lib/customer-ownership";
 import { getPrisma } from "@/lib/prisma";
 import {
   getReportDefinition,
@@ -164,15 +165,7 @@ function withinRange(dateField: string, range: { from: Date | null; to: Date | n
 }
 
 async function getScopedUserIds(prisma: ReturnType<typeof getPrisma>, actor: ReportActor) {
-  if (actor.role === "ADMIN") return undefined;
-  if (actor.role === "MARKETER") return [actor.id];
-
-  const teamMembers = await prisma.user.findMany({
-    where: { supervisorId: actor.id, status: "ACTIVE" },
-    select: { id: true },
-  });
-
-  return [actor.id, ...teamMembers.map((member) => member.id)];
+  return getMarketerScopeUserIds(prisma, actor);
 }
 
 async function getCompanyTitle(prisma: ReturnType<typeof getPrisma>) {
@@ -540,7 +533,10 @@ async function buildEmployeePerformanceReport(
         }),
         prisma.quotation.count({
           where: {
-            createdById: user.id,
+            OR: [
+              { createdById: user.id },
+              { lead: { is: { assignedToId: user.id } } },
+            ],
             status: "CONVERTED_TO_SALE",
             ...(withinRange("createdAt", range) ?? {}),
           },
@@ -634,9 +630,23 @@ async function buildSalesReport(
   const range = buildDateRange(filters);
   const where: PrismaTypes.Prisma.QuotationWhereInput = {
     AND: [
-      actor.role === "ADMIN" ? {} : { createdById: { in: scopedUserIds ?? [actor.id] } },
+      actor.role === "ADMIN"
+        ? {}
+        : {
+            OR: [
+              { createdById: { in: scopedUserIds ?? [actor.id] } },
+              { lead: { is: { assignedToId: { in: scopedUserIds ?? [actor.id] } } } },
+            ],
+          },
       withinRange("createdAt", range) ?? {},
-      filters.userId ? { createdById: filters.userId } : {},
+      filters.userId
+        ? {
+            OR: [
+              { createdById: filters.userId },
+              { lead: { is: { assignedToId: filters.userId } } },
+            ],
+          }
+        : {},
       filters.customerId ? { companyId: filters.customerId } : {},
       filters.productId ? { items: { some: { productId: filters.productId } } } : {},
       filters.leadStatus ? { lead: { is: { status: filters.leadStatus as LeadStatus } } } : {},
@@ -684,9 +694,23 @@ async function buildQuotationReport(
   const range = buildDateRange(filters);
   const where: PrismaTypes.Prisma.QuotationWhereInput = {
     AND: [
-      actor.role === "ADMIN" ? {} : { createdById: { in: scopedUserIds ?? [actor.id] } },
+      actor.role === "ADMIN"
+        ? {}
+        : {
+            OR: [
+              { createdById: { in: scopedUserIds ?? [actor.id] } },
+              { lead: { is: { assignedToId: { in: scopedUserIds ?? [actor.id] } } } },
+            ],
+          },
       withinRange("createdAt", range) ?? {},
-      filters.userId ? { createdById: filters.userId } : {},
+      filters.userId
+        ? {
+            OR: [
+              { createdById: filters.userId },
+              { lead: { is: { assignedToId: filters.userId } } },
+            ],
+          }
+        : {},
       filters.customerId ? { companyId: filters.customerId } : {},
       filters.productId ? { items: { some: { productId: filters.productId } } } : {},
     ],
@@ -913,7 +937,7 @@ async function buildDailyWorkSummaryReport(
         }),
         prisma.lead.count({
           where: {
-            createdById: user.id,
+            assignedToId: user.id,
             ...(withinRange("createdAt", range) ?? {}),
           },
         }),
