@@ -58,10 +58,10 @@ function databaseConnectionMessage(error: unknown) {
   const message = String((error as { message?: string })?.message ?? "");
 
   if (message.includes("Authentication failed against the database server") || message.includes("password authentication failed")) {
-    return "Database authentication failed. Update DATABASE_URL credentials and restart the server.";
+    return "Database connection issue detected. Check the database configuration and restart the server.";
   }
 
-  return "Database connection failed. Ensure Postgres is running and DATABASE_URL is correct.";
+  return "Database connection issue detected. Ensure Postgres is running and the database configuration is correct.";
 }
 
 function authUpgradeMessage() {
@@ -1856,7 +1856,7 @@ export async function createFollowUpAction(formData: FormData) {
   );
 
   revalidatePath("/");
-  return { ok: true, id: created.task.id, row: created.row, followUpDate: created.row.taskDateIso };
+  return { ok: true, id: created.id, row: created, followUpDate: created.taskDateIso };
 }
 
 export async function updateFollowUpStatusById(user: { id: string; role: Role }, id: string, status: string) {
