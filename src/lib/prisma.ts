@@ -12,7 +12,7 @@ export function getPrisma() {
 
     if (!connectionString) {
       throw new Error(
-        "Database connection is not configured. Set DATABASE_URL or connect Vercel Postgres (POSTGRES_PRISMA_URL).",
+        "Database connection is not configured. Set DATABASE_URL before starting the app.",
       );
     }
 

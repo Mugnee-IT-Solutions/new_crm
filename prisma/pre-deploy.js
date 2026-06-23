@@ -26,21 +26,20 @@ if (!databaseUrl) {
   console.error(`
 [CRM deploy] Database connection is missing.
 
-Add ONE of these environment variables in Vercel:
+Add this environment variable in your server or Vercel project:
   Project -> Settings -> Environment Variables
 
-Required (pick one source):
+Required:
   DATABASE_URL          Your Postgres connection string
-  POSTGRES_PRISMA_URL   Auto-created when you add Vercel Postgres
-  POSTGRES_URL          Auto-created when you add Vercel Postgres
 
 Recommended Vercel setup:
   1. Open your Vercel project
   2. Go to Storage -> Create Database -> Postgres
   3. Connect the database to this project
-  4. Redeploy
+  4. Copy the generated connection string into DATABASE_URL
+  5. Redeploy
 
-Or use Neon / Supabase / Railway and paste the connection string as DATABASE_URL.
+Or use Neon / Supabase / Railway and paste the connection string into DATABASE_URL.
 `);
   process.exit(1);
 }

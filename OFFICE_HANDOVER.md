@@ -48,7 +48,7 @@ npm run start
 1. Import the GitHub repo in Vercel.
 2. Add a Postgres database:
    - Vercel project -> Storage -> Create Database -> Postgres -> Connect to project
-   - This auto-adds `POSTGRES_PRISMA_URL` / `POSTGRES_URL`
+   - Copy the generated connection string into `DATABASE_URL`
 3. Or add `DATABASE_URL` manually in Project -> Settings -> Environment Variables.
 4. Add the other production env vars from the section above.
 5. Deploy. Vercel runs `npm run vercel-build`, which applies migrations and builds Next.js.
