@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { gsap } from "gsap";
 import {
@@ -37,9 +38,13 @@ import { AnimatedPanel } from "@/components/shared/animated-panel";
 import { DashboardCard } from "@/components/shared/dashboard-card";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
-import { updateFollowUpStatusAction, updateTaskStatusAction } from "@/lib/crm-actions";
+import { useTaskCounterContext } from "@/components/app/app-shell";
 import type { CrmWorkspace } from "@/lib/crm-data";
 import { cn, initials, rolePath, type Role } from "@/lib/utils";
+import { CompletedWorkList, type TodayTaskApiRow, TaskCreateModal, TaskFollowUpModal, TodayWorkQueueList, todayWorkCounts, matchesTodayWorkFilter, sortTodayWorkQueue, WorkCompletionModal, type TodayWorkFilter } from "@/components/crm/resource-pages";
+import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
+import { updateFollowUpStatusAction, updateTaskStatusAction } from "@/lib/crm-actions";
+import { FormModal } from "@/components/shared/form-modal";
 
 const statIcons = [CalendarClock, ClipboardCheck, PhoneForwarded, Target, Trophy, Users, BriefcaseBusiness, WalletCards, Award, Bell];
 const chartColors = ["#2563EB", "#06B6D4", "#16A34A", "#F59E0B", "#4F46E5", "#8B5CF6", "#22C55E", "#DC2626", "#94A3B8"];
@@ -513,6 +518,82 @@ function TeamPerformanceTable({ workspace }: { workspace: CrmWorkspace }) {
 type SupervisorPerformanceRow = CrmWorkspace["employees"][number] & {
   performanceScore: number;
   performanceScoreRaw: number;
+};
+type TeamPerformanceMetricKey = "leads" | "calls" | "whatsapp" | "meetings" | "followUps" | "pendingTasks" | "overdueFollowUps" | "sales" | "conversion" | "score";
+
+type TeamPerformanceDrilldownPayload = {
+  marketerId: string;
+  marketerName: string;
+  metric: TeamPerformanceMetricKey;
+  metricLabel: string;
+};
+
+type TeamPerformanceDrilldownRow = {
+  id: string;
+  type: string;
+  customerOrCompany: string;
+  leadName: string;
+  contactPerson: string;
+  phone: string;
+  method: string;
+  title: string;
+  dateTime: string;
+  status: string;
+  note: string;
+};
+type TeamPerformancePeriod = "today" | "week" | "month" | "year" | "custom";
+type TeamPerformanceSource = "table" | "mobile";
+
+const teamPerformanceMetricLabels: Record<TeamPerformanceMetricKey, string> = {
+  leads: "Leads",
+  calls: "Calls",
+  whatsapp: "WhatsApp",
+  meetings: "Meetings",
+  followUps: "Follow-ups",
+  pendingTasks: "Pending Tasks",
+  overdueFollowUps: "Overdue Follow-ups",
+  sales: "Sales",
+  conversion: "Conversion",
+  score: "Score",
+};
+
+const teamPerformanceMetricValue = (row: SupervisorPerformanceRow, metric: TeamPerformanceMetricKey): string | number => {
+  switch (metric) {
+    case "leads":
+      return row.leads;
+    case "calls":
+      return row.calls;
+    case "whatsapp":
+      return row.whatsapp;
+    case "meetings":
+      return row.meetings;
+    case "followUps":
+      return row.followUps;
+    case "pendingTasks":
+      return row.pendingTasks;
+    case "overdueFollowUps":
+      return row.overdueFollowUps;
+    case "sales":
+      return row.sales;
+    case "conversion":
+      return row.conversionRate;
+    case "score":
+      return row.performanceScore;
+  }
+};
+
+const teamPerformanceMetricValueNumber = (value: string | number) => {
+  if (typeof value === "number") return value;
+  const parsed = Number(value.replace(/[^0-9.-]/g, ""));
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const isTeamPerformanceMetricClickable = (
+  metric: TeamPerformanceMetricKey,
+  value: string | number,
+): boolean => {
+  if (metric === "score") return Number(value) > 0;
+  return teamPerformanceMetricValueNumber(value) > 0;
 };
 
 const supervisorKpiConfig = {
@@ -1090,12 +1171,24 @@ function buildSupervisorLeadStatusDataV2(workspace: CrmWorkspace) {
   ].filter((item) => item.value > 0);
 }
 
-function SupervisorTeamPerformancePanelV2({ rows }: { rows: SupervisorPerformanceRow[] }) {
+function SupervisorTeamPerformancePanelV2({
+  rows,
+  toolbar,
+  onMetricClick,
+}: {
+  rows: SupervisorPerformanceRow[];
+  toolbar?: React.ReactNode;
+  onMetricClick?: (payload: TeamPerformanceDrilldownPayload) => void;
+}) {
+  const action = (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {toolbar}
+      <SupervisorHeaderAction href={rolePath("SUPERVISOR", "team")}>View All</SupervisorHeaderAction>
+    </div>
+  );
+
   return (
-    <SupervisorSurfaceCard
-      title="Team Performance"
-      action={<SupervisorHeaderAction href={rolePath("SUPERVISOR", "team")}>View All</SupervisorHeaderAction>}
-    >
+    <SupervisorSurfaceCard title="Team Performance" action={action}>
       {rows.length ? (
         <>
           <div className="hidden overflow-x-auto xl:block">
@@ -1121,20 +1214,51 @@ function SupervisorTeamPerformancePanelV2({ rows }: { rows: SupervisorPerformanc
                         </div>
                       </div>
                     </td>
-                    <td className="px-3 py-4 font-semibold text-slate-700">{row.leads}</td>
-                    <td className="px-3 py-4 font-semibold text-slate-700">{row.calls}</td>
-                    <td className="px-3 py-4 font-semibold text-slate-700">{row.whatsapp}</td>
-                    <td className="px-3 py-4 font-semibold text-slate-700">{row.meetings}</td>
-                    <td className="px-3 py-4 font-semibold text-slate-700">{row.followUps}</td>
-                    <td className="px-3 py-4 font-semibold text-slate-700">{row.pendingTasks}</td>
-                    <td className="px-3 py-4 font-semibold text-slate-700">{row.overdueFollowUps}</td>
-                    <td className="px-3 py-4 font-semibold text-slate-700">{row.sales}</td>
-                    <td className="px-3 py-4 font-semibold text-slate-700">{row.conversionRate}</td>
+                    {(["leads", "calls", "whatsapp", "meetings", "followUps", "pendingTasks", "overdueFollowUps", "sales", "conversion"] as TeamPerformanceMetricKey[]).map((metric) => {
+                      const value = teamPerformanceMetricValue(row, metric);
+                      const clickable = isTeamPerformanceMetricClickable(metric, value);
+                      const textValue = typeof value === "number" ? value : value;
+                      return (
+                        <td key={metric} className="px-3 py-4 font-semibold text-slate-700">
+                          {clickable && onMetricClick ? (
+                            <button
+                              type="button"
+                              onClick={() => onMetricClick({
+                                marketerId: row.id,
+                                marketerName: row.name,
+                                metric,
+                                metricLabel: teamPerformanceMetricLabels[metric],
+                              })}
+                              className="rounded-md text-left text-slate-700 transition hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                            >
+                              {textValue}
+                            </button>
+                          ) : (
+                            <span>{textValue}</span>
+                          )}
+                        </td>
+                      );
+                    })}
                     <td className="px-3 py-4">
                       <div className="min-w-[152px]">
                         <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
                           <span>Score</span>
-                          <span>{row.performanceScore}%</span>
+                          {row.performanceScore > 0 && onMetricClick ? (
+                            <button
+                              type="button"
+                              onClick={() => onMetricClick({
+                                marketerId: row.id,
+                                marketerName: row.name,
+                                metric: "score",
+                                metricLabel: teamPerformanceMetricLabels.score,
+                              })}
+                              className="rounded-md text-left transition hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                            >
+                              {row.performanceScore}%
+                            </button>
+                          ) : (
+                            <span>{row.performanceScore}%</span>
+                          )}
                         </div>
                         <div className="h-2 overflow-hidden rounded-full bg-slate-100">
                           <div className={cn("h-full rounded-full", performanceScoreVariant(row.performanceScore))} style={{ width: `${row.performanceScore}%` }} />
@@ -1163,21 +1287,33 @@ function SupervisorTeamPerformancePanelV2({ rows }: { rows: SupervisorPerformanc
                       <span className="text-sm font-bold text-slate-700">{row.conversionRate}</span>
                     </div>
                     <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
-                      {[
-                        ["Leads", row.leads],
-                        ["Calls", row.calls],
-                        ["WhatsApp", row.whatsapp],
-                        ["Meetings", row.meetings],
-                        ["Follow-ups", row.followUps],
-                        ["Pending", row.pendingTasks],
-                        ["Overdue", row.overdueFollowUps],
-                        ["Sales", row.sales],
-                      ].map(([label, value]) => (
-                        <div key={String(label)} className="rounded-xl bg-white px-3 py-2 text-center shadow-sm">
-                          <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
-                          <p className="mt-1 text-base font-black text-slate-900">{value}</p>
-                        </div>
-                      ))}
+                      {(["leads", "calls", "whatsapp", "meetings", "followUps", "pendingTasks", "overdueFollowUps", "sales", "conversion", "score"] as TeamPerformanceMetricKey[]).map((metric) => {
+                        const value = metric === "score" ? row.performanceScore : teamPerformanceMetricValue(row, metric);
+                        const label = metric === "whatsapp" ? "WhatsApp" : metric === "followUps" ? "Follow-ups" : metric === "pendingTasks" ? "Pending" : metric === "overdueFollowUps" ? "Overdue" : teamPerformanceMetricLabels[metric];
+                        const clickable = isTeamPerformanceMetricClickable(metric, value);
+
+                        return (
+                          <div key={`${metric}-${row.id}`} className="rounded-xl bg-white px-3 py-2 text-center shadow-sm">
+                            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
+                            {clickable && onMetricClick ? (
+                              <button
+                                type="button"
+                                onClick={() => onMetricClick({
+                                  marketerId: row.id,
+                                  marketerName: row.name,
+                                  metric,
+                                  metricLabel: teamPerformanceMetricLabels[metric],
+                                })}
+                                className="mt-1 inline-block text-base font-black leading-tight text-slate-900 underline decoration-transparent transition hover:decoration-slate-400"
+                              >
+                                {value}
+                              </button>
+                            ) : (
+                              <p className="mt-1 text-base font-black leading-tight text-slate-900">{value}</p>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                     <div className="mt-4">
                       <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
@@ -1440,7 +1576,7 @@ function SupervisorProductIntelligencePanelV2({ workspace }: { workspace: CrmWor
   );
 }
 
-type MarketerTaskFilter = "all" | "tasks" | "due-follow-ups" | "overdue" | "carry-forward";
+type MarketerTaskFilter = TodayWorkFilter;
 
 const marketerKpiIcons = [ClipboardCheck, AlertTriangle, PhoneForwarded, Target, CalendarClock, Award] as const;
 const marketerKpiIconTones = [
@@ -1451,23 +1587,6 @@ const marketerKpiIconTones = [
   "bg-rose-50 text-rose-700",
   "bg-orange-50 text-orange-700",
 ] as const;
-
-function marketerTaskIcon(method: string, source: CrmWorkspace["todayWorkItems"][number]["source"]) {
-  if (method.toLowerCase().includes("whatsapp")) return MessageCircleMore;
-  if (method.toLowerCase().includes("meeting")) return CalendarClock;
-  if (method.toLowerCase().includes("phone") || method.toLowerCase().includes("call")) return PhoneCall;
-  if (source === "Follow-up") return PhoneForwarded;
-  return ClipboardCheck;
-}
-
-function marketerTaskAccent(method: string, source: CrmWorkspace["todayWorkItems"][number]["source"], overdue: boolean) {
-  if (overdue) return "border-red-200 bg-red-50/80";
-  if (method.toLowerCase().includes("whatsapp")) return "border-emerald-200 bg-emerald-50/70";
-  if (method.toLowerCase().includes("meeting")) return "border-violet-200 bg-violet-50/70";
-  if (method.toLowerCase().includes("phone") || method.toLowerCase().includes("call")) return "border-blue-200 bg-blue-50/70";
-  if (source === "Follow-up") return "border-amber-200 bg-amber-50/70";
-  return "border-slate-200 bg-slate-50";
-}
 
 function marketerActivityIcon(title: string, detail: string) {
   const haystack = `${title} ${detail}`.toLowerCase();
@@ -1517,26 +1636,129 @@ function MarketerKpiGrid({ workspace, tasks }: { workspace: CrmWorkspace; tasks:
   );
 }
 
-function MarketerTodayTasksPanel({ workspace }: { workspace: CrmWorkspace }) {
-  const [filter, setFilter] = React.useState<MarketerTaskFilter>("all");
-  const items = workspace.todayWorkItems.filter((item) => item.source !== "Plan");
+function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
+  const [open, setOpen] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState("");
+  const [actionError, setActionError] = React.useState("");
+  const [activeFilter, setActiveFilter] = React.useState<MarketerTaskFilter>("all");
+  const [activeTasks, setActiveTasks] = React.useState<TodayWorkQueueItem[]>([]);
+  const [completedTasks, setCompletedTasks] = React.useState<CompletedWorkItem[]>([]);
+  const [completionItem, setCompletionItem] = React.useState<TodayWorkQueueItem | null>(null);
+  const [followUpTask, setFollowUpTask] = React.useState<{
+    id: string;
+    title: string;
+    companyId?: string | null;
+    companyName: string;
+    leadId?: string | null;
+    leadName?: string | null;
+    taskId?: string | null;
+  } | null>(null);
+  const { refreshTaskCount } = useTaskCounterContext();
+  const scheduledRefreshTimers = React.useRef<number[]>([]);
+  const role = workspace.user.role;
 
-  const counts = React.useMemo(() => ({
-    all: items.length,
-    tasks: items.filter((item) => item.queueType === "TASK").length,
-    "due-follow-ups": items.filter((item) => item.queueType === "DUE_FOLLOW_UP").length,
-    overdue: items.filter((item) => item.queueType === "OVERDUE").length,
-    "carry-forward": items.filter((item) => item.queueType === "CARRY_FORWARD").length,
-  }), [items]);
+  const loadTasks = React.useCallback(async () => {
+    setLoading(true);
+    setError("");
 
-  const filteredItems = React.useMemo(() => {
-    if (filter === "tasks") return items.filter((item) => item.queueType === "TASK");
-    if (filter === "due-follow-ups") return items.filter((item) => item.queueType === "DUE_FOLLOW_UP");
-    if (filter === "overdue") return items.filter((item) => item.queueType === "OVERDUE");
-    if (filter === "carry-forward") return items.filter((item) => item.queueType === "CARRY_FORWARD");
-    return items;
-  }, [filter, items]);
+    try {
+      const [todayResponse, completedResponse] = await Promise.all([
+        fetch("/api/tasks/today", { cache: "no-store" }),
+        fetch("/api/tasks/completed", { cache: "no-store" }),
+      ]);
 
+      const [todayResult, completedResult] = await Promise.all([
+        todayResponse.json(),
+        completedResponse.json(),
+      ]);
+
+      if (!todayResponse.ok) {
+        throw new Error(typeof todayResult.message === "string" ? todayResult.message : "Failed to load today's tasks.");
+      }
+
+      if (!completedResponse.ok) {
+        throw new Error(typeof completedResult.message === "string" ? completedResult.message : "Failed to load completed tasks.");
+      }
+
+      setActiveTasks(sortTodayWorkQueue(todayResult.rows as TodayWorkQueueItem[]));
+      setCompletedTasks(completedResult.rows as CompletedWorkItem[]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load tasks.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void loadTasks();
+  }, [loadTasks]);
+
+  React.useEffect(() => {
+    return () => {
+      for (const timer of scheduledRefreshTimers.current) {
+        window.clearTimeout(timer);
+      }
+      scheduledRefreshTimers.current = [];
+    };
+  }, []);
+
+  const scheduleQueueRefreshAt = React.useCallback((isoDate?: string | null) => {
+    if (!isoDate) return;
+
+    const triggerAt = new Date(isoDate).getTime();
+    if (!Number.isFinite(triggerAt)) return;
+
+    const delay = triggerAt - Date.now();
+    if (delay <= 0) {
+      void loadTasks();
+      void refreshTaskCount();
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadTasks();
+      void refreshTaskCount();
+      scheduledRefreshTimers.current = scheduledRefreshTimers.current.filter((value) => value !== timer);
+    }, delay + 250);
+
+    scheduledRefreshTimers.current.push(timer);
+  }, [loadTasks, refreshTaskCount]);
+
+  const handleCreated = (_row: TodayTaskApiRow) => {
+    void loadTasks();
+    void refreshTaskCount();
+  };
+
+  const extractDate = (result: unknown, key: "nextFollowUpDate" | "followUpDate") => {
+    if (!result || typeof result !== "object") return undefined;
+    if (!(key in result)) return undefined;
+
+    const value = (result as Record<string, unknown>)[key];
+    return typeof value === "string" ? value : undefined;
+  };
+
+  const handleCompletionSaved = (result?: unknown) => {
+    setCompletionItem(null);
+    const scheduledDate = extractDate(result, "nextFollowUpDate");
+    void loadTasks();
+    void refreshTaskCount();
+    scheduleQueueRefreshAt(scheduledDate);
+  };
+
+  const handleFollowUpSaved = (result?: unknown) => {
+    setFollowUpTask(null);
+    const scheduledDate = extractDate(result, "followUpDate");
+    void loadTasks();
+    void refreshTaskCount();
+    scheduleQueueRefreshAt(scheduledDate);
+  };
+
+  const counts = React.useMemo(() => todayWorkCounts(activeTasks), [activeTasks]);
+  const filteredItems = React.useMemo(
+    () => activeTasks.filter((item) => matchesTodayWorkFilter(item, activeFilter)),
+    [activeFilter, activeTasks],
+  );
   const chips: { key: MarketerTaskFilter; label: string }[] = [
     { key: "all", label: "All" },
     { key: "tasks", label: "Tasks" },
@@ -1545,99 +1767,118 @@ function MarketerTodayTasksPanel({ workspace }: { workspace: CrmWorkspace }) {
     { key: "carry-forward", label: "Carry Forward" },
   ];
 
-  return (
-    <DashboardCard title="Today's Tasks" className="h-full">
-      <div className="space-y-4">
-        <div className="flex flex-wrap gap-2">
-          {chips.map((chip) => {
-            const active = filter === chip.key;
-            return (
-              <button
-                key={chip.key}
-                type="button"
-                onClick={() => setFilter(chip.key)}
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-bold transition",
-                  active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:border-blue-100 hover:text-slate-700",
-                )}
-              >
-                {chip.label}
-                <span className={cn("rounded-full px-1.5 py-0.5 text-[11px]", active ? "bg-white text-blue-700" : "bg-slate-100 text-slate-500")}>{counts[chip.key]}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="space-y-3">
-          {filteredItems.length ? filteredItems.slice(0, 6).map((item) => {
-            const Icon = marketerTaskIcon(item.method, item.source);
-            return (
-              <Link
-                key={item.id}
-                href={rolePath("MARKETER", "tasks")}
-                className={cn("block rounded-2xl border px-3 py-2.5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md", marketerTaskAccent(item.method, item.source, item.overdue))}
-              >
-                <div className="flex items-center gap-3">
-                  <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white shadow-sm", item.overdue ? "text-red-600" : "text-blue-700")}>
-                    <Icon className="h-5 w-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="truncate text-sm font-black text-slate-950">
-                        {item.title}
-                        {item.relatedTo !== "-" ? <span className="font-semibold text-slate-500"> - {item.relatedTo}</span> : null}
-                      </p>
-                      <p className="shrink-0 text-sm font-bold text-slate-700">{item.time}</p>
-                    </div>
-                    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
-                      <span className="truncate text-xs font-semibold text-slate-500">{item.method}</span>
-                      <Badge variant={item.queueType === "OVERDUE" ? "danger" : item.queueType === "DUE_FOLLOW_UP" ? "warning" : "default"}>
-                        {item.queueLabel ?? item.status}
-                      </Badge>
-                      <Badge variant={item.priority === "Urgent" || item.priority === "High" ? "danger" : item.priority === "Medium" ? "warning" : "neutral"}>{item.priority}</Badge>
-                    </div>
-                  </div>
-                </div>
-              </Link>
-            );
-          }) : <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No work items in this view.</p>}
-        </div>
-
-        <div className="pt-1 text-center">
-          <Link href={rolePath("MARKETER", "tasks")} className="inline-flex items-center gap-2 text-sm font-bold text-slate-700 transition hover:text-blue-700">
-            View all tasks
-            <ArrowRight className="h-4 w-4" />
-          </Link>
-        </div>
-      </div>
-    </DashboardCard>
-  );
-}
-
-function MarketerLeadPipelinePanel({ workspace }: { workspace: CrmWorkspace }) {
-  const cards = [
-    { label: "New Lead", match: "New Lead", tone: "border-blue-200 bg-blue-50/60 text-blue-700" },
-    { label: "Contacted", match: "Contacted", tone: "border-emerald-200 bg-emerald-50/60 text-emerald-700" },
-    { label: "Interested", match: "Interested", tone: "border-violet-200 bg-violet-50/60 text-violet-700" },
-    { label: "Quotation Sent", match: "Quotation Sent", tone: "border-amber-200 bg-amber-50/60 text-amber-700" },
-    { label: "Won", match: "Won Sale", tone: "border-green-200 bg-green-50/60 text-green-700" },
-    { label: "Lost", match: "Lost Sale", tone: "border-red-200 bg-red-50/60 text-red-700" },
-  ].map((item) => ({
-    ...item,
-    value: workspace.pipeline.find((pipeline) => pipeline.label === item.match)?.value ?? 0,
-  }));
+  const handleAddFollowUp = React.useCallback((task: CompletedWorkItem) => {
+    setFollowUpTask({
+      id: task.sourceId,
+      title: task.title,
+      companyId: task.companyId,
+      companyName: task.companyName,
+      leadId: task.leadId,
+      leadName: task.leadName,
+      taskId: task.taskId ?? (task.sourceType === "TASK" ? task.sourceId : null),
+    });
+  }, []);
 
   return (
-    <DashboardCard title="Lead Pipeline" className="h-full">
-      <div className="grid gap-3 sm:grid-cols-2">
-        {cards.map((card) => (
-          <div key={card.label} className={cn("rounded-2xl border p-4 shadow-sm", card.tone)}>
-            <p className="text-xs font-bold uppercase tracking-wide">{card.label}</p>
-            <p className="mt-3 text-3xl font-black text-slate-950">{card.value}</p>
-          </div>
-        ))}
+    <>
+      <div className="space-y-5">
+        {error ? <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p> : null}
+        {actionError ? <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{actionError}</p> : null}
+
+        <div className="grid gap-5 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <DashboardCard
+            title="Today's Tasks"
+            action={
+              <Button type="button" onClick={() => setOpen(true)} size="sm" className="h-8 rounded-xl">
+                <Plus className="h-4 w-4" />
+                Add Task
+              </Button>
+            }
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {chips.map((chip) => {
+                const active = activeFilter === chip.key;
+
+                return (
+                  <button
+                    key={chip.key}
+                    type="button"
+                    onClick={() => setActiveFilter(chip.key)}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-bold transition",
+                      active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:border-blue-100 hover:text-slate-700",
+                    )}
+                  >
+                    {chip.label}
+                    <span className={cn("rounded-full px-1.5 py-0.5 text-[11px]", active ? "bg-white text-blue-700" : "bg-slate-100 text-slate-500")}>{counts[chip.key]}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-4">
+              <Badge variant={counts.overdue ? "warning" : "neutral"} className="mb-3 inline-flex w-fit rounded-full px-3 py-1 text-xs font-bold">
+                {counts.all} Pending
+              </Badge>
+            </div>
+
+            <TodayWorkQueueList
+              rows={filteredItems}
+              loading={loading}
+              viewerRole={role}
+              emptyMessage="No work items in this view."
+              activeItemId={completionItem?.id ?? null}
+              onComplete={(item) => {
+                setActionError("");
+                setCompletionItem(item);
+              }}
+            />
+          </DashboardCard>
+
+          <DashboardCard
+            title="Completed Tasks"
+            action={<Badge variant="neutral">{completedTasks.length} Completed</Badge>}
+          >
+            <CompletedWorkList
+              rows={completedTasks}
+              loading={loading}
+              viewerRole={role}
+              emptyMessage="No completed tasks yet."
+              onAddFollowUp={handleAddFollowUp}
+              previewCount={6}
+            />
+          </DashboardCard>
+        </div>
       </div>
-    </DashboardCard>
+
+      <TaskCreateModal
+        open={open}
+        onClose={() => setOpen(false)}
+        onCreated={(row: TodayTaskApiRow) => {
+          handleCreated(row);
+          setOpen(false);
+        }}
+        role={role}
+        workspace={workspace}
+      />
+
+      <WorkCompletionModal
+        item={completionItem}
+        workspace={workspace}
+        onClose={() => {
+          setCompletionItem(null);
+          setActionError("");
+        }}
+        onSaved={handleCompletionSaved}
+      />
+
+      <TaskFollowUpModal
+        task={followUpTask}
+        workspace={workspace}
+        onClose={() => setFollowUpTask(null)}
+        onSaved={handleFollowUpSaved}
+      />
+    </>
   );
 }
 
@@ -1729,10 +1970,7 @@ export function MarketerDashboard({ workspace }: { workspace: CrmWorkspace }) {
 
       <MarketerKpiGrid workspace={workspace} tasks={marketerTasks} />
 
-      <div className="grid gap-5 xl:grid-cols-[1.35fr_0.9fr]">
-        <MarketerTodayTasksPanel workspace={workspace} />
-        <MarketerLeadPipelinePanel workspace={workspace} />
-      </div>
+      <MarketerTodayTaskSection workspace={workspace} />
 
       <MarketerFollowUpCenter workspace={workspace} />
       <MarketerRecentActivities workspace={workspace} />
@@ -1742,7 +1980,25 @@ export function MarketerDashboard({ workspace }: { workspace: CrmWorkspace }) {
 
 export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) {
   const dashboardRef = React.useRef<HTMLDivElement | null>(null);
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const charts = chartData(workspace);
+  const periodLabels: Record<TeamPerformancePeriod, string> = {
+    today: "Today",
+    week: "This Week",
+    month: "This Month",
+    year: "This Year",
+    custom: "Custom",
+  };
+  const periodOptions: TeamPerformancePeriod[] = ["today", "week", "month", "year", "custom"];
+  const teamPerformanceRows = workspace.teamPerformance?.rows;
+  const initialPeriod = workspace.teamPerformance?.period ?? "month";
+  const workspacePeriodFrom = teamPerformanceRows ? workspace.teamPerformance?.from ?? "" : "";
+  const workspacePeriodTo = teamPerformanceRows ? workspace.teamPerformance?.to ?? "" : "";
+  const [performancePeriod, setPerformancePeriod] = React.useState<TeamPerformancePeriod>(initialPeriod);
+  const [customFrom, setCustomFrom] = React.useState(workspacePeriodFrom);
+  const [customTo, setCustomTo] = React.useState(workspacePeriodTo);
   const supervisorStats = React.useMemo(() => {
     const requestedTitles = [
       "Total Marketers",
@@ -1758,7 +2014,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
       .filter((item): item is CrmWorkspace["stats"][number] => Boolean(item));
   }, [workspace.stats]);
   const performanceRows = React.useMemo<SupervisorPerformanceRow[]>(() => {
-    const teamRows = workspace.employees.filter((row) => row.role === "Marketer");
+    const teamRows = teamPerformanceRows ?? workspace.employees.filter((row) => row.role === "Marketer");
     const withRawScore = teamRows.map((row) => ({
       ...row,
       performanceScoreRaw:
@@ -1784,7 +2040,93 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
         right.leads - left.leads ||
         right.followUps - left.followUps
       ));
-  }, [workspace.employees]);
+  }, [teamPerformanceRows, workspace.employees]);
+
+  React.useEffect(() => {
+    setPerformancePeriod(initialPeriod);
+    setCustomFrom(workspacePeriodFrom);
+    setCustomTo(workspacePeriodTo);
+  }, [initialPeriod, workspacePeriodFrom, workspacePeriodTo]);
+
+  const updatePerformancePeriod = React.useCallback((period: TeamPerformancePeriod, from?: string, to?: string) => {
+    if (!pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("performancePeriod", period);
+
+    if (period === "custom") {
+      if (from) params.set("from", from);
+      else params.delete("from");
+      if (to) params.set("to", to);
+      else params.delete("to");
+    } else {
+      params.delete("from");
+      params.delete("to");
+    }
+
+    const nextQuery = params.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
+  }, [pathname, router, searchParams]);
+
+  const applyCustomPeriod = React.useCallback(() => {
+    if (performancePeriod !== "custom" || !customFrom || !customTo) return;
+    updatePerformancePeriod("custom", customFrom, customTo);
+  }, [customFrom, customTo, performancePeriod, updatePerformancePeriod]);
+
+  const handlePeriodChange = React.useCallback((period: TeamPerformancePeriod) => {
+    setPerformancePeriod(period);
+    if (period !== "custom") {
+      updatePerformancePeriod(period);
+    }
+  }, [updatePerformancePeriod]);
+
+  const canApplyCustom = performancePeriod === "custom" && Boolean(customFrom && customTo && customFrom <= customTo);
+  const performanceFilterToolbar = (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <div className="inline-flex rounded-full border border-slate-200 bg-white p-1">
+        {periodOptions.map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => handlePeriodChange(option)}
+            className={cn(
+              "rounded-full px-3 py-1.5 text-xs font-bold",
+              performancePeriod === option
+                ? "bg-blue-600 text-white shadow-sm"
+                : "text-slate-600 hover:bg-slate-50",
+            )}
+          >
+            {periodLabels[option]}
+          </button>
+        ))}
+      </div>
+      {performancePeriod === "custom" ? (
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={customFrom}
+            onChange={(event) => setCustomFrom(event.target.value)}
+            className="h-9 rounded-full border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none ring-0 transition focus:border-blue-500"
+          />
+          <input
+            type="date"
+            value={customTo}
+            onChange={(event) => setCustomTo(event.target.value)}
+            className="h-9 rounded-full border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none ring-0 transition focus:border-blue-500"
+          />
+          <Button
+            type="button"
+            size="sm"
+            className="h-9 rounded-full"
+            onClick={applyCustomPeriod}
+            disabled={!canApplyCustom}
+          >
+            Apply
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+
   const pendingFollowUps = React.useMemo(() => {
     const bucketRank: Record<string, number> = {
       Overdue: 0,
@@ -1798,6 +2140,67 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
       .sort((left, right) => (bucketRank[left.bucket] ?? 99) - (bucketRank[right.bucket] ?? 99))
       .slice(0, 6);
   }, [workspace.followUps]);
+
+  const [drilldownOpen, setDrilldownOpen] = React.useState(false);
+  const [drilldownPayload, setDrilldownPayload] = React.useState<TeamPerformanceDrilldownPayload | null>(null);
+  const [drilldownRows, setDrilldownRows] = React.useState<TeamPerformanceDrilldownRow[]>([]);
+  const [drilldownCount, setDrilldownCount] = React.useState(0);
+  const [drilldownLoading, setDrilldownLoading] = React.useState(false);
+  const [drilldownError, setDrilldownError] = React.useState("");
+
+  const metricPeriodLabel = React.useCallback((period: TeamPerformancePeriod, from?: string, to?: string) => {
+    if (period === "custom") {
+      return from && to ? `Custom (${from} - ${to})` : "Custom";
+    }
+
+    return periodLabels[period];
+  }, [periodLabels]);
+
+  const handlePerformanceMetricClick = React.useCallback(async (payload: TeamPerformanceDrilldownPayload) => {
+    setDrilldownPayload(payload);
+    setDrilldownOpen(true);
+    setDrilldownLoading(true);
+    setDrilldownError("");
+    setDrilldownRows([]);
+    setDrilldownCount(0);
+
+    try {
+      const params = new URLSearchParams({
+        marketerId: payload.marketerId,
+        metricType: payload.metric,
+        period: performancePeriod,
+      });
+
+      if (performancePeriod === "custom" && customFrom) {
+        params.set("from", customFrom);
+      }
+      if (performancePeriod === "custom" && customTo) {
+        params.set("to", customTo);
+      }
+
+      const response = await fetch(`/api/supervisor/team-performance/drilldown?${params.toString()}`);
+      const json = await response.json();
+
+      if (!response.ok || !json?.success) {
+        throw new Error(json?.message || "Failed to load drill-down records.");
+      }
+
+      setDrilldownRows(json.rows || []);
+      setDrilldownCount(json.count || 0);
+    } catch (error) {
+      setDrilldownError(error instanceof Error ? error.message : "Failed to load drill-down records.");
+    } finally {
+      setDrilldownLoading(false);
+    }
+  }, [customFrom, customTo, performancePeriod]);
+
+  const closeDrilldown = React.useCallback(() => {
+    setDrilldownOpen(false);
+    setDrilldownPayload(null);
+    setDrilldownRows([]);
+    setDrilldownCount(0);
+    setDrilldownError("");
+  }, []);
 
   React.useEffect(() => {
     if (!dashboardRef.current) return;
@@ -1824,13 +2227,22 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
         eyebrow="Supervisor Dashboard"
         title="Team performance overview"
         description="Monitor team leads, due follow-ups, product interest, and target achievement."
-        actions={<SupervisorHeaderAction>Current Month</SupervisorHeaderAction>}
       />
 
       <SupervisorKpiGrid items={supervisorStats} />
 
       <div data-supervisor-section>
-        <SupervisorTeamPerformancePanelV2 rows={performanceRows} />
+        <SupervisorTeamPerformancePanelV2
+          rows={performanceRows}
+          toolbar={
+            performanceFilterToolbar
+          }
+          onMetricClick={handlePerformanceMetricClick}
+        />
+      </div>
+
+      <div data-supervisor-section>
+        <AdminCallTrackingPanel workspace={workspace} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.45fr_0.88fr_1fr]" data-supervisor-section>
@@ -1844,12 +2256,71 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
       </div>
 
       <SupervisorProductIntelligencePanelV2 workspace={workspace} />
+
+      <FormModal
+        open={drilldownOpen}
+        title={drilldownPayload
+          ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} - ${metricPeriodLabel(
+            performancePeriod,
+            performancePeriod === "custom" ? customFrom : undefined,
+            performancePeriod === "custom" ? customTo : undefined,
+          )}`
+          : "Team performance drill-down"}
+        onClose={closeDrilldown}
+        panelClassName="w-[95vw] max-w-[900px]"
+      >
+        {drilldownLoading ? (
+          <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-600">Loading records...</p>
+        ) : drilldownError ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+            {drilldownError}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm font-semibold text-slate-600">
+              {drilldownRows.length ? `${drilldownRows.length} of ${drilldownCount}` : "No records found for this metric."}
+            </p>
+
+            {drilldownRows.length ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-slate-100 text-xs uppercase tracking-[0.12em] text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2 font-bold">Contact</th>
+                      <th className="px-3 py-2 font-bold">Phone</th>
+                      <th className="px-3 py-2 font-bold">Method</th>
+                      <th className="px-3 py-2 font-bold">Title</th>
+                      <th className="px-3 py-2 font-bold">Date & Time</th>
+                      <th className="px-3 py-2 font-bold">Note</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {drilldownRows.map((record) => (
+                      <tr key={record.id} className="hover:bg-slate-50/70">
+                        <td className="max-w-[160px] truncate px-3 py-2">{record.contactPerson}</td>
+                        <td className="px-3 py-2">{record.phone}</td>
+                        <td className="px-3 py-2">{record.method}</td>
+                        <td className="max-w-[180px] truncate px-3 py-2">{record.title}</td>
+                        <td className="px-3 py-2">{record.dateTime}</td>
+                        <td className="max-w-[200px] truncate px-3 py-2">{record.note}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+                No records found for this metric in selected period.
+              </p>
+            )}
+          </div>
+        )}
+      </FormModal>
     </div>
   );
 }
 
 type AdminPerformanceRow = CrmWorkspace["employees"][number] & {
-  emails: number;
   performanceScore: number;
   performanceScoreRaw: number;
 };
@@ -1992,6 +2463,69 @@ function AdminSalesPanel({ data }: { data: Array<{ month: string; sales: number 
   );
 }
 
+function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
+  const rows = React.useMemo(() => {
+    const filtered = workspace.activities
+      .filter((item) => item.category === "CALL")
+      .sort((left, right) => (right.createdAtValue ?? "").localeCompare(left.createdAtValue ?? ""));
+    return filtered.slice(0, 12);
+  }, [workspace.activities]);
+
+  const todayCalls = workspace.communicationCenterSummary?.todayCalls ?? 0;
+
+  return (
+    <SupervisorSurfaceCard
+      title="Call Tracking"
+      subtitle="Marketer call activity with customer name and discussion notes."
+      action={<Badge variant="neutral">{todayCalls} Today Calls</Badge>}
+      className="h-full"
+      contentClassName="p-5"
+    >
+      {rows.length ? (
+        <div className="overflow-x-auto">
+          <table className="min-w-[860px] w-full text-sm">
+            <thead className="text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
+              <tr>
+                <th className="px-3 py-3 font-black">Company</th>
+                <th className="px-3 py-3 font-black">Marketer</th>
+                <th className="px-3 py-3 font-black">Note</th>
+                <th className="px-3 py-3 font-black">Time</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {rows.map((item) => (
+                <tr key={item.id} className="transition hover:bg-slate-50/70">
+                  <td className="px-3 py-3 font-semibold text-slate-900">
+                    {item.customerHref ? (
+                      <Link href={item.customerHref} className="text-blue-700 hover:underline">
+                        {item.customerName ?? "-"}
+                      </Link>
+                    ) : (
+                      item.customerName ?? "-"
+                    )}
+                  </td>
+                  <td className="px-3 py-3 text-slate-700">{item.employeeName ?? item.createdBy ?? "-"}</td>
+                  <td className="max-w-[420px] truncate px-3 py-3 text-slate-700" title={item.discussionSummary ?? item.notes ?? ""}>
+                    {item.discussionSummary ?? item.notes ?? "-"}
+                  </td>
+                  <td className="px-3 py-3 text-slate-600">{item.time}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <SupervisorEmptyState
+          icon={PhoneCall}
+          title="No call activity yet"
+          description="When marketers initiate calls from CRM and log notes, they will appear here."
+          className="min-h-[300px]"
+        />
+      )}
+    </SupervisorSurfaceCard>
+  );
+}
+
 function AdminLeadStatusPanel({ totalLeads, data }: { totalLeads: number; data: Array<{ name: string; value: number; color: string }> }) {
   const hasData = data.some((item) => item.value > 0);
 
@@ -2019,6 +2553,58 @@ function AdminLeadStatusPanel({ totalLeads, data }: { totalLeads: number; data: 
 }
 
 function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
+  const [drilldownOpen, setDrilldownOpen] = React.useState(false);
+  const [drilldownPayload, setDrilldownPayload] = React.useState<TeamPerformanceDrilldownPayload | null>(null);
+  const [drilldownRows, setDrilldownRows] = React.useState<TeamPerformanceDrilldownRow[]>([]);
+  const [drilldownCount, setDrilldownCount] = React.useState(0);
+  const [drilldownLoading, setDrilldownLoading] = React.useState(false);
+  const [drilldownError, setDrilldownError] = React.useState("");
+
+  const closeDrilldown = React.useCallback(() => {
+    setDrilldownOpen(false);
+    setDrilldownPayload(null);
+    setDrilldownRows([]);
+    setDrilldownCount(0);
+    setDrilldownError("");
+    setDrilldownLoading(false);
+  }, []);
+
+  const handleMetricClick = React.useCallback(async (employee: AdminPerformanceRow, metric: TeamPerformanceMetricKey) => {
+    const metricLabel = teamPerformanceMetricLabels[metric] ?? metric;
+    setDrilldownPayload({
+      marketerId: employee.id,
+      marketerName: employee.name,
+      metric,
+      metricLabel,
+    });
+    setDrilldownOpen(true);
+    setDrilldownLoading(true);
+    setDrilldownError("");
+    setDrilldownRows([]);
+    setDrilldownCount(0);
+
+    try {
+      const params = new URLSearchParams({
+        marketerId: employee.id,
+        metricType: metric,
+        period: "month",
+      });
+      const response = await fetch(`/api/supervisor/team-performance/drilldown?${params.toString()}`);
+      const json = await response.json();
+
+      if (!response.ok || !json?.success) {
+        throw new Error(json?.message || "Failed to load drill-down records.");
+      }
+
+      setDrilldownRows(Array.isArray(json.rows) ? json.rows : []);
+      setDrilldownCount(typeof json.count === "number" ? json.count : 0);
+    } catch (error) {
+      setDrilldownError(error instanceof Error ? error.message : "Failed to load drill-down records.");
+    } finally {
+      setDrilldownLoading(false);
+    }
+  }, []);
+
   return (
     <SupervisorSurfaceCard
       title="Team Performance"
@@ -2052,13 +2638,37 @@ function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
                 <td className="px-3 py-4">
                   <Badge variant={row.roleKey === "ADMIN" ? "danger" : row.roleKey === "SUPERVISOR" ? "violet" : "default"}>{row.role}</Badge>
                 </td>
-                <td className="px-3 py-4 font-semibold text-slate-700">{row.leads}</td>
-                <td className="px-3 py-4 font-semibold text-slate-700">{row.calls}</td>
-                <td className="px-3 py-4 font-semibold text-slate-700">{row.whatsapp}</td>
+                <td className="px-3 py-4">
+                  <button type="button" className="font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "leads")}>
+                    {row.leads}
+                  </button>
+                </td>
+                <td className="px-3 py-4">
+                  <button type="button" className="font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "calls")}>
+                    {row.calls}
+                  </button>
+                </td>
+                <td className="px-3 py-4">
+                  <button type="button" className="font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "whatsapp")}>
+                    {row.whatsapp}
+                  </button>
+                </td>
                 <td className="px-3 py-4 font-semibold text-slate-700">{row.emails}</td>
-                <td className="px-3 py-4 font-semibold text-slate-700">{row.followUps}</td>
-                <td className="px-3 py-4 font-semibold text-slate-700">{row.pendingTasks}</td>
-                <td className="px-3 py-4 font-semibold text-slate-700">{row.overdueFollowUps}</td>
+                <td className="px-3 py-4">
+                  <button type="button" className="font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "followUps")}>
+                    {row.followUps}
+                  </button>
+                </td>
+                <td className="px-3 py-4">
+                  <button type="button" className="font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "pendingTasks")}>
+                    {row.pendingTasks}
+                  </button>
+                </td>
+                <td className="px-3 py-4">
+                  <button type="button" className="font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "overdueFollowUps")}>
+                    {row.overdueFollowUps}
+                  </button>
+                </td>
                 <td className="px-3 py-4 font-semibold text-slate-700">{row.conversionRate}</td>
                 <td className="px-3 py-4">
                   <div className="min-w-[156px]">
@@ -2086,6 +2696,60 @@ function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
           </tbody>
         </table>
       </div>
+
+      <FormModal
+        open={drilldownOpen}
+        title={drilldownPayload ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} (This Month)` : "Team performance drill-down"}
+        onClose={closeDrilldown}
+        panelClassName="w-[95vw] max-w-[900px]"
+      >
+        {drilldownLoading ? (
+          <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-600">Loading records...</p>
+        ) : drilldownError ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+            {drilldownError}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm font-semibold text-slate-600">
+              {drilldownRows.length ? `${drilldownRows.length} of ${drilldownCount}` : "No records found for this metric."}
+            </p>
+
+            {drilldownRows.length ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-slate-100 text-xs uppercase tracking-[0.12em] text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2 font-bold">Contact</th>
+                      <th className="px-3 py-2 font-bold">Phone</th>
+                      <th className="px-3 py-2 font-bold">Method</th>
+                      <th className="px-3 py-2 font-bold">Title</th>
+                      <th className="px-3 py-2 font-bold">Date & Time</th>
+                      <th className="px-3 py-2 font-bold">Note</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {drilldownRows.map((record) => (
+                      <tr key={record.id} className="hover:bg-slate-50/70">
+                        <td className="max-w-[160px] truncate px-3 py-2">{record.contactPerson}</td>
+                        <td className="px-3 py-2">{record.phone}</td>
+                        <td className="px-3 py-2">{record.method}</td>
+                        <td className="max-w-[180px] truncate px-3 py-2">{record.title}</td>
+                        <td className="px-3 py-2">{record.dateTime}</td>
+                        <td className="max-w-[200px] truncate px-3 py-2">{record.note}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+                No records found for this metric in selected period.
+              </p>
+            )}
+          </div>
+        )}
+      </FormModal>
     </SupervisorSurfaceCard>
   );
 }
@@ -2273,23 +2937,17 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
     ];
   }, [workspace]);
   const adminTeamRows = React.useMemo<AdminPerformanceRow[]>(() => {
-    const emailCountByEmployee = new Map<string, number>();
-    for (const item of workspace.activities) {
-      if (item.category !== "EMAIL") continue;
-      const key = item.employeeId ?? item.employeeName ?? "";
-      if (!key) continue;
-      emailCountByEmployee.set(key, (emailCountByEmployee.get(key) ?? 0) + 1);
-    }
+    const baseRows = (workspace.teamPerformance?.rows?.length ? workspace.teamPerformance.rows : workspace.employees)
+      .filter((row) => row.statusKey === "ACTIVE");
 
-    const rowsWithRaw = workspace.employees.map((row) => {
-      const emails = emailCountByEmployee.get(row.id) ?? emailCountByEmployee.get(row.name) ?? 0;
+    const rowsWithRaw = baseRows.map((row) => {
       const numericConversion = Number.parseInt(row.conversionRate.replace(/\D/g, ""), 10) || 0;
       const performanceScoreRaw =
         row.sales * 30 +
         row.leads * 8 +
         row.calls * 4 +
         row.whatsapp * 4 +
-        emails * 4 +
+        row.emails * 4 +
         row.followUps * 5 +
         numericConversion * 2 -
         row.pendingTasks * 2 -
@@ -2297,7 +2955,6 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
 
       return {
         ...row,
-        emails,
         performanceScoreRaw,
         performanceScore: 0,
       };
@@ -2343,13 +3000,13 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
 
       <AdminKpiGrid items={adminStats} />
 
-      <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]" data-admin-section>
-        <AdminSalesPanel data={charts.sales} />
-        <AdminLeadStatusPanel totalLeads={workspace.leads.length} data={charts.leadStatus} />
-      </div>
-
       <div data-admin-section>
         <AdminTeamPerformancePanel rows={adminTeamRows} />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]" data-admin-section>
+        <AdminCallTrackingPanel workspace={workspace} />
+        <AdminLeadStatusPanel totalLeads={workspace.leads.length} data={charts.leadStatus} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]" data-admin-section>

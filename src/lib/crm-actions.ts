@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import type * as Prisma from "@prisma/client";
 import { getCurrentSession } from "@/lib/auth";
 import { createProductEntry, deleteProductEntry, updateProductEntry } from "@/lib/product-center";
+import { createTaskEntry } from "@/lib/task-center";
 import type { EmployeeRow } from "@/lib/crm-data";
 import { createSetupToken, hashPassword, verifyPassword } from "@/lib/password-auth";
 import { getPrisma } from "@/lib/prisma";
@@ -35,6 +36,32 @@ function isAuthUpgradeUnavailable(error: unknown) {
     message.includes("Unknown argument `purpose`") ||
     message.includes("does not exist in the current database")
   );
+}
+
+function isDatabaseConnectionIssue(error: unknown) {
+  const message = String((error as { message?: string })?.message ?? "");
+  const code = String((error as { code?: string })?.code ?? "");
+
+  return (
+    code === "P1000" ||
+    code === "P1001" ||
+    code === "P1002" ||
+    message.includes("Authentication failed against the database server") ||
+    message.includes("password authentication failed") ||
+    message.includes("ECONNREFUSED") ||
+    message.includes("connect ECONNREFUSED") ||
+    message.includes("getaddrinfo ENOTFOUND")
+  );
+}
+
+function databaseConnectionMessage(error: unknown) {
+  const message = String((error as { message?: string })?.message ?? "");
+
+  if (message.includes("Authentication failed against the database server") || message.includes("password authentication failed")) {
+    return "Database authentication failed. Update DATABASE_URL credentials and restart the server.";
+  }
+
+  return "Database connection failed. Ensure Postgres is running and DATABASE_URL is correct.";
 }
 
 function authUpgradeMessage() {
@@ -76,6 +103,38 @@ function dateValue(formData: FormData, key: string) {
   return value ? new Date(value) : undefined;
 }
 
+function parseDateTimeInput(formData: FormData, key: string) {
+  const value = text(formData, key);
+  if (!value) return undefined;
+
+  const parsed = new Date(value);
+  return validDate(parsed);
+}
+
+function dateTimeWithClientOffset(formData: FormData, key: string, offsetKey: string) {
+  const value = text(formData, key);
+  if (!value) return undefined;
+
+  const offsetRaw = Number(formData.get(offsetKey));
+  const offsetMinutes = Number.isFinite(offsetRaw) ? offsetRaw : undefined;
+  const datetime = value;
+  const isoLike = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/;
+  const match = datetime.match(isoLike);
+
+  if (offsetMinutes === undefined || !match) {
+    return parseDateTimeInput(formData, key);
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6] ?? "0");
+
+  return validDate(new Date(Date.UTC(year, month, day, hour, minute, second) + offsetMinutes * 60 * 1000));
+}
+
 function validDate(value: Date | undefined) {
   if (!value) return undefined;
   return Number.isNaN(value.getTime()) ? undefined : value;
@@ -101,17 +160,34 @@ function readTemplateNumber(formData: FormData, key: string) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function readTemplateTextList(formData: FormData, key: string) {
+  return formData
+    .getAll(key)
+    .map((value) => String(value ?? "").trim())
+    .filter((value) => value.length > 0);
+}
+
+function safeJsonParse(value: string) {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 function buildCustomerTemplateRaw(formData: FormData) {
   const sl = readTemplateText(formData, "sl");
   const industry = readTemplateText(formData, "industry");
   const companyName = readTemplateText(formData, "companyName");
   const cityOrZilla = readTemplateText(formData, "cityOrZilla");
   const address = readTemplateText(formData, "address");
-  const primaryPhone = readTemplateText(formData, "primaryPhone");
-  const phone2 = readTemplateText(formData, "phone2");
-  const phone3 = readTemplateText(formData, "phone3");
-  const primaryEmail = readTemplateText(formData, "primaryEmail");
-  const email2 = readTemplateText(formData, "email2");
+  const phoneNumbers = readTemplateTextList(formData, "phoneNumbers");
+  const emailAddresses = readTemplateTextList(formData, "emailAddresses");
+  const primaryPhone = readTemplateText(formData, "primaryPhone") || phoneNumbers[0] || "";
+  const phone2 = readTemplateText(formData, "phone2") || phoneNumbers[1] || "";
+  const phone3 = readTemplateText(formData, "phone3") || phoneNumbers[2] || "";
+  const primaryEmail = readTemplateText(formData, "primaryEmail") || emailAddresses[0] || "";
+  const email2 = readTemplateText(formData, "email2") || emailAddresses[1] || "";
   const website = readTemplateText(formData, "website");
   const note = readTemplateText(formData, "note");
   const cp1Name = readTemplateText(formData, "contactPerson1Name");
@@ -129,6 +205,8 @@ function buildCustomerTemplateRaw(formData: FormData) {
   const cp2Email1 = readTemplateText(formData, "cp2Email1");
   const cp2Email2 = readTemplateText(formData, "cp2Email2");
   const leadSource = readTemplateText(formData, "leadSource");
+  const contactsJson = readTemplateText(formData, "contactsJson");
+  const contacts = contactsJson ? safeJsonParse(contactsJson) : undefined;
 
   return {
     "SL": sl,
@@ -143,6 +221,9 @@ function buildCustomerTemplateRaw(formData: FormData) {
     "Email 2": email2,
     "Website": website,
     "Note": note,
+    "Phone Numbers": phoneNumbers,
+    "Email Addresses": emailAddresses,
+    "Contacts": Array.isArray(contacts) ? contacts : [],
     "Contact Person 1 Name": cp1Name,
     "Contact Person 1 Designation": cp1Designation,
     "Contact Person 1 Department": cp1Department,
@@ -259,6 +340,16 @@ function buildCustomerCreatePhoneNumbers(raw: ReturnType<typeof buildCustomerTem
 function readTemplateTextFromString(value: string) {
   const sanitized = value.replace(/\s+/g, "").trim();
   return sanitized || "";
+}
+
+function normalizePhoneCandidate(value: unknown) {
+  const text = typeof value === "string" ? value : "";
+  return readTemplateTextFromString(text);
+}
+
+function normalizeEmailCandidate(value: unknown) {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text.includes("@") ? text : "";
 }
 
 function startOfCurrentDay() {
@@ -414,6 +505,7 @@ function mapEmployeeActionRow(user: {
     leads: 0,
     calls: 0,
     whatsapp: 0,
+    emails: 0,
     meetings: 0,
     followUps: 0,
     pendingTasks: 0,
@@ -724,21 +816,31 @@ async function ensureOfficeAdmin(prisma = getPrisma()) {
 }
 
 export async function adminPasswordLoginAction(formData: FormData) {
-  const login = normalizeLoginIdentifier(formData.get("login") ?? formData.get("email") ?? formData.get("mobile"));
-  const password = String(formData.get("password") ?? "");
-  const adminEmail = (process.env.CRM_ADMIN_EMAIL ?? DEFAULT_ADMIN_EMAIL).toLowerCase();
-  const adminPassword = process.env.CRM_ADMIN_PASSWORD ?? DEFAULT_ADMIN_PASSWORD;
-  const prisma = getPrisma();
+  try {
+    const login = normalizeLoginIdentifier(formData.get("login") ?? formData.get("email") ?? formData.get("mobile"));
+    const password = String(formData.get("password") ?? "");
+    const adminEmail = (process.env.CRM_ADMIN_EMAIL ?? DEFAULT_ADMIN_EMAIL).toLowerCase();
+    const adminPassword = process.env.CRM_ADMIN_PASSWORD ?? DEFAULT_ADMIN_PASSWORD;
+    const prisma = getPrisma();
 
-  if (login !== adminEmail || password !== adminPassword) {
-    return { ok: false, message: "Admin email or password is incorrect." };
+    if (login !== adminEmail || password !== adminPassword) {
+      return { ok: false, message: "Admin email or password is incorrect." };
+    }
+
+    const admin = await ensureOfficeAdmin(prisma);
+    await safeUpdateLastLogin(prisma, admin.id);
+    await setSessionCookies("ADMIN", admin.mobile);
+
+    return { ok: true, redirectTo: roleHome.ADMIN };
+  } catch (error) {
+    if (isAuthUpgradeUnavailable(error)) {
+      return { ok: false, message: authUpgradeMessage() };
+    }
+    if (isDatabaseConnectionIssue(error)) {
+      return { ok: false, message: databaseConnectionMessage(error) };
+    }
+    throw error;
   }
-
-  const admin = await ensureOfficeAdmin(prisma);
-  await safeUpdateLastLogin(prisma, admin.id);
-  await setSessionCookies("ADMIN", admin.mobile);
-
-  return { ok: true, redirectTo: roleHome.ADMIN };
 }
 
 export async function sendOtpAction(formData: FormData) {
@@ -760,6 +862,9 @@ export async function sendOtpAction(formData: FormData) {
   } catch (error) {
     if (isAuthUpgradeUnavailable(error)) {
       return { ok: false, message: authUpgradeMessage() };
+    }
+    if (isDatabaseConnectionIssue(error)) {
+      return { ok: false, message: databaseConnectionMessage(error) };
     }
     throw error;
   }
@@ -823,6 +928,9 @@ export async function verifyOtpAction(formData: FormData) {
     if (isAuthUpgradeUnavailable(error)) {
       return { ok: false, message: authUpgradeMessage() };
     }
+    if (isDatabaseConnectionIssue(error)) {
+      return { ok: false, message: databaseConnectionMessage(error) };
+    }
     throw error;
   }
 }
@@ -861,6 +969,9 @@ export async function teamPasswordLoginAction(formData: FormData) {
   } catch (error) {
     if (isAuthUpgradeUnavailable(error)) {
       return { ok: false, message: authUpgradeMessage() };
+    }
+    if (isDatabaseConnectionIssue(error)) {
+      return { ok: false, message: databaseConnectionMessage(error) };
     }
     throw error;
   }
@@ -943,6 +1054,9 @@ export async function completeTeamPasswordSetupAction(formData: FormData) {
     if (isAuthUpgradeUnavailable(error)) {
       return { ok: false, message: authUpgradeMessage() };
     }
+    if (isDatabaseConnectionIssue(error)) {
+      return { ok: false, message: databaseConnectionMessage(error) };
+    }
     throw error;
   }
 }
@@ -1018,8 +1132,47 @@ export async function createCustomerAction(formData: FormData) {
   const contacts = buildCustomerCreateContacts(rawData);
   const phoneNumbers = buildCustomerCreatePhoneNumbers(rawData);
 
+  const rawContacts = Array.isArray(rawData["Contacts"]) ? rawData["Contacts"] : [];
+  for (let index = 2; index < rawContacts.length; index += 1) {
+    const entry = rawContacts[index] as Record<string, unknown>;
+    const name = normalizeCustomerContactName(typeof entry.name === "string" ? entry.name : undefined) || `Contact ${index + 1}`;
+    const designation = normalizeCustomerContactName(typeof entry.designation === "string" ? entry.designation : undefined) || undefined;
+    const emails = Array.isArray(entry.emails) ? entry.emails.map(normalizeEmailCandidate).filter(Boolean) : [];
+    const phones = Array.isArray(entry.phones) ? entry.phones.map(normalizePhoneCandidate).filter(Boolean) : [];
+    const email = emails[0] || undefined;
+    const mobile = phones[0] || undefined;
+    if (!email && !mobile && !designation && name === `Contact ${index + 1}`) continue;
+    contacts.push({
+      name,
+      designation,
+      email,
+      mobile,
+      isPrimary: false,
+    } satisfies Prisma.Prisma.ContactPersonCreateWithoutCompanyInput);
+  }
+
+  const phoneFromRaw = normalizePhoneCandidate(rawData["Primary Phone"]);
+  const phoneCandidates = [
+    ...(Array.isArray(rawData["Phone Numbers"]) ? rawData["Phone Numbers"] : []),
+    ...rawContacts.flatMap((item) => {
+      const entry = item as Record<string, unknown>;
+      return Array.isArray(entry.phones) ? entry.phones : [];
+    }),
+  ].map(normalizePhoneCandidate).filter(Boolean);
+
+  const existingNumbers = new Set(phoneNumbers.map((item) => item.number));
+  for (const number of phoneCandidates) {
+    if (existingNumbers.has(number)) continue;
+    existingNumbers.add(number);
+    phoneNumbers.push({
+      label: phoneNumbers.length === 0 && number === phoneFromRaw ? "Primary" : `Phone ${phoneNumbers.length + 1}`,
+      number,
+      whatsapp: false,
+    } satisfies Prisma.Prisma.PhoneNumberCreateWithoutCompanyInput);
+  }
+
   const contactPerson = rawData["Contact Person 1 Name"] || contacts[0]?.name || null;
-  const phone = rawData["Primary Phone"] || "";
+  const phone = phoneFromRaw || "";
   const company = await prisma.customerCompany.create({
     data: {
       name: companyName,
@@ -1248,7 +1401,7 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
   const productDiscussed = text(formData, "productDiscussed");
   const outcome = text(formData, "outcome");
   const notes = text(formData, "notes");
-  const nextFollowUpDate = validDate(dateValue(formData, "nextFollowUpDate"));
+  const nextFollowUpDate = dateTimeWithClientOffset(formData, "nextFollowUpDate", "nextFollowUpDateTzOffset");
   const rating = formData.has("rating") ? clampEngagementRating(formData.get("rating")) : undefined;
   const followUpDone = text(formData, "followUpDone") ?? (nextFollowUpDate ? "NO" : "YES");
 
@@ -1355,14 +1508,14 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
           data: {
             ...(resolvedCompany ? { company: { connect: { id: resolvedCompany.id } } } : {}),
             ...(resolvedLead ? { lead: { connect: { id: resolvedLead.id } } } : {}),
-            ...(task.assignedToId ? { assignedTo: { connect: { id: task.assignedToId } } } : {}),
-            task: { connect: { id: task.id } },
-            method: discussionTopic ?? "Task Follow-up",
-            note: conversationSummary,
-            nextDiscussionPlan: notes ?? discussionTopic,
-            priority: "MEDIUM",
-            followUpDate: scheduledFollowUpDate,
-            status: followUpStatusForDate(scheduledFollowUpDate),
+        ...(task.assignedToId ? { assignedTo: { connect: { id: task.assignedToId } } } : { assignedTo: { connect: { id: user.id } } }),
+        task: { connect: { id: task.id } },
+        method,
+        note: conversationSummary,
+        nextDiscussionPlan: notes ?? discussionTopic,
+        priority: "MEDIUM",
+        followUpDate: scheduledFollowUpDate,
+        status: followUpStatusForDate(scheduledFollowUpDate),
             ...(typeof rating === "number" ? { rating } : {}),
           },
         })
@@ -1438,7 +1591,7 @@ export async function completeFollowUpWithCommunicationAction(formData: FormData
   const productDiscussed = text(formData, "productDiscussed");
   const outcome = text(formData, "outcome");
   const notes = text(formData, "notes");
-  const nextFollowUpDate = validDate(dateValue(formData, "nextFollowUpDate"));
+  const nextFollowUpDate = dateTimeWithClientOffset(formData, "nextFollowUpDate", "nextFollowUpDateTzOffset");
   const rating = formData.has("rating") ? clampEngagementRating(formData.get("rating")) : undefined;
 
   if (!id) {
@@ -1510,7 +1663,7 @@ export async function completeFollowUpWithCommunicationAction(formData: FormData
           data: {
             ...(followUp.companyId ? { company: { connect: { id: followUp.companyId } } } : {}),
             ...(followUp.leadId ? { lead: { connect: { id: followUp.leadId } } } : {}),
-            ...(followUp.assignedToId ? { assignedTo: { connect: { id: followUp.assignedToId } } } : {}),
+            ...(followUp.assignedToId ? { assignedTo: { connect: { id: followUp.assignedToId } } } : { assignedTo: { connect: { id: user.id } } }),
             ...(followUp.taskId ? { task: { connect: { id: followUp.taskId } } } : {}),
             method,
             note: notes ?? conversationSummary,
@@ -1650,11 +1803,7 @@ export async function createFollowUpAction(formData: FormData) {
     return { ok: false, message: "You are not allowed to create follow-up for this task." };
   }
 
-  const leadId = text(formData, "leadId");
   const companyId = text(formData, "companyId");
-  if (leadId && !(await hasLeadAccess(prisma, actor, leadId))) {
-    return { ok: false, message: "You are not allowed to use this lead record." };
-  }
   if (companyId && !(await hasCustomerAccess(prisma, actor, companyId))) {
     return { ok: false, message: "You are not allowed to use this customer record." };
   }
@@ -1666,10 +1815,7 @@ export async function createFollowUpAction(formData: FormData) {
     });
     if (linkedTask?.assignedToId) requestedAssignedToId = linkedTask.assignedToId;
   }
-  const assignedToId = await resolveOptionalMarketerAssignee(prisma, { id: user.id, role: user.role as Role }, requestedAssignedToId);
-
-  const rating = formData.has("rating") ? clampEngagementRating(formData.get("rating")) : undefined;
-  const followUpDate = validDate(dateValue(formData, "followUpDate"));
+  const followUpDate = dateTimeWithClientOffset(formData, "followUpDate", "followUpDateTzOffset");
   if (!followUpDate) {
     return { ok: false, message: "A valid follow-up date is required." };
   }
@@ -1678,20 +1824,10 @@ export async function createFollowUpAction(formData: FormData) {
   const note = text(formData, "note") ?? "";
   const nextDiscussionPlan = text(formData, "nextDiscussionPlan") ?? "";
 
-  const [assignedUser, lead, company, linkedTask] = await Promise.all([
-    assignedToId ? prisma.user.findFirst({ where: { id: assignedToId, status: "ACTIVE" }, select: { id: true } }) : Promise.resolve(null),
-    leadId ? prisma.lead.findUnique({ where: { id: leadId }, select: { id: true } }) : Promise.resolve(null),
-    companyId ? prisma.customerCompany.findUnique({ where: { id: companyId }, select: { id: true } }) : Promise.resolve(null),
+  const [company, linkedTask] = await Promise.all([
+    companyId ? prisma.customerCompany.findUnique({ where: { id: companyId }, select: { id: true, name: true } }) : Promise.resolve(null),
     linkedTaskId ? prisma.task.findUnique({ where: { id: linkedTaskId }, select: { id: true } }) : Promise.resolve(null),
   ]);
-
-  if (assignedToId && !assignedUser) {
-    return { ok: false, message: "Assigned user was not found." };
-  }
-
-  if (leadId && !lead) {
-    return { ok: false, message: "Selected lead was not found." };
-  }
 
   if (companyId && !company) {
     return { ok: false, message: "Selected company was not found." };
@@ -1701,52 +1837,26 @@ export async function createFollowUpAction(formData: FormData) {
     return { ok: false, message: "Linked task was not found." };
   }
 
-  const followUpData: Prisma.Prisma.FollowUpCreateInput = {
-    method,
-    note,
-    nextDiscussionPlan,
-    followUpDate,
-    status: followUpDate < new Date() ? "OVERDUE" : "UPCOMING",
-    ...(typeof rating === "number" ? { rating } : {}),
-    ...(assignedUser ? { assignedTo: { connect: { id: assignedUser.id } } } : {}),
-    ...(lead ? { lead: { connect: { id: lead.id } } } : {}),
-    ...(company ? { company: { connect: { id: company.id } } } : {}),
-    ...(linkedTask ? { task: { connect: { id: linkedTask.id } } } : {}),
-  };
+  const created = await createTaskEntry(
+    {
+      id: user.id,
+      role: user.role as Role,
+      name: user.name ?? undefined,
+    },
+    {
+      title: "Follow-up",
+      companyId: company?.id ?? companyId ?? undefined,
+      companyName: company?.name ?? undefined,
+      description: note || nextDiscussionPlan || `${method} follow-up`,
+      notes: nextDiscussionPlan || undefined,
+      priority: "HIGH",
+      taskDateTime: followUpDate,
+      assignedToId: requestedAssignedToId ?? undefined,
+    },
+  );
 
-  const followUp = await prisma.followUp.create({
-    data: followUpData,
-  });
-
-  await addTimeline({
-    title: "Follow-up Scheduled",
-    description: followUp.note ?? followUp.method,
-    entity: "FollowUp",
-    entityId: followUp.id,
-    userId: user.id,
-    companyId: followUp.companyId ?? undefined,
-    leadId: followUp.leadId ?? undefined,
-    followUpId: followUp.id,
-  });
-  if (assignedToId) {
-    await prisma.notification.create({
-      data: {
-        recipientId: assignedToId,
-        title: "Follow-up Reminder",
-        message: followUp.note ?? "A follow-up has been scheduled.",
-        type: "FOLLOW_UP_REMINDER",
-        entity: "FollowUp",
-        entityId: followUp.id,
-        followUpId: followUp.id,
-      },
-    });
-  }
-
-  if (linkedTaskId && followUp.leadId && typeof rating === "number" && rating > 0) {
-    await prisma.lead.update({ where: { id: followUp.leadId }, data: { score: { increment: rating } } });
-  }
   revalidatePath("/");
-  return { ok: true, id: followUp.id, followUpDate: followUp.followUpDate.toISOString() };
+  return { ok: true, id: created.task.id, row: created.row, followUpDate: created.row.taskDateIso };
 }
 
 export async function updateFollowUpStatusById(user: { id: string; role: Role }, id: string, status: string) {

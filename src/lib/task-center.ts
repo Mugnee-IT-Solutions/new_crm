@@ -22,8 +22,12 @@ export type TaskListItem = {
   title: string;
   companyName: string;
   companyId?: string | null;
+  productId?: string | null;
   companyHref?: string | null;
   description: string;
+  notes: string;
+  reminder: string;
+  productName: string;
   assignedToId: string;
   assignedTo: string;
   assignedById: string;
@@ -54,11 +58,16 @@ export type TodayWorkQueueItem = {
   queueLabel: "Task" | "Follow-up" | "Overdue" | "Carry Forward";
   title: string;
   companyName: string;
+  companyPrimaryPhone: string;
   companyId?: string | null;
+  productId?: string | null;
   companyHref?: string | null;
   leadId?: string | null;
   leadName?: string | null;
   description: string;
+  notes: string;
+  reminder: string;
+  productName: string;
   method: string;
   assignedToId: string;
   assignedTo: string;
@@ -90,10 +99,14 @@ export type CompletedWorkItem = {
   title: string;
   companyName: string;
   companyId?: string | null;
+  productId?: string | null;
   companyHref?: string | null;
   leadId?: string | null;
   leadName?: string | null;
   description: string;
+  notes: string;
+  reminder: string;
+  productName: string;
   method: string;
   assignedToId: string;
   assignedTo: string;
@@ -116,6 +129,7 @@ export type CompletedWorkItem = {
 
 const taskQueryInclude = {
   company: true,
+  product: { select: { name: true } },
   assignedTo: true,
   assignedBy: true,
   completedBy: true,
@@ -126,7 +140,10 @@ type TaskQueryRecord = {
   title: string;
   companyName: string | null;
   description: string | null;
+  reminder: string | null;
+  notes: string | null;
   companyId: string | null;
+  productId: string | null;
   taskTime: Date | null;
   assignedToId: string | null;
   assignedById: string | null;
@@ -138,7 +155,8 @@ type TaskQueryRecord = {
   createdAt: Date;
   updatedAt: Date;
   isPrevious: boolean;
-  company: { name: string } | null;
+  company: { name: string; phone: string | null } | null;
+  product: { name: string } | null;
   assignedTo: { name: string; role: string | null } | null;
   assignedBy: { name: string; role: string | null } | null;
   completedBy: { name: string } | null;
@@ -158,12 +176,12 @@ type FollowUpQueryRecord = {
   createdAt: Date;
   updatedAt: Date;
   completedAt: Date | null;
-  company: { name: string } | null;
+  company: { name: string; phone: string | null } | null;
   lead: {
     id: string;
     title: string | null;
     customerName: string | null;
-    company: { id: string; name: string } | null;
+    company: { id: string; name: string; phone: string | null } | null;
   } | null;
   assignedTo: { name: string; role: string | null } | null;
 };
@@ -254,6 +272,11 @@ function companyDisplayName(task: TaskQueryRecord) {
   return task.company?.name ?? task.companyName ?? "Unknown Company";
 }
 
+function normalizeQueuePhone(phone: string | null | undefined) {
+  const trimmed = typeof phone === "string" ? phone.trim() : "";
+  return trimmed.length ? trimmed : "No phone number";
+}
+
 function roleLabel(role: string | null | undefined) {
   if (!role) return "-";
   return role
@@ -265,6 +288,40 @@ function roleLabel(role: string | null | undefined) {
 function cleanQueueText(value: string | null | undefined) {
   const normalized = value?.trim();
   return normalized && normalized.length ? normalized : "";
+}
+
+function normalizePipelineStep(value: string | null | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "call" || normalized === "phone call") return "Call";
+  if (normalized === "follow-up" || normalized === "follow up") return "Follow-up";
+  if (normalized === "demo send" || normalized === "demo") return "Demo Send";
+  if (normalized === "quotation" || normalized === "quote" || normalized === "quatation") return "Quotation";
+  if (normalized === "sale" || normalized === "sale won" || normalized === "won" || normalized === "conversion") return "Sale Won";
+  if (normalized === "lead lost" || normalized === "lost") return "Lead Lost";
+  return null;
+}
+
+function followUpDisplayTitle(input: {
+  note?: string | null;
+  nextDiscussionPlan?: string | null;
+  method: string;
+}) {
+  const note = cleanQueueText(input.note);
+  const nextPlan = cleanQueueText(input.nextDiscussionPlan);
+  const pipelineStep = normalizePipelineStep(nextPlan);
+  if (pipelineStep) return pipelineStep;
+  return note || nextPlan || `${input.method} follow-up`;
+}
+
+function followUpDisplayDescription(input: {
+  note?: string | null;
+  nextDiscussionPlan?: string | null;
+  method: string;
+}) {
+  const note = cleanQueueText(input.note);
+  const nextPlan = cleanQueueText(input.nextDiscussionPlan);
+  return note || nextPlan || input.method;
 }
 
 function inferTaskMethod(title: string | null | undefined, description: string | null | undefined) {
@@ -286,8 +343,12 @@ function mapTaskRecord(task: TaskQueryRecord): TaskListItem {
     title: task.title,
     companyName: companyDisplayName(task),
     companyId: task.companyId,
+    productId: task.productId,
     companyHref: task.companyId ? `/customers/${task.companyId}` : null,
     description: task.description ?? "-",
+    notes: task.notes ?? "-",
+    reminder: task.reminder ?? "-",
+    productName: task.product?.name ?? "-",
     assignedToId: task.assignedToId ?? "",
     assignedTo: task.assignedTo?.name ?? "-",
     assignedById: task.assignedById ?? "",
@@ -534,18 +595,18 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
         AND: [
           await scopedFollowUpWhere(prisma, actor),
           { status: { not: "COMPLETED" } },
-          { followUpDate: { lte: now } },
+          { followUpDate: { lt: tomorrow } },
           ...(priorityFilter ? [{ priority: priorityFilter }] : []),
         ],
       },
       include: {
-        company: { select: { id: true, name: true } },
+        company: { select: { id: true, name: true, phone: true } },
         lead: {
           select: {
             id: true,
             title: true,
             customerName: true,
-            company: { select: { id: true, name: true } },
+            company: { select: { id: true, name: true, phone: true } },
           },
         },
         assignedTo: { select: { name: true, role: true } },
@@ -572,11 +633,16 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
         queueLabel: isCarryForward ? "Carry Forward" : "Task",
         title: mapped.title,
         companyName: mapped.companyName,
+        companyPrimaryPhone: normalizeQueuePhone(task.company?.phone),
         companyId: mapped.companyId,
+        productId: mapped.productId,
         companyHref: mapped.companyHref,
         leadId: null,
         leadName: null,
         description: mapped.description,
+        notes: mapped.notes,
+        reminder: mapped.reminder,
+        productName: mapped.productName,
         method: inferTaskMethod(task.title, task.description),
         assignedToId: mapped.assignedToId,
         assignedTo: mapped.assignedTo,
@@ -607,9 +673,20 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
     const company = followUp.company ?? followUp.lead?.company ?? null;
     const companyName = company?.name ?? followUp.lead?.customerName ?? "Unknown Company";
     const companyId = company?.id ?? followUp.companyId ?? followUp.lead?.company?.id ?? null;
+    const companyPrimaryPhone = normalizeQueuePhone(company?.phone);
     const note = cleanQueueText(followUp.note);
     const nextPlan = cleanQueueText(followUp.nextDiscussionPlan);
     const leadName = cleanQueueText(followUp.lead?.title);
+    const title = followUpDisplayTitle({
+      note: followUp.note,
+      nextDiscussionPlan: followUp.nextDiscussionPlan,
+      method: followUp.method,
+    });
+    const description = followUpDisplayDescription({
+      note: followUp.note,
+      nextDiscussionPlan: followUp.nextDiscussionPlan,
+      method: followUp.method,
+    });
 
     return {
       id: `follow-up-${followUp.id}`,
@@ -617,13 +694,17 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
       sourceType: "FOLLOW_UP",
       queueType: isOverdue ? "OVERDUE" : "DUE_FOLLOW_UP",
       queueLabel: isOverdue ? "Overdue" : "Follow-up",
-      title: note || nextPlan || `${followUp.method} follow-up`,
+      title,
       companyName,
+      companyPrimaryPhone,
       companyId,
       companyHref: companyId ? `/customers/${companyId}` : followUp.leadId ? `/leads/${followUp.leadId}` : null,
       leadId: followUp.leadId,
       leadName: leadName || null,
-      description: note || nextPlan || followUp.method,
+      description,
+      notes: nextPlan || "-",
+      reminder: "-",
+      productName: "-",
       method: cleanQueueText(followUp.method) || "Follow-up",
       assignedToId: followUp.assignedToId ?? "",
       assignedTo: followUp.assignedTo?.name ?? "-",
@@ -767,10 +848,14 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
       title: mapped.title,
       companyName: mapped.companyName,
       companyId: mapped.companyId,
+      productId: mapped.productId,
       companyHref: mapped.companyHref,
       leadId: null,
       leadName: null,
       description: mapped.description,
+      notes: mapped.notes,
+      reminder: mapped.reminder,
+      productName: mapped.productName,
       method: inferTaskMethod(task.title, task.description),
       assignedToId: mapped.assignedToId,
       assignedTo: mapped.assignedTo,
@@ -797,8 +882,16 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
     const companyName = company?.name ?? followUp.lead?.customerName ?? "Unknown Company";
     const companyId = company?.id ?? followUp.companyId ?? followUp.lead?.company?.id ?? null;
     const leadName = cleanQueueText(followUp.lead?.title) || cleanQueueText(followUp.lead?.customerName) || null;
-    const title = cleanQueueText(followUp.note) || cleanQueueText(followUp.nextDiscussionPlan) || `${followUp.method} follow-up`;
-    const description = cleanQueueText(followUp.nextDiscussionPlan) || cleanQueueText(followUp.note) || followUp.method;
+    const title = followUpDisplayTitle({
+      note: followUp.note,
+      nextDiscussionPlan: followUp.nextDiscussionPlan,
+      method: followUp.method,
+    });
+    const description = followUpDisplayDescription({
+      note: followUp.note,
+      nextDiscussionPlan: followUp.nextDiscussionPlan,
+      method: followUp.method,
+    });
     const completedAt = followUp.completedAt ?? followUp.updatedAt;
     const completedBy = followUp.timelineItems[0]?.user?.name ?? followUp.assignedTo?.name ?? "-";
 
@@ -810,10 +903,14 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
       title,
       companyName,
       companyId,
+      productId: null,
       companyHref: companyId ? `/customers/${companyId}` : followUp.leadId ? `/leads/${followUp.leadId}` : null,
       leadId: followUp.leadId,
       leadName,
       description,
+      notes: cleanQueueText(followUp.note) || "-",
+      reminder: "-",
+      productName: "-",
       method: cleanQueueText(followUp.method) || "Follow-up",
       assignedToId: followUp.assignedToId ?? "",
       assignedTo: followUp.assignedTo?.name ?? "-",
@@ -856,9 +953,11 @@ export async function createTaskEntry(actor: TaskActor, input: {
   companyId?: string;
   companyName?: string;
   description?: string;
+  notes?: string;
   priority: TaskPriorityFilter;
   taskDateTime: Date;
   assignedToId?: string;
+  productId?: string;
 }) {
   const prisma = getPrisma();
   const today = startOfToday();
@@ -869,6 +968,7 @@ export async function createTaskEntry(actor: TaskActor, input: {
 
   let companyId = input.companyId?.trim();
   let companyName = input.companyName?.trim();
+  const productId = input.productId?.trim();
 
   if (companyId) {
     if (!(await hasCustomerAccess(prisma, { id: actor.id, role: actor.role }, companyId))) {
@@ -908,10 +1008,21 @@ export async function createTaskEntry(actor: TaskActor, input: {
     throw new TaskInputError("Company is required.");
   }
 
+  if (productId) {
+    const product = await prisma.productService.findUnique({
+      where: { id: productId },
+      select: { id: true },
+    });
+    if (!product) {
+      throw new TaskInputError("Selected product was not found.");
+    }
+  }
+
   const task = await prisma.task.create({
     data: {
       title: normalizedTitle,
       description: input.description ? normalizeText(input.description) : undefined,
+      notes: input.notes ? normalizeText(input.notes) : undefined,
       companyName: normalizeText(companyName),
       priority: toPrismaPriority(input.priority) ?? "MEDIUM",
       status: "PENDING",
@@ -922,6 +1033,7 @@ export async function createTaskEntry(actor: TaskActor, input: {
       assignedBy: { connect: { id: actor.id } },
       assignedTo: { connect: { id: assignedToId } },
       ...(companyId ? { company: { connect: { id: companyId } } } : {}),
+      ...(productId ? { product: { connect: { id: productId } } } : {}),
     },
     include: taskQueryInclude,
   });
@@ -948,6 +1060,157 @@ export async function createTaskEntry(actor: TaskActor, input: {
   }
 
   return mapTaskRecord(task);
+}
+
+export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
+  title: string;
+  companyId?: string;
+  companyName?: string;
+  description?: string;
+  notes?: string;
+  priority: TaskPriorityFilter;
+  taskDateTime: Date;
+  assignedToId?: string;
+  productId?: string;
+}) {
+  const prisma = getPrisma();
+  await syncPreviousTaskFlags();
+
+  const existing = await prisma.task.findFirst({
+    where: {
+      AND: [
+        await scopedTaskWhere(prisma, actor),
+        { id: taskId },
+      ],
+    },
+    include: taskQueryInclude,
+  });
+
+  if (!existing) {
+    throw new TaskInputError("Task not found or you do not have access.", 404);
+  }
+
+  if (existing.status === "COMPLETED") {
+    throw new TaskInputError("Completed task cannot be edited.", 400);
+  }
+
+  const taskDateTime = new Date(input.taskDateTime);
+  const taskDate = startOfDay(taskDateTime);
+  const assignedToId = await resolveAssignedTaskUser(prisma, actor, input.assignedToId || existing.assignedToId || undefined);
+  let companyId = input.companyId?.trim();
+  let companyName = input.companyName?.trim();
+  const productId = input.productId?.trim();
+
+  if (companyId) {
+    if (!(await hasCustomerAccess(prisma, { id: actor.id, role: actor.role }, companyId))) {
+      throw new TaskInputError("You are not allowed to use this customer record.", 403);
+    }
+    const company = await prisma.customerCompany.findUnique({
+      where: { id: companyId },
+      select: { id: true, name: true },
+    });
+    if (!company) {
+      throw new TaskInputError("Selected company was not found.");
+    }
+    companyId = company.id;
+    companyName = company.name;
+  } else if (companyName) {
+    const matchedCompany = await prisma.customerCompany.findFirst({
+      where: {
+        AND: [
+          await buildCustomerScopeWhere(prisma, { id: actor.id, role: actor.role }),
+          { name: { equals: normalizeText(companyName), mode: "insensitive" } },
+        ],
+      },
+      select: { id: true, name: true },
+    });
+    if (matchedCompany) {
+      companyId = matchedCompany.id;
+      companyName = matchedCompany.name;
+    }
+  } else if (existing.companyId && existing.companyName) {
+    companyId = existing.companyId;
+    companyName = existing.companyName;
+  }
+
+  if (!companyName) {
+    throw new TaskInputError("Company is required.");
+  }
+
+  if (productId) {
+    const product = await prisma.productService.findUnique({
+      where: { id: productId },
+      select: { id: true },
+    });
+    if (!product) {
+      throw new TaskInputError("Selected product was not found.");
+    }
+  }
+
+  const updated = await prisma.task.update({
+    where: { id: taskId },
+    data: {
+      title: normalizeText(input.title),
+      description: input.description ? normalizeText(input.description) : undefined,
+      notes: input.notes ? normalizeText(input.notes) : null,
+      companyName: normalizeText(companyName),
+      priority: toPrismaPriority(input.priority) ?? "MEDIUM",
+      taskDate,
+      taskTime: taskDateTime,
+      dueDate: taskDateTime,
+      isPrevious: taskDate < startOfToday(),
+      assignedTo: { connect: { id: assignedToId } },
+      ...(companyId ? { company: { connect: { id: companyId } } } : { company: { disconnect: true } }),
+      ...(productId ? { product: { connect: { id: productId } } } : { product: { disconnect: true } }),
+    },
+    include: taskQueryInclude,
+  });
+
+  await addTaskActivity(prisma, {
+    userId: actor.id,
+    taskId: updated.id,
+    companyId: updated.companyId,
+    title: "Task Updated",
+    description: `${updated.title} updated`,
+  });
+
+  return mapTaskRecord(updated);
+}
+
+export async function deleteTaskEntry(actor: TaskActor, taskId: string) {
+  const prisma = getPrisma();
+  await syncPreviousTaskFlags();
+
+  const existing = await prisma.task.findFirst({
+    where: {
+      AND: [
+        await scopedTaskWhere(prisma, actor),
+        { id: taskId },
+      ],
+    },
+    select: {
+      id: true,
+      title: true,
+      companyId: true,
+    },
+  });
+
+  if (!existing) {
+    throw new TaskInputError("Task not found or you do not have access.", 404);
+  }
+
+  await prisma.task.delete({ where: { id: taskId } });
+
+  await prisma.activityLog.create({
+    data: {
+      userId: actor.id,
+      action: "Task Deleted",
+      entity: "Task",
+      entityId: existing.id,
+    },
+  });
+
+  return existing;
 }
 
 export async function completeTaskEntry(actor: TaskActor, taskId: string) {

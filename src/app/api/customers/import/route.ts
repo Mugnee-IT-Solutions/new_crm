@@ -17,14 +17,14 @@ export async function POST(request: Request) {
     const assignedToId = typeof formData.get("assignedToId") === "string" ? String(formData.get("assignedToId") ?? "").trim() : undefined;
 
     if (!(file instanceof File)) {
-      return NextResponse.json({ success: false, message: "Excel or CSV file is required." }, { status: 400 });
+      return NextResponse.json({ success: false, message: "Excel, CSV, or PDF file is required." }, { status: 400 });
     }
 
     const fileName = file.name || "customers-import.xlsx";
     const lowerName = fileName.toLowerCase();
-    const isSupportedFile = lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".csv");
+    const isSupportedFile = lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".csv") || lowerName.endsWith(".pdf");
     if (!isSupportedFile) {
-      return NextResponse.json({ success: false, message: "Only .xlsx, .xls, and .csv files are supported." }, { status: 400 });
+      return NextResponse.json({ success: false, message: "Only .xlsx, .xls, .csv, and .pdf files are supported." }, { status: 400 });
     }
 
     if (file.size > CUSTOMER_IMPORT_MAX_BYTES) {

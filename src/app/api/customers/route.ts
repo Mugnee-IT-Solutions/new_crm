@@ -227,6 +227,7 @@ export async function GET(request: Request) {
     );
     const assignableOwners = await getCustomerAssignableOwners(prisma, { id: auth.user.id, role: auth.user.role });
 
+    const totalCount = await prisma.customerCompany.count({ where });
     const rows = await prisma.customerCompany.findMany({
       where,
       include: {
@@ -249,7 +250,7 @@ export async function GET(request: Request) {
         },
       },
       orderBy: { name: "asc" },
-      take: 500,
+      take: 5000,
     }) as Array<{
       id: string;
       name: string;
@@ -273,7 +274,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       success: true,
       summary: {
-        count: rows.length,
+        count: totalCount,
         selectedOwnerId: assignedToId || "all",
       },
       ownerOptions: assignableOwners.map((owner) => ({

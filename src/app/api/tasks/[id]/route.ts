@@ -1,16 +1,17 @@
 import { NextResponse } from "next/server";
 import {
-  createTaskEntry,
+  deleteTaskEntry,
   parseTaskDateTimeInput,
   TaskInputError,
   type TaskPriorityFilter,
+  updateTaskEntry,
 } from "@/lib/task-center";
 import { requireRequestUser } from "@/lib/request-user";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type CreateTaskBody = {
+type UpdateTaskBody = {
   title?: string;
   companyId?: string;
   companyName?: string;
@@ -30,14 +31,15 @@ function parsePriority(value: unknown): TaskPriorityFilter {
   return "MEDIUM";
 }
 
-export async function POST(request: Request) {
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireRequestUser(["ADMIN", "SUPERVISOR", "MARKETER"]);
     if (!auth.ok) {
       return NextResponse.json({ success: false, message: auth.message }, { status: auth.status });
     }
 
-    const body = (await request.json()) as CreateTaskBody;
+    const { id } = await context.params;
+    const body = (await request.json()) as UpdateTaskBody;
     const title = body.title?.trim();
     const companyId = body.companyId?.trim();
     const companyName = body.companyName?.trim();
@@ -61,12 +63,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, message: "Task date and time are required." }, { status: 400 });
     }
 
-    const row = await createTaskEntry(
-      {
-        id: auth.user.id,
-        role: auth.user.role,
-        name: auth.user.name,
-      },
+    const row = await updateTaskEntry(
+      { id: auth.user.id, role: auth.user.role, name: auth.user.name },
+      id,
       {
         title,
         companyId,
@@ -84,10 +83,30 @@ export async function POST(request: Request) {
   } catch (error) {
     const status = error instanceof TaskInputError ? error.status : 500;
     return NextResponse.json(
-      {
-        success: false,
-        message: error instanceof Error ? error.message : "Task creation failed.",
-      },
+      { success: false, message: error instanceof Error ? error.message : "Task update failed." },
+      { status },
+    );
+  }
+}
+
+export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    const auth = await requireRequestUser(["ADMIN", "SUPERVISOR", "MARKETER"]);
+    if (!auth.ok) {
+      return NextResponse.json({ success: false, message: auth.message }, { status: auth.status });
+    }
+
+    const { id } = await context.params;
+    const deleted = await deleteTaskEntry(
+      { id: auth.user.id, role: auth.user.role, name: auth.user.name },
+      id,
+    );
+
+    return NextResponse.json({ success: true, id: deleted.id });
+  } catch (error) {
+    const status = error instanceof TaskInputError ? error.status : 500;
+    return NextResponse.json(
+      { success: false, message: error instanceof Error ? error.message : "Task delete failed." },
       { status },
     );
   }

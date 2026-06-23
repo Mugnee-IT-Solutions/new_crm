@@ -89,7 +89,7 @@ export type CustomerImportResult = {
 };
 
 export type CustomerExportFormat = "xlsx" | "csv";
-type CustomerImportFormat = "EXCEL" | "CSV";
+type CustomerImportFormat = "EXCEL" | "CSV" | "PDF";
 
 type ParsedCustomerRow = {
   row: number;
@@ -488,6 +488,298 @@ function parseWorkbookRows(buffer: Buffer, fileName: string) {
   return { rows: parsed, failed };
 }
 
+function parseCsvLine(line: string) {
+  const output: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index] ?? "";
+    if (char === "\"") {
+      if (inQuotes && line[index + 1] === "\"") {
+        current += "\"";
+        index += 1;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes && char === ",") {
+      output.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+
+  output.push(current.trim());
+  return output;
+}
+
+const CUSTOMER_TEMPLATE_LABEL_ALIASES: Record<string, string[]> = {
+  "SL": ["SL", "Serial", "Serial No", "Serial Number"],
+  "Industry": ["Industry", "Business Type"],
+  "Company Name": ["Company Name", "Company", "Customer / Company", "Customer Company", "Organization Name", "Organization"],
+  "City/Zilla": ["City/Zilla", "City / Zilla", "City", "Zilla", "District", "City or Zilla"],
+  "Address": ["Address", "Full Address", "Location"],
+  "Primary Phone": ["Primary Phone", "Phone", "Phone 1", "Mobile", "Mobile Number", "Primary Mobile"],
+  "Phone 2": ["Phone 2", "Secondary Phone", "Alternate Phone"],
+  "Phone 3": ["Phone 3", "Third Phone"],
+  "Primary Email": ["Primary Email", "Email", "Email 1"],
+  "Email 2": ["Email 2", "Secondary Email"],
+  "Website": ["Website", "Web Site", "Site"],
+  "Note": ["Note", "Notes", "Remarks", "Comment"],
+  "Contact Person 1 Name": ["Contact Person 1 Name", "Contact Person", "Primary Contact", "Contact Name", "Person Name"],
+  "Contact Person 1 Designation": ["Contact Person 1 Designation", "Designation", "Primary Designation"],
+  "Contact Person 1 Department": ["Contact Person 1 Department", "Department", "Primary Department"],
+  "Contact Person 1 Phone 1": ["Contact Person 1 Phone 1", "Contact Phone 1", "Primary Contact Phone"],
+  "Contact Person 1 Phone 2": ["Contact Person 1 Phone 2", "Contact Phone 2"],
+  "Contact Person 1 Email 1": ["Contact Person 1 Email 1", "Contact Email 1", "Primary Contact Email"],
+  "Contact Person 1 Email 2": ["Contact Person 1 Email 2", "Contact Email 2"],
+  "Contact Person 2 Name": ["Contact Person 2 Name", "Secondary Contact", "Contact Person 2"],
+  "Contact Person 2 Designation": ["Contact Person 2 Designation", "Secondary Designation"],
+  "Contact Person 2 Department": ["Contact Person 2 Department", "Secondary Department"],
+  "Contact Person 2 Phone 1": ["Contact Person 2 Phone 1", "Secondary Contact Phone 1"],
+  "Contact Person 2 Phone 2": ["Contact Person 2 Phone 2", "Secondary Contact Phone 2"],
+  "Contact Person 2 Email 1": ["Contact Person 2 Email 1", "Secondary Contact Email 1"],
+  "Contact Person 2 Email 2": ["Contact Person 2 Email 2", "Secondary Contact Email 2"],
+  "Lead Source": ["Lead Source", "Source", "Lead From"],
+};
+
+function findTemplateKeyFromLabel(label: string) {
+  const normalizedLabel = normalizeHeader(label);
+  for (const [templateKey, aliases] of Object.entries(CUSTOMER_TEMPLATE_LABEL_ALIASES)) {
+    if (aliases.some((alias) => normalizeHeader(alias) === normalizedLabel)) {
+      return templateKey;
+    }
+  }
+  return undefined;
+}
+
+function finalizeParsedCustomerRows(rawRows: Record<string, unknown>[]) {
+  const rows: ParsedCustomerRow[] = [];
+  const failed: CustomerImportFailure[] = [];
+  const seenNames = new Set<string>();
+
+  rawRows.forEach((rawData, index) => {
+    const rowNumber = index + 2;
+    const templateRow = mapTemplateRow(rawData, rowNumber);
+    const fallbackPhone = normalizePhone(
+      normalizeText(rawData["Contact Person 1 Phone 1"])
+      ?? normalizeText(rawData["Contact Person 1 Phone 2"])
+      ?? normalizeText(rawData["Phone 2"])
+      ?? normalizeText(rawData["Phone 3"]),
+    );
+    if (!templateRow.primaryPhone && fallbackPhone) {
+      templateRow.primaryPhone = fallbackPhone;
+      templateRow.rawData["Primary Phone"] = fallbackPhone;
+    }
+
+    if (!templateRow.companyName) {
+      failed.push({ row: rowNumber, reason: "Company Name is required." });
+      return;
+    }
+    if (!templateRow.primaryPhone) {
+      failed.push({ row: rowNumber, reason: "Primary Phone is required." });
+      return;
+    }
+
+    const existingKey = normalizeCompanyKey(templateRow.companyName);
+    if (seenNames.has(existingKey)) {
+      failed.push({ row: rowNumber, reason: "Duplicate company name found in uploaded file." });
+      return;
+    }
+
+    seenNames.add(existingKey);
+    rows.push(templateRow);
+  });
+
+  return { rows, failed };
+}
+
+function parsePdfLabelValueRows(rawLines: string[]) {
+  const rows: Record<string, unknown>[] = [];
+  let current: Record<string, unknown> = {};
+
+  const flushCurrent = () => {
+    if (!Object.keys(current).length) return;
+    rows.push(current);
+    current = {};
+  };
+
+  for (let index = 0; index < rawLines.length; index += 1) {
+    const rawLine = rawLines[index] ?? "";
+    const line = rawLine.trim();
+
+    if (!line) {
+      flushCurrent();
+      continue;
+    }
+    if (/^page\s+\d+$/i.test(line)) continue;
+
+    let matchedKey: string | undefined;
+    let value = "";
+
+    for (const [templateKey, aliases] of Object.entries(CUSTOMER_TEMPLATE_LABEL_ALIASES)) {
+      for (const alias of aliases) {
+        const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const withValue = new RegExp(`^${escaped}\\s*(?:[:\\-]|\\|)\\s*(.+)$`, "i");
+        const directMatch = line.match(withValue);
+        if (directMatch?.[1]) {
+          matchedKey = templateKey;
+          value = directMatch[1].trim();
+          break;
+        }
+
+        if (normalizeHeader(line) === normalizeHeader(alias)) {
+          matchedKey = templateKey;
+          let nextIndex = index + 1;
+          while (nextIndex < rawLines.length) {
+            const nextLine = (rawLines[nextIndex] ?? "").trim();
+            if (!nextLine) {
+              nextIndex += 1;
+              continue;
+            }
+            value = nextLine;
+            index = nextIndex;
+            break;
+          }
+          break;
+        }
+      }
+      if (matchedKey) break;
+    }
+
+    if (!matchedKey) continue;
+
+    if (
+      current["Company Name"]
+      && matchedKey === "Company Name"
+      && normalizeText(current["Company Name"]) !== normalizeText(value)
+    ) {
+      flushCurrent();
+    }
+
+    current[matchedKey] = value;
+  }
+
+  flushCurrent();
+  return finalizeParsedCustomerRows(rows);
+}
+
+async function parsePdfRows(buffer: Buffer) {
+  const expectedHeaders = CUSTOMER_TEMPLATE_COLUMNS.map(normalizeHeader);
+
+  const pdfModule = await import("pdf-parse");
+  const pdfParse = (pdfModule as unknown as { default?: (buffer: Buffer) => Promise<{ text?: string }> }).default ?? (pdfModule as unknown as (buffer: Buffer) => Promise<{ text?: string }>);
+  const result = await pdfParse(buffer);
+  const text = String(result?.text ?? "");
+  const rawLines = text.replace(/\r/g, "").split("\n");
+  const lines = rawLines.map((line) => line.trim()).filter(Boolean);
+
+  if (!lines.length) {
+    return { rows: [] as ParsedCustomerRow[], failed: [{ row: 1, reason: "PDF has no readable text. If this is a scanned PDF, convert to Excel/CSV first." }] as CustomerImportFailure[] };
+  }
+
+  type Delimiter = "csv" | "pipe" | "tab";
+  const parseLine = (line: string, delimiter: Delimiter) => {
+    if (delimiter === "csv") return parseCsvLine(line);
+    if (delimiter === "tab") return line.split("\t").map((item) => item.trim());
+    return line.split("|").map((item) => item.trim());
+  };
+
+  const matchesHeader = (cells: string[]) => {
+    if (cells.length < CUSTOMER_IMPORT_TEMPLATE_HEADER_LEN) return false;
+    for (let index = 0; index < CUSTOMER_IMPORT_TEMPLATE_HEADER_LEN; index += 1) {
+      if (normalizeHeader(cells[index] ?? "") !== expectedHeaders[index]) return false;
+    }
+    return true;
+  };
+
+  let headerIndex = -1;
+  let delimiter: Delimiter | null = null;
+
+  const scanLimit = Math.min(lines.length, 80);
+  for (let index = 0; index < scanLimit; index += 1) {
+    const line = lines[index] ?? "";
+    const csv = parseLine(line, "csv");
+    if (matchesHeader(csv)) {
+      headerIndex = index;
+      delimiter = "csv";
+      break;
+    }
+    const pipe = parseLine(line, "pipe");
+    if (matchesHeader(pipe)) {
+      headerIndex = index;
+      delimiter = "pipe";
+      break;
+    }
+    const tab = parseLine(line, "tab");
+    if (matchesHeader(tab)) {
+      headerIndex = index;
+      delimiter = "tab";
+      break;
+    }
+  }
+
+  if (headerIndex < 0 || !delimiter) {
+    const labelValueParsed = parsePdfLabelValueRows(rawLines);
+    if (labelValueParsed.rows.length) {
+      return labelValueParsed;
+    }
+    return {
+      rows: [] as ParsedCustomerRow[],
+      failed: labelValueParsed.failed.length
+        ? labelValueParsed.failed
+        : [{
+          row: 1,
+          reason: "PDF template mismatch. Use the CRM customer template headers or a label/value PDF with readable text.",
+        }] as CustomerImportFailure[],
+    };
+  }
+
+  const rawRows: Record<string, unknown>[] = [];
+  let accumulator = "";
+
+  for (let index = headerIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (!line) continue;
+    if (/^page\s+\d+$/i.test(line)) continue;
+
+    accumulator = accumulator ? `${accumulator} ${line}` : line;
+    const cells = parseLine(accumulator, delimiter);
+    if (cells.length < CUSTOMER_IMPORT_TEMPLATE_HEADER_LEN) continue;
+
+    const rawData: Record<string, unknown> = {};
+    for (let column = 0; column < CUSTOMER_IMPORT_TEMPLATE_HEADER_LEN; column += 1) {
+      rawData[CUSTOMER_TEMPLATE_RAW_KEYS[column]] = normalizeJsonValue(cells[column]);
+    }
+    rawRows.push(rawData);
+    accumulator = "";
+  }
+
+  const finalized = finalizeParsedCustomerRows(rawRows);
+  if (!finalized.rows.length && !finalized.failed.length) {
+    const labelValueParsed = parsePdfLabelValueRows(rawLines);
+    if (labelValueParsed.rows.length || labelValueParsed.failed.length) {
+      return labelValueParsed;
+    }
+    return { rows: [] as ParsedCustomerRow[], failed: [{ row: 2, reason: "No data rows found in PDF." }] as CustomerImportFailure[] };
+  }
+
+  return finalized;
+}
+
+async function parseImportRows(buffer: Buffer, fileName: string) {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith(".pdf")) {
+    const parsed = await parsePdfRows(buffer);
+    return { ...parsed, format: "PDF" as const };
+  }
+  const parsed = parseWorkbookRows(buffer, fileName);
+  return { ...parsed, format: lower.endsWith(".csv") ? ("CSV" as const) : ("EXCEL" as const) };
+}
+
 function readTemplateField(rawData: Record<string, unknown>, candidates: string[], fallback: string | undefined) {
   for (const key of candidates) {
     const value = normalizeText(rawData[key]);
@@ -558,14 +850,15 @@ function readRawValue(raw: Record<string, unknown>, keys: string[]) {
 
 export async function importCustomersFromFile(buffer: Buffer, fileName: string, actor: CustomerTransferActor): Promise<CustomerImportResult> {
   const prisma = getPrisma();
-  const format = fileName.toLowerCase().endsWith(".csv") ? "CSV" : "EXCEL";
+  const fileLower = fileName.toLowerCase();
+  const format: CustomerImportFormat = fileLower.endsWith(".csv") ? "CSV" : fileLower.endsWith(".pdf") ? "PDF" : "EXCEL";
   const ownerId = await resolveCustomerOwnerId(
     prisma,
     { id: actor.id, role: actor.role },
     actor.assignedToId,
     { requireSelectionForElevated: true },
   );
-  const parsed = parseWorkbookRows(buffer, fileName);
+  const parsed = await parseImportRows(buffer, fileName);
   const rows = parsed.rows;
   const failed = [...parsed.failed];
 
@@ -574,7 +867,7 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
       data: {
         type: "IMPORT",
         module: "CUSTOMERS",
-        format: format === "CSV" ? "CSV" : "EXCEL",
+        format: format === "PDF" ? "PDF" : format === "CSV" ? "CSV" : "EXCEL",
         requestedById: actor.id,
         fileName,
         status: "FAILED",
@@ -707,7 +1000,7 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
     data: {
       type: "IMPORT",
       module: "CUSTOMERS",
-      format: format === "CSV" ? "CSV" : "EXCEL",
+      format: format === "PDF" ? "PDF" : format === "CSV" ? "CSV" : "EXCEL",
       requestedById: actor.id,
       fileName,
       status: failed.length ? "FAILED" : "COMPLETED",

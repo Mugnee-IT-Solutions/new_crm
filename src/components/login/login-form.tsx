@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useSearchParams } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import gsap from "gsap";
 import { ArrowLeft, Eye, EyeOff, KeyRound, MailCheck, ShieldCheck, Sparkles, Target, Timer, TrendingUp } from "lucide-react";
@@ -35,6 +36,7 @@ function normalizeLogin(value: string) {
 }
 
 export function LoginForm() {
+  const searchParams = useSearchParams();
   const brandRef = React.useRef<HTMLDivElement>(null);
   const inputsRef = React.useRef<Array<HTMLInputElement | null>>([]);
   const [otp, setOtp] = React.useState(["", "", "", "", "", ""]);
@@ -60,7 +62,22 @@ export function LoginForm() {
   });
 
   const loginValue = form.watch("login");
-  const isAdminLogin = normalizeLogin(loginValue) === "admin@crm.com";
+  const requestedAs = (searchParams.get("as") ?? "").trim().toLowerCase();
+  const prefersAdminLogin = requestedAs === "admin";
+  const adminEmailHint = React.useMemo(() => (process.env.NEXT_PUBLIC_CRM_ADMIN_EMAIL ?? "admin@crm.com").trim(), []);
+  const normalizedAdminEmail = React.useMemo(() => (process.env.NEXT_PUBLIC_CRM_ADMIN_EMAIL ?? "admin@crm.com").trim().toLowerCase(), []);
+  const normalizedAdminMobile = React.useMemo(() => normalizeLogin(process.env.NEXT_PUBLIC_CRM_ADMIN_MOBILE ?? ""), []);
+  const isAdminLogin = React.useMemo(() => {
+    const normalizedLogin = normalizeLogin(loginValue);
+
+    if (!normalizedLogin) return false;
+
+    if (loginValue?.trim()?.includes("@")) {
+      return normalizedLogin === normalizedAdminEmail;
+    }
+
+    return Boolean(normalizedAdminMobile) && normalizedLogin === normalizedAdminMobile;
+  }, [loginValue, normalizedAdminEmail, normalizedAdminMobile]);
 
   React.useEffect(() => {
     if (!brandRef.current) return;
@@ -335,6 +352,7 @@ export function LoginForm() {
                 <input
                   id="login"
                   className="h-11 flex-1 px-3 text-sm outline-none"
+                  placeholder={prefersAdminLogin || isAdminLogin ? adminEmailHint : "Enter your email"}
                   autoComplete="username"
                   {...form.register("login")}
                 />

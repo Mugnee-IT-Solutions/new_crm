@@ -6,6 +6,20 @@ import { getPrisma } from "@/lib/prisma";
 import { getTodayWorkQueue } from "@/lib/task-center";
 import { type Role, type ShellUser } from "@/lib/utils";
 
+type TeamPerformancePeriod = "today" | "week" | "month" | "year" | "custom";
+
+type TeamPerformanceWindow = {
+  period: TeamPerformancePeriod;
+  from: Date;
+  to: Date;
+};
+
+type TeamPerformanceOptions = {
+  period?: TeamPerformancePeriod;
+  from?: string;
+  to?: string;
+};
+
 export type CrmStat = {
   title: string;
   value: string;
@@ -336,6 +350,7 @@ export type EmployeeRow = {
   leads: number;
   calls: number;
   whatsapp: number;
+  emails: number;
   meetings: number;
   followUps: number;
   pendingTasks: number;
@@ -375,6 +390,12 @@ export type CrmWorkspace = {
   user: ShellUser;
   unreadCount: number;
   stats: CrmStat[];
+  teamPerformance?: {
+    rows: EmployeeRow[];
+    period: TeamPerformancePeriod;
+    from: string;
+    to: string;
+  };
   leads: LeadRow[];
   companies: CompanyRow[];
   tasks: TaskRow[];
@@ -396,6 +417,11 @@ export type CrmWorkspace = {
     topEngaged: ProductIntelligenceItem[];
     highestConversion: ProductIntelligenceItem[];
     mostDiscussed: ProductIntelligenceItem[];
+  };
+  productCompanyContactSummary: {
+    totalTargetCompanies: number;
+    contactedCompanies: number;
+    remainingCompanies: number;
   };
   systemSummary: { label: string; value: string }[];
   communicationCenterSummary: {
@@ -457,6 +483,47 @@ function labelize(value: string | null | undefined) {
 
 function dateLabel(date: Date | null | undefined, pattern = "dd/MM/yyyy") {
   return date ? format(date, pattern) : "-";
+}
+
+function getTeamPerformanceWindow(now: Date, options?: TeamPerformanceOptions): TeamPerformanceWindow {
+  const period = options?.period ?? "month";
+  const todayStart = startOfDay(now);
+  const utcSafe = (value?: string) => {
+    if (!value) return undefined;
+    const parsed = new Date(`${value}T00:00:00`);
+    return Number.isNaN(parsed.getTime()) ? undefined : startOfDay(parsed);
+  };
+  let from = todayStart;
+  let to = addDays(todayStart, 1);
+
+  if (period === "today") {
+    from = startOfDay(now);
+    to = addDays(from, 1);
+  } else if (period === "week") {
+    from = startOfWeek(now, { weekStartsOn: 1 });
+    to = addDays(endOfWeek(now, { weekStartsOn: 1 }), 1);
+  } else if (period === "month") {
+    from = startOfMonth(now);
+    to = addDays(endOfMonth(from), 1);
+  } else if (period === "year") {
+    from = new Date(now.getFullYear(), 0, 1);
+    to = new Date(now.getFullYear() + 1, 0, 1);
+  } else if (period === "custom") {
+    const customFrom = utcSafe(options?.from);
+    const customTo = utcSafe(options?.to);
+
+    const candidateFrom = customFrom ?? todayStart;
+    const candidateTo = customTo ?? candidateFrom;
+    if (isBefore(candidateTo, candidateFrom)) {
+      from = candidateTo;
+      to = addDays(candidateFrom, 1);
+    } else {
+      from = candidateFrom;
+      to = addDays(candidateTo, 1);
+    }
+  }
+
+  return { period, from, to };
 }
 
 function money(value: number) {
@@ -976,6 +1043,43 @@ function mapCommunicationHistoryRow(log: CommunicationHistoryRecord): Communicat
     notes: toEmail,
     createdBy: log.user?.name ?? "-",
     time: dateLabel(log.communicationAt, "dd/MM/yyyy hh:mm a"),
+  };
+}
+
+function buildProductCompanyContactSummary(products: ProductRecord[], scopedUserIds?: string[]) {
+  const scope = scopedUserIds ? new Set(scopedUserIds) : undefined;
+  const targetCompanyIds = new Set<string>();
+  const contactedCompanyIds = new Set<string>();
+
+  for (const product of products) {
+    for (const lead of product.leads) {
+      if (!leadInScope(lead, scope) || !lead.companyId) continue;
+      targetCompanyIds.add(lead.companyId);
+      if (collectLeadCommunications(lead).length > 0) {
+        contactedCompanyIds.add(lead.companyId);
+      }
+    }
+
+    for (const interest of product.interests) {
+      if (!interest.companyId || !interest.company) continue;
+      const linkedLeadAllowed = interest.leadId ? product.leads.some((lead) => lead.id === interest.leadId && leadInScope(lead, scope)) : false;
+      const standaloneAllowed = !interest.leadId && (userInScope(scope, interest.userId) || userInScope(scope, interest.company.assignedToId));
+      if (!linkedLeadAllowed && !standaloneAllowed) continue;
+
+      targetCompanyIds.add(interest.companyId);
+      const standaloneCommunications = (interest.company.communications ?? []).filter((communication) => !communication.leadId);
+      if (standaloneCommunications.length > 0) {
+        contactedCompanyIds.add(interest.companyId);
+      }
+    }
+  }
+
+  const totalTargetCompanies = targetCompanyIds.size;
+  const contactedCompanies = Array.from(contactedCompanyIds).filter((id) => targetCompanyIds.has(id)).length;
+  return {
+    totalTargetCompanies,
+    contactedCompanies,
+    remainingCompanies: Math.max(0, totalTargetCompanies - contactedCompanies),
   };
 }
 
@@ -1709,13 +1813,18 @@ async function getScopedUserIds(role: Role, user: ShellUser) {
   return [user.id, ...team.map((member) => member.id)];
 }
 
-export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmWorkspace> {
+export async function getCrmWorkspace(role: Role, user: ShellUser, options?: TeamPerformanceOptions): Promise<CrmWorkspace> {
   const prisma = getPrisma();
   await ensureCrmFoundation();
   const scopedUserIds = await getScopedUserIds(role, user);
   const scopedLeadUserIds = await getScopedLeadUserIds(prisma, { id: user.id ?? "", role });
   const today = startOfDay(new Date());
   const tomorrow = addDays(today, 1);
+  const teamPerformanceWindow = role === "SUPERVISOR"
+    ? getTeamPerformanceWindow(new Date(), options)
+    : role === "ADMIN"
+      ? getTeamPerformanceWindow(new Date(), { period: "month" })
+      : undefined;
 
   const leadWhere = scopedLeadUserIds
     ? {
@@ -2056,6 +2165,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
   }));
 
   const productMetrics = products.map((product) => ({ product, engagement: buildProductEngagement(product, scopedUserIds) }));
+  const productCompanyContactSummary = buildProductCompanyContactSummary(products, scopedUserIds);
   const productRows: ProductRow[] = productMetrics.map(({ product, engagement }) => ({
     id: product.id,
     name: product.name,
@@ -2126,6 +2236,9 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     const whatsapp =
       employee.communications.filter((log) => containsAnyMethod(log.method, ["whatsapp"])).length +
       employee.followUps.filter((followUp) => containsAnyMethod(followUp.method, ["whatsapp"])).length;
+    const emails =
+      employee.communications.filter((log) => containsAnyMethod(log.method, ["email", "gmail"])).length +
+      employee.followUps.filter((followUp) => containsAnyMethod(followUp.method, ["email", "gmail"])).length;
     const meetings =
       employee.communications.filter((log) => containsAnyMethod(log.method, ["meeting"])).length +
       employee.followUps.filter((followUp) => containsAnyMethod(followUp.method, ["meeting"])).length;
@@ -2146,6 +2259,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
       leads: total,
       calls,
       whatsapp,
+      emails,
       meetings,
       followUps: employee.followUps.length,
       pendingTasks,
@@ -2156,6 +2270,168 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     };
   });
 
+  let teamPerformanceRows: EmployeeRow[] | undefined;
+  if ((role === "SUPERVISOR" || role === "ADMIN") && teamPerformanceWindow) {
+    const performanceMembers =
+      role === "SUPERVISOR"
+        ? employeeRows.filter((item) => item.role === "Marketer")
+        : employeeRows.filter((item) => item.statusKey === "ACTIVE");
+    const memberIds = performanceMembers.map((employee) => employee.id);
+    const followUpOverdueTo = isBefore(teamPerformanceWindow.to, today) ? teamPerformanceWindow.to : today;
+    const performanceRangeFrom = teamPerformanceWindow.from;
+    const performanceRangeTo = teamPerformanceWindow.to;
+
+    if (memberIds.length > 0) {
+      const [
+        leadStats,
+        wonLeadStats,
+        communicationMethodStats,
+        followUpStats,
+        followUpMethodStats,
+        overdueFollowUpStats,
+        taskStats,
+      ] = await Promise.all([
+        prisma.lead.groupBy({
+          by: ["assignedToId"],
+          where: {
+            assignedToId: { in: memberIds },
+            createdAt: { gte: performanceRangeFrom, lt: performanceRangeTo },
+          },
+          _count: { _all: true },
+        }),
+        prisma.lead.groupBy({
+          by: ["assignedToId"],
+          where: {
+            assignedToId: { in: memberIds },
+            status: "WON_SALE",
+            updatedAt: { gte: performanceRangeFrom, lt: performanceRangeTo },
+          },
+          _count: { _all: true },
+        }),
+        prisma.communicationLog.groupBy({
+          by: ["userId", "method"],
+          where: {
+            userId: { in: memberIds },
+            communicationAt: { gte: performanceRangeFrom, lt: performanceRangeTo },
+          },
+          _count: { _all: true },
+        }),
+        prisma.followUp.groupBy({
+          by: ["assignedToId"],
+          where: {
+            assignedToId: { in: memberIds },
+            followUpDate: { gte: performanceRangeFrom, lt: performanceRangeTo },
+          },
+          _count: { _all: true },
+        }),
+        prisma.followUp.groupBy({
+          by: ["assignedToId", "method"],
+          where: {
+            assignedToId: { in: memberIds },
+            followUpDate: { gte: performanceRangeFrom, lt: performanceRangeTo },
+          },
+          _count: { _all: true },
+        }),
+        followUpOverdueTo > performanceRangeFrom
+          ? prisma.followUp.groupBy({
+            by: ["assignedToId"],
+            where: {
+              assignedToId: { in: memberIds },
+              status: { not: "COMPLETED" },
+              followUpDate: { gte: performanceRangeFrom, lt: followUpOverdueTo },
+            },
+            _count: { _all: true },
+          })
+          : Promise.resolve([] as Array<Prisma.Prisma.FollowUpGroupByOutputType>),
+        prisma.task.groupBy({
+          by: ["assignedToId"],
+          where: {
+            assignedToId: { in: memberIds },
+            status: { not: "COMPLETED" },
+            dueDate: { gte: performanceRangeFrom, lt: performanceRangeTo },
+          },
+          _count: { _all: true },
+        }),
+      ]);
+
+      const leadCounts = new Map<string, number>();
+      for (const row of leadStats) {
+        if (row.assignedToId) {
+          leadCounts.set(row.assignedToId, row._count._all);
+        }
+      }
+      const wonLeadCounts = new Map<string, number>();
+      for (const row of wonLeadStats) {
+        if (row.assignedToId) {
+          wonLeadCounts.set(row.assignedToId, row._count._all);
+        }
+      }
+      const taskCounts = new Map<string, number>();
+      for (const row of taskStats) {
+        if (row.assignedToId) {
+          taskCounts.set(row.assignedToId, row._count._all);
+        }
+      }
+      const followUpCounts = new Map<string, number>();
+      for (const row of followUpStats) {
+        if (row.assignedToId) {
+          followUpCounts.set(row.assignedToId, row._count._all);
+        }
+      }
+      const overdueFollowUpCounts = new Map<string, number>();
+      for (const row of overdueFollowUpStats) {
+        if (row.assignedToId) {
+          overdueFollowUpCounts.set(row.assignedToId, row._count?._all ?? 0);
+        }
+      }
+      const communicationChannels = new Map<
+        string,
+        { calls: number; whatsapp: number; emails: number; meetings: number }
+      >();
+      for (const row of communicationMethodStats) {
+        if (!row.userId) continue;
+        const current = communicationChannels.get(row.userId) ?? { calls: 0, whatsapp: 0, emails: 0, meetings: 0 };
+        if (containsAnyMethod(row.method, ["phone", "call"])) current.calls += row._count._all;
+        if (containsAnyMethod(row.method, ["whatsapp"])) current.whatsapp += row._count._all;
+        if (containsAnyMethod(row.method, ["email", "gmail"])) current.emails += row._count._all;
+        if (containsAnyMethod(row.method, ["meeting"])) current.meetings += row._count._all;
+        communicationChannels.set(row.userId, current);
+      }
+      const followUpChannels = new Map<string, { calls: number; whatsapp: number; emails: number; meetings: number }>();
+      for (const row of followUpMethodStats) {
+        if (!row.assignedToId) continue;
+        const current = followUpChannels.get(row.assignedToId) ?? { calls: 0, whatsapp: 0, emails: 0, meetings: 0 };
+        if (containsAnyMethod(row.method, ["phone", "call"])) current.calls += row._count._all;
+        if (containsAnyMethod(row.method, ["whatsapp"])) current.whatsapp += row._count._all;
+        if (containsAnyMethod(row.method, ["email", "gmail"])) current.emails += row._count._all;
+        if (containsAnyMethod(row.method, ["meeting"])) current.meetings += row._count._all;
+        followUpChannels.set(row.assignedToId, current);
+      }
+
+      teamPerformanceRows = performanceMembers.map((row) => {
+        const leadCount = leadCounts.get(row.id) ?? 0;
+        const wonCount = wonLeadCounts.get(row.id) ?? 0;
+        const channels = communicationChannels.get(row.id) ?? { calls: 0, whatsapp: 0, emails: 0, meetings: 0 };
+        const followUpChannelsForMember = followUpChannels.get(row.id) ?? { calls: 0, whatsapp: 0, emails: 0, meetings: 0 };
+        const followUpCount = followUpCounts.get(row.id) ?? 0;
+
+        return {
+          ...row,
+          leads: leadCount,
+          calls: channels.calls + followUpChannelsForMember.calls,
+          whatsapp: channels.whatsapp + followUpChannelsForMember.whatsapp,
+          emails: channels.emails + followUpChannelsForMember.emails,
+          meetings: channels.meetings + followUpChannelsForMember.meetings,
+          followUps: followUpCount,
+          pendingTasks: taskCounts.get(row.id) ?? 0,
+          overdueFollowUps: overdueFollowUpCounts.get(row.id) ?? 0,
+          sales: wonCount,
+          conversionRate: leadCount ? `${Math.round((wonCount / leadCount) * 100)}%` : "0%",
+        };
+      });
+    }
+  }
+
   const pipeline = Object.values(leadStatusLabels).map((label) => ({
     label,
     value: leadRows.filter((lead) => lead.status === label).length,
@@ -2163,6 +2439,23 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
   }));
 
   const followUpSummary = followUpSummaryCounts;
+
+  const teamPerformance = teamPerformanceRows
+    ? {
+        rows: teamPerformanceRows,
+        period: teamPerformanceWindow?.period ?? "month",
+        from: format(
+          (teamPerformanceWindow?.from ?? today),
+          "yyyy-MM-dd",
+        ),
+        to: format(
+          (teamPerformanceWindow?.period === "custom" && teamPerformanceWindow?.to
+            ? addDays(teamPerformanceWindow.to, -1)
+            : teamPerformanceWindow?.to ?? addDays(today, 1)),
+          "yyyy-MM-dd",
+        ),
+      }
+    : undefined;
 
   const pendingTasks = taskRows.filter((task) => task.status !== "COMPLETED").length;
   const wonSales = leadRows.filter((lead) => lead.status === "Won Sale").length;
@@ -2225,6 +2518,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     user,
     unreadCount: notificationRows.filter((item) => !item.read).length,
     stats,
+    teamPerformance,
     leads: leadRows,
     companies: companyRows,
     tasks: taskRows,
@@ -2270,6 +2564,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser): Promise<CrmW
     pipeline,
     productOpportunities: [...productRows].sort((a, b) => b.interestedCustomers - a.interestedCustomers).slice(0, 8),
     productIntelligence,
+    productCompanyContactSummary,
     systemSummary: [
       { label: "Active Users", value: String(employeeRows.filter((row) => row.status === "Active").length) },
       { label: "Open Tasks", value: String(pendingTasks) },

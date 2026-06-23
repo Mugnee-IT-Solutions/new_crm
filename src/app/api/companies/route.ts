@@ -21,13 +21,19 @@ export async function GET(request: Request) {
 
     const prisma = getPrisma();
     const { searchParams } = new URL(request.url);
-    const query = (searchParams.get("q") ?? searchParams.get("search") ?? "").trim();
+    const query = (searchParams.get("q") ?? searchParams.get("search") ?? searchParams.get("name") ?? "").trim();
+    const city = (searchParams.get("city") ?? searchParams.get("zila") ?? "").trim();
+    const industry = (searchParams.get("industry") ?? "").trim();
     const limit = parseLimit(searchParams.get("limit"));
-    
+
     const where = await buildCustomerScopeWhere(
       prisma,
       { id: auth.user.id, role: auth.user.role },
-      { search: query },
+      {
+        search: query,
+        city,
+        industry,
+      },
     );
     const rows = await prisma.customerCompany.findMany({
       where,
@@ -36,6 +42,8 @@ export async function GET(request: Request) {
         name: true,
         contactPerson: true,
         phone: true,
+        city: true,
+        industry: true,
       },
       orderBy: { name: "asc" },
       take: limit,
@@ -49,6 +57,8 @@ export async function GET(request: Request) {
         companyName: row.name,
         contactPerson: row.contactPerson,
         phone: row.phone,
+        city: row.city,
+        industry: row.industry,
       })),
     });
   } catch (error) {

@@ -52,17 +52,65 @@ function taskDueAt(task: { taskTime: Date | null; dueDate: Date | null; taskDate
   return task.taskTime ?? task.dueDate ?? task.taskDate;
 }
 
+async function sendDueFollowUpEmail(input: {
+  to: string;
+  type: NotificationType;
+  message: string;
+  followUpDate: Date;
+}) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM_EMAIL ?? process.env.EMAIL_FROM;
+  const appUrl = (process.env.AUTH_EMAIL_REDIRECT_TO ?? "https://crm.mugnee.com").replace(/\/$/, "");
+
+  if (!apiKey || !from || !input.to) return false;
+
+  const subject = input.type === "FOLLOW_UP_OVERDUE" ? "CRM overdue follow-up reminder" : "CRM follow-up due today";
+  const prettyDate = format(input.followUpDate, "dd MMM yyyy hh:mm a");
+  const intro = input.type === "FOLLOW_UP_OVERDUE"
+    ? "A follow-up is still pending and already overdue."
+    : "A follow-up is due today in your CRM queue.";
+
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to: input.to,
+        subject,
+        html: `<p>${intro}</p><p><strong>Follow-up time:</strong> ${prettyDate}</p><p><strong>Details:</strong> ${input.message}</p><p><a href="${appUrl}/login">Open Mugnee CRM</a></p>`,
+        text: `${intro}\nFollow-up time: ${prettyDate}\nDetails: ${input.message}\nOpen CRM: ${appUrl}/login`,
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn("Follow-up reminder email provider returned an error.", await response.text());
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.warn("Follow-up reminder email could not be sent.", error);
+    return false;
+  }
+}
+
 async function syncDueNotifications(user: RequestUser) {
   const prisma = getPrisma();
   const now = new Date();
   const today = startOfDay(now);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
 
   const [dueFollowUps, overdueTasks] = await Promise.all([
     prisma.followUp.findMany({
       where: {
         assignedToId: user.id,
         status: { not: "COMPLETED" },
-        followUpDate: { lte: now },
+        followUpDate: { lt: tomorrow },
       },
       select: {
         id: true,
@@ -70,6 +118,7 @@ async function syncDueNotifications(user: RequestUser) {
         method: true,
         status: true,
         followUpDate: true,
+        reminderSentAt: true,
       },
       take: 100,
     }),
@@ -168,6 +217,30 @@ async function syncDueNotifications(user: RequestUser) {
         }),
       ),
     );
+  }
+
+  const recipient = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { email: true },
+  });
+
+  if (!recipient?.email) return;
+
+  const followUpsNeedingEmail = dueFollowUps.filter((followUp) => !followUp.reminderSentAt);
+  for (const followUp of followUpsNeedingEmail) {
+    const type: NotificationType = isBefore(followUp.followUpDate, today) ? "FOLLOW_UP_OVERDUE" : "FOLLOW_UP_REMINDER";
+    const emailSent = await sendDueFollowUpEmail({
+      to: recipient.email,
+      type,
+      message: followUp.note?.trim() || `${followUp.method} follow-up is due.`,
+      followUpDate: followUp.followUpDate,
+    });
+    if (emailSent) {
+      await prisma.followUp.update({
+        where: { id: followUp.id },
+        data: { reminderSentAt: now },
+      });
+    }
   }
 }
 
