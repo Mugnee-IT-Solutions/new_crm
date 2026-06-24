@@ -705,9 +705,9 @@ const isTeamPerformanceMetricClickable = (
 
 function TeamPerformanceDrilldownTable({ rows }: { rows: TeamPerformanceDrilldownRow[] }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="max-h-[min(56vh,540px)] max-w-full overflow-auto rounded-2xl border border-slate-200">
       <table className="min-w-[1120px] w-full text-left text-sm">
-        <thead className="border-b border-slate-100 text-xs uppercase tracking-[0.12em] text-slate-400">
+        <thead className="sticky top-0 z-[1] border-b border-slate-100 bg-white text-xs uppercase tracking-[0.12em] text-slate-400">
           <tr>
             <th className="px-3 py-2 font-bold">Company / Customer</th>
             <th className="px-3 py-2 font-bold">Contact</th>
@@ -2406,7 +2406,8 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
           )}`
           : "Team performance drill-down"}
         onClose={closeDrilldown}
-        panelClassName="w-[95vw] max-w-[900px]"
+        panelClassName="w-[96vw] max-w-[1180px]"
+        contentClassName="min-h-0 p-4 sm:p-5"
       >
         {drilldownLoading ? (
           <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-600">Loading records...</p>
@@ -2805,7 +2806,8 @@ function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
         open={drilldownOpen}
         title={drilldownPayload ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} (This Month)` : "Team performance drill-down"}
         onClose={closeDrilldown}
-        panelClassName="w-[95vw] max-w-[900px]"
+        panelClassName="w-[96vw] max-w-[1180px]"
+        contentClassName="min-h-0 p-4 sm:p-5"
       >
         {drilldownLoading ? (
           <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-600">Loading records...</p>
