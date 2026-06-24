@@ -1,18 +1,13 @@
 import type * as Prisma from "@prisma/client";
-import { addDays, endOfMonth, endOfWeek, format, isBefore, isSameDay, startOfDay, startOfMonth, startOfWeek } from "date-fns";
+import { addDays, isBefore } from "date-fns";
+import { formatCrmDate, getCrmDayWindow, getCrmPeriodWindow, isBeforeCrmDay, isSameCrmDay, type CrmPeriod } from "@/lib/crm-time";
 import { buildCustomerScopeWhere } from "@/lib/customer-ownership";
 import { getScopedLeadUserIds } from "@/lib/lead-ownership";
 import { getPrisma } from "@/lib/prisma";
 import { getTodayWorkQueue } from "@/lib/task-center";
 import { type Role, type ShellUser } from "@/lib/utils";
 
-type TeamPerformancePeriod = "today" | "week" | "month" | "year" | "custom";
-
-type TeamPerformanceWindow = {
-  period: TeamPerformancePeriod;
-  from: Date;
-  to: Date;
-};
+type TeamPerformancePeriod = CrmPeriod;
 
 type TeamPerformanceOptions = {
   period?: TeamPerformancePeriod;
@@ -482,48 +477,7 @@ function labelize(value: string | null | undefined) {
 }
 
 function dateLabel(date: Date | null | undefined, pattern = "dd/MM/yyyy") {
-  return date ? format(date, pattern) : "-";
-}
-
-function getTeamPerformanceWindow(now: Date, options?: TeamPerformanceOptions): TeamPerformanceWindow {
-  const period = options?.period ?? "month";
-  const todayStart = startOfDay(now);
-  const utcSafe = (value?: string) => {
-    if (!value) return undefined;
-    const parsed = new Date(`${value}T00:00:00`);
-    return Number.isNaN(parsed.getTime()) ? undefined : startOfDay(parsed);
-  };
-  let from = todayStart;
-  let to = addDays(todayStart, 1);
-
-  if (period === "today") {
-    from = startOfDay(now);
-    to = addDays(from, 1);
-  } else if (period === "week") {
-    from = startOfWeek(now, { weekStartsOn: 1 });
-    to = addDays(endOfWeek(now, { weekStartsOn: 1 }), 1);
-  } else if (period === "month") {
-    from = startOfMonth(now);
-    to = addDays(endOfMonth(from), 1);
-  } else if (period === "year") {
-    from = new Date(now.getFullYear(), 0, 1);
-    to = new Date(now.getFullYear() + 1, 0, 1);
-  } else if (period === "custom") {
-    const customFrom = utcSafe(options?.from);
-    const customTo = utcSafe(options?.to);
-
-    const candidateFrom = customFrom ?? todayStart;
-    const candidateTo = customTo ?? candidateFrom;
-    if (isBefore(candidateTo, candidateFrom)) {
-      from = candidateTo;
-      to = addDays(candidateFrom, 1);
-    } else {
-      from = candidateFrom;
-      to = addDays(candidateTo, 1);
-    }
-  }
-
-  return { period, from, to };
+  return formatCrmDate(date, pattern as Parameters<typeof formatCrmDate>[1]);
 }
 
 function money(value: number) {
@@ -533,10 +487,8 @@ function money(value: number) {
 function followUpBucket(status: string, date: Date) {
   if (status === "COMPLETED") return "Completed";
   if (status === "OVERDUE") return "Overdue";
-  const today = startOfDay(new Date());
-  const target = startOfDay(date);
-  if (isBefore(target, today)) return "Overdue";
-  if (isSameDay(target, today)) return "Due Today";
+  if (isBeforeCrmDay(date, new Date())) return "Overdue";
+  if (isSameCrmDay(date, new Date())) return "Due Today";
   return "Upcoming";
 }
 
@@ -968,7 +920,7 @@ function lastCommunicationType(followUp: FollowUpRecord) {
 
 function mapTaskRow(task: TaskRecord): TaskRow {
   const taskDate = (task as { taskDate?: Date | null }).taskDate ?? task.dueDate ?? task.createdAt;
-  const previous = task.status !== "COMPLETED" && ((((task as { isPrevious?: boolean | null }).isPrevious) ?? false) || isBefore(startOfDay(taskDate), startOfDay(new Date())));
+  const previous = task.status !== "COMPLETED" && ((((task as { isPrevious?: boolean | null }).isPrevious) ?? false) || isBeforeCrmDay(taskDate, new Date()));
 
   return {
     id: task.id,
@@ -1682,8 +1634,8 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
   };
 }
 
-function followUpSummaryWhere(baseWhere: Prisma.Prisma.FollowUpWhereInput, today = startOfDay(new Date())) {
-  const tomorrow = addDays(today, 1);
+function followUpSummaryWhere(baseWhere: Prisma.Prisma.FollowUpWhereInput, now = new Date()) {
+  const { from: today, to: tomorrow } = getCrmDayWindow(now);
   return {
     overdue: combineWhere(baseWhere, { status: { not: "COMPLETED" }, OR: [{ status: "OVERDUE" }, { followUpDate: { lt: today } }] }),
     today: combineWhere(baseWhere, { status: { notIn: ["COMPLETED", "OVERDUE"] }, followUpDate: { gte: today, lt: tomorrow } }),
@@ -1818,12 +1770,11 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
   await ensureCrmFoundation();
   const scopedUserIds = await getScopedUserIds(role, user);
   const scopedLeadUserIds = await getScopedLeadUserIds(prisma, { id: user.id ?? "", role });
-  const today = startOfDay(new Date());
-  const tomorrow = addDays(today, 1);
+  const { from: today, to: tomorrow } = getCrmDayWindow(new Date());
   const teamPerformanceWindow = role === "SUPERVISOR"
-    ? getTeamPerformanceWindow(new Date(), options)
+    ? getCrmPeriodWindow(new Date(), options)
     : role === "ADMIN"
-      ? getTeamPerformanceWindow(new Date(), { period: "month" })
+      ? getCrmPeriodWindow(new Date(), { period: "month" })
       : undefined;
 
   const leadWhere = scopedLeadUserIds
@@ -2107,7 +2058,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
 
   const planRows: TodayPlanRow[] = todayPlans.map((plan) => {
     const completed = plan.status === "COMPLETED";
-    const previous = isBefore(startOfDay(plan.plannedAt), today) && !completed;
+    const previous = isBeforeCrmDay(plan.plannedAt, new Date()) && !completed;
 
     return {
       id: plan.id,
@@ -2243,7 +2194,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
       employee.communications.filter((log) => containsAnyMethod(log.method, ["meeting"])).length +
       employee.followUps.filter((followUp) => containsAnyMethod(followUp.method, ["meeting"])).length;
     const pendingTasks = employee.tasksAssigned.filter((task) => task.status !== "COMPLETED").length;
-    const overdueFollowUps = employee.followUps.filter((followUp) => followUp.status !== "COMPLETED" && isBefore(startOfDay(followUp.followUpDate), today)).length;
+    const overdueFollowUps = employee.followUps.filter((followUp) => followUp.status !== "COMPLETED" && followUp.followUpDate < today).length;
 
     return {
       id: employee.id,
@@ -2444,16 +2395,8 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
     ? {
         rows: teamPerformanceRows,
         period: teamPerformanceWindow?.period ?? "month",
-        from: format(
-          (teamPerformanceWindow?.from ?? today),
-          "yyyy-MM-dd",
-        ),
-        to: format(
-          (teamPerformanceWindow?.period === "custom" && teamPerformanceWindow?.to
-            ? addDays(teamPerformanceWindow.to, -1)
-            : teamPerformanceWindow?.to ?? addDays(today, 1)),
-          "yyyy-MM-dd",
-        ),
+        from: formatCrmDate(teamPerformanceWindow?.from ?? today, "yyyy-MM-dd"),
+        to: formatCrmDate(new Date((teamPerformanceWindow?.to ?? tomorrow).getTime() - 1), "yyyy-MM-dd"),
       }
     : undefined;
 
@@ -2464,9 +2407,9 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
   const rewardPoints = role === "MARKETER" && user.id ? rewardByUser.get(user.id) ?? 0 : employeeRows.reduce((sum, row) => sum + row.rewardPoints, 0);
   const includesMeeting = (...values: (string | null | undefined)[]) => values.some((value) => value?.toLowerCase().includes("meeting"));
   const meetingsToday =
-    followUps.filter((followUp) => followUp.status !== "COMPLETED" && isSameDay(followUp.followUpDate, today) && includesMeeting(followUp.method, followUp.note, followUp.nextDiscussionPlan)).length +
-    tasks.filter((task) => task.status !== "COMPLETED" && task.dueDate && isSameDay(task.dueDate, today) && includesMeeting(task.title, task.description, task.notes)).length +
-    todayPlans.filter((plan) => plan.status !== "COMPLETED" && isSameDay(plan.plannedAt, today) && includesMeeting(plan.title, plan.note)).length;
+    followUps.filter((followUp) => followUp.status !== "COMPLETED" && isSameCrmDay(followUp.followUpDate, today) && includesMeeting(followUp.method, followUp.note, followUp.nextDiscussionPlan)).length +
+    tasks.filter((task) => task.status !== "COMPLETED" && task.dueDate && isSameCrmDay(task.dueDate, today) && includesMeeting(task.title, task.description, task.notes)).length +
+    todayPlans.filter((plan) => plan.status !== "COMPLETED" && isSameCrmDay(plan.plannedAt, today) && includesMeeting(plan.title, plan.note)).length;
   const communicationCenterSummary = {
     todayCalls: todayCallCount,
     todayWhatsApp: todayWhatsAppCount,
@@ -2623,8 +2566,9 @@ function normalizeFollowUpQuery(query: FollowUpQuery | Record<string, unknown> =
 }
 
 function followUpSections(baseWhere: Prisma.Prisma.FollowUpWhereInput, query: ReturnType<typeof normalizeFollowUpQuery>) {
-  const today = startOfDay(new Date());
-  const tomorrow = addDays(today, 1);
+  const { from: today, to: tomorrow } = getCrmDayWindow(new Date());
+  const weekWindow = getCrmPeriodWindow(new Date(), { period: "week" });
+  const monthWindow = getCrmPeriodWindow(new Date(), { period: "month" });
   const commonOrder: Prisma.Prisma.FollowUpOrderByWithRelationInput[] = [{ followUpDate: "asc" }, { createdAt: "desc" }];
   const completedOrder: Prisma.Prisma.FollowUpOrderByWithRelationInput[] = [{ completedAt: "desc" }, { followUpDate: "desc" }];
   const pending = { status: { not: "COMPLETED" } } satisfies Prisma.Prisma.FollowUpWhereInput;
@@ -2638,13 +2582,11 @@ function followUpSections(baseWhere: Prisma.Prisma.FollowUpWhereInput, query: Re
   }
 
   if (query.dateFilter === "week") {
-    const weekStart = startOfWeek(today, { weekStartsOn: 1 });
-    const weekEnd = addDays(endOfWeek(today, { weekStartsOn: 1 }), 1);
-    return [{ where: combineWhere(baseWhere, pending, dateRangeWhere(weekStart, weekEnd)), orderBy: commonOrder }];
+    return [{ where: combineWhere(baseWhere, pending, dateRangeWhere(weekWindow.from, weekWindow.to)), orderBy: commonOrder }];
   }
 
   if (query.dateFilter === "month") {
-    return [{ where: combineWhere(baseWhere, pending, dateRangeWhere(startOfMonth(today), addDays(endOfMonth(today), 1))), orderBy: commonOrder }];
+    return [{ where: combineWhere(baseWhere, pending, dateRangeWhere(monthWindow.from, monthWindow.to)), orderBy: commonOrder }];
   }
 
   if (query.dateFilter === "custom") {
@@ -3000,6 +2942,3 @@ export async function getQuotationDetail(id: string, role: Role, user: ShellUser
     quotation: workspace.quotations.find((item) => item.id === lookup || item.quoteNumber === lookup || slugify(item.quoteNumber) === lookupSlug),
   };
 }
-
-
-

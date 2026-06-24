@@ -37,12 +37,50 @@ export function AppHeader({
   const [profileOpen, setProfileOpen] = React.useState(false);
   const notificationRef = React.useRef<HTMLDivElement | null>(null);
   const dropdownPanelRef = React.useRef<HTMLDivElement | null>(null);
+  const profileRef = React.useRef<HTMLDivElement | null>(null);
+  const profileButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const profilePanelRef = React.useRef<HTMLDivElement | null>(null);
+  const [profilePanelStyle, setProfilePanelStyle] = React.useState({
+    top: 0,
+    left: 0,
+    width: 296,
+    maxHeight: 320,
+  });
 
   function handleLogout() {
     document.cookie = "crm_role=; path=/; max-age=0";
     document.cookie = "crm_mobile=; path=/; max-age=0";
     window.location.assign("/login");
   }
+
+  const updateProfilePanelPosition = React.useCallback(() => {
+    if (!profileButtonRef.current || typeof window === "undefined") return;
+
+    const viewportPadding = 12;
+    const gap = 10;
+    const triggerRect = profileButtonRef.current.getBoundingClientRect();
+    const preferredWidth = Math.min(320, window.innerWidth - viewportPadding * 2);
+    const measuredHeight = profilePanelRef.current?.offsetHeight ?? 240;
+    const availableBelow = window.innerHeight - triggerRect.bottom - gap - viewportPadding;
+    const availableAbove = triggerRect.top - gap - viewportPadding;
+    const placeAbove = availableBelow < Math.min(measuredHeight, 220) && availableAbove > availableBelow;
+    const maxHeight = Math.max(180, Math.min(360, placeAbove ? availableAbove : availableBelow));
+    const resolvedHeight = Math.min(measuredHeight, maxHeight);
+    const top = placeAbove
+      ? Math.max(viewportPadding, triggerRect.top - gap - resolvedHeight)
+      : Math.min(window.innerHeight - viewportPadding - resolvedHeight, triggerRect.bottom + gap);
+    const left = Math.min(
+      Math.max(viewportPadding, triggerRect.right - preferredWidth),
+      window.innerWidth - preferredWidth - viewportPadding,
+    );
+
+    setProfilePanelStyle({
+      top,
+      left,
+      width: preferredWidth,
+      maxHeight,
+    });
+  }, []);
 
   React.useEffect(() => {
     if (!open || !dropdownPanelRef.current) return;
@@ -59,13 +97,47 @@ export function AppHeader({
       if (notificationRef.current && !notificationRef.current.contains(event.target as Node)) {
         setOpen(false);
       }
+      if (
+        profileRef.current &&
+        !profileRef.current.contains(event.target as Node) &&
+        !(profilePanelRef.current?.contains(event.target as Node) ?? false)
+      ) {
+        setProfileOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        setProfileOpen(false);
+      }
     };
 
     document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, []);
+
+  React.useEffect(() => {
+    if (!profileOpen) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      updateProfilePanelPosition();
+    });
+    const handleViewportChange = () => {
+      updateProfilePanelPosition();
+    };
+
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [profileOpen, updateProfilePanelPosition]);
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/85 backdrop-blur-xl">
@@ -201,16 +273,19 @@ export function AppHeader({
             </Link>
           </motion.div>
 
-          <div
-            className="relative"
-            onMouseEnter={() => setProfileOpen(true)}
-            onMouseLeave={() => setProfileOpen(false)}
-          >
+          <div ref={profileRef} className="relative">
             <motion.button
+              ref={profileButtonRef}
               type="button"
               whileHover={{ y: -1 }}
               whileTap={{ scale: 0.98 }}
               className="flex h-10 items-center gap-2 rounded-full border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-700 shadow-sm"
+              aria-expanded={profileOpen}
+              aria-haspopup="dialog"
+              onClick={() => {
+                setOpen(false);
+                setProfileOpen((value) => !value);
+              }}
             >
               <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-xs font-black text-white">
                 {initials(user.name)}
@@ -220,19 +295,26 @@ export function AppHeader({
             <AnimatePresence>
               {profileOpen ? (
                 <motion.div
+                  ref={profilePanelRef}
                   initial={{ opacity: 0, y: -6 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -6 }}
                   transition={{ duration: 0.14 }}
-                  className="absolute right-0 mt-2 w-56 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl"
+                  style={profilePanelStyle}
+                  className="fixed z-[70] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_24px_48px_rgba(15,23,42,0.16)]"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-blue-700">
-                      <UserRound className="h-5 w-5" />
+                  <div className="max-h-full overflow-y-auto p-3">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-blue-700">
+                        <UserRound className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-slate-950">{user.name}</p>
+                        <p className="truncate text-xs text-slate-500">{user.email ?? user.mobile ?? roleLabels[role]}</p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-bold text-slate-950">{user.name}</p>
-                      <p className="truncate text-xs text-slate-500">{user.email ?? user.mobile ?? roleLabels[role]}</p>
+                    <div className="mt-3 rounded-2xl bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
+                      Signed in as {roleLabels[role]}
                     </div>
                   </div>
                 </motion.div>

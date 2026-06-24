@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { addDays, endOfMonth, endOfWeek, format, isBefore, startOfDay, startOfMonth, startOfWeek } from "date-fns";
 
+import { formatCrmDate, getCrmDayWindow, getCrmPeriodWindow, type CrmPeriod } from "@/lib/crm-time";
 import { getPrisma } from "@/lib/prisma";
 import { requireRequestUser } from "@/lib/request-user";
 import { getMarketerScopeUserIds } from "@/lib/customer-ownership";
 
-type TeamPerformancePeriod = "today" | "week" | "month" | "year" | "custom";
+type TeamPerformancePeriod = CrmPeriod;
 type MetricType =
   | "overview"
   | "leads"
@@ -18,53 +18,6 @@ type MetricType =
   | "sales"
   | "conversion"
   | "score";
-
-type TeamPerformanceWindow = {
-  period: TeamPerformancePeriod;
-  from: Date;
-  to: Date;
-};
-
-function getTeamPerformanceWindow(now: Date, period?: TeamPerformancePeriod, fromRaw?: string, toRaw?: string): TeamPerformanceWindow {
-  const todayStart = startOfDay(now);
-  const periodSafe = period ?? "month";
-  const parseDate = (value?: string) => {
-    if (!value) return undefined;
-    const parsed = new Date(`${value}T00:00:00`);
-    return Number.isNaN(parsed.getTime()) ? undefined : startOfDay(parsed);
-  };
-
-  let from = todayStart;
-  let to = addDays(todayStart, 1);
-
-  if (periodSafe === "today") {
-    from = startOfDay(now);
-    to = addDays(from, 1);
-  } else if (periodSafe === "week") {
-    from = startOfWeek(now, { weekStartsOn: 1 });
-    to = addDays(endOfWeek(now, { weekStartsOn: 1 }), 1);
-  } else if (periodSafe === "month") {
-    from = startOfMonth(now);
-    to = addDays(endOfMonth(from), 1);
-  } else if (periodSafe === "year") {
-    from = new Date(now.getFullYear(), 0, 1);
-    to = new Date(now.getFullYear() + 1, 0, 1);
-  } else if (periodSafe === "custom") {
-    const parsedFrom = parseDate(fromRaw);
-    const parsedTo = parseDate(toRaw);
-    const candidateFrom = parsedFrom ?? todayStart;
-    const candidateTo = parsedTo ?? candidateFrom;
-    if (isBefore(candidateTo, candidateFrom)) {
-      from = candidateTo;
-      to = addDays(candidateFrom, 1);
-    } else {
-      from = candidateFrom;
-      to = addDays(candidateTo, 1);
-    }
-  }
-
-  return { period: periodSafe, from, to };
-}
 
 function pickPhone(value?: string | null) {
   if (!value) return "-";
@@ -117,7 +70,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, message: "marketerId is required." }, { status: 400 });
     }
 
-    const period = (rawPeriod === "today" || rawPeriod === "week" || rawPeriod === "month" || rawPeriod === "year" || rawPeriod === "custom")
+    const period: TeamPerformancePeriod = (rawPeriod === "today" || rawPeriod === "week" || rawPeriod === "month" || rawPeriod === "year" || rawPeriod === "custom")
       ? rawPeriod
       : "month";
     const metric = (metricType === "overview" || metricType === "leads" || metricType === "calls" || metricType === "whatsapp" || metricType === "meetings" || metricType === "followUps" || metricType === "pendingTasks"
@@ -135,11 +88,15 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, message: "No access to this marketer." }, { status: 403 });
     }
 
-    const window = getTeamPerformanceWindow(new Date(), period, period === "custom" ? rawFrom : undefined, period === "custom" ? rawTo : undefined);
-    const today = startOfDay(new Date());
-    const overdueTo = isBefore(window.to, today) ? window.to : today;
+    const window = getCrmPeriodWindow(new Date(), {
+      period,
+      from: period === "custom" ? rawFrom ?? undefined : undefined,
+      to: period === "custom" ? rawTo ?? undefined : undefined,
+    });
+    const { from: today } = getCrmDayWindow(new Date());
+    const overdueTo = window.to.getTime() < today.getTime() ? window.to : today;
 
-    const formatDisplayDate = (value: Date) => format(value, "dd/MM/yyyy hh:mm a");
+    const formatDisplayDate = (value: Date) => formatCrmDate(value, "dd/MM/yyyy hh:mm a");
 
     type DrilldownDetailRow = {
       id: string;
@@ -661,8 +618,8 @@ export async function GET(request: Request) {
     return NextResponse.json({
       success: true,
       period: window.period,
-      from: format(window.from, "yyyy-MM-dd"),
-      to: format(window.to, "yyyy-MM-dd"),
+      from: formatCrmDate(window.from, "yyyy-MM-dd"),
+      to: formatCrmDate(new Date(window.to.getTime() - 1), "yyyy-MM-dd"),
       marketerId,
       metric: metricType,
       metricLabel: labelByMetric[metric],

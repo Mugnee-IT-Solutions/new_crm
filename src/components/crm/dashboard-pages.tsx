@@ -37,7 +37,7 @@ import { LeadStatusDonut, ProductBarChart, SalesLineChart } from "@/components/c
 import { AnimatedPanel } from "@/components/shared/animated-panel";
 import { DashboardCard } from "@/components/shared/dashboard-card";
 import { PageHeader } from "@/components/shared/page-header";
-import { StatCard } from "@/components/shared/stat-card";
+import { DashboardMetricCard, StatCard } from "@/components/shared/stat-card";
 import { useTaskCounterContext } from "@/components/app/app-shell";
 import type { CrmWorkspace } from "@/lib/crm-data";
 import { cn, initials, rolePath, type Role } from "@/lib/utils";
@@ -61,6 +61,57 @@ function StatsGrid({ items }: { items: CrmWorkspace["stats"] }) {
         );
       })}
     </div>
+  );
+}
+
+function CreateTodayTaskButton({
+  workspace,
+  label = "Create Today's Task",
+  size = "sm",
+  className,
+  refreshOnCreate = false,
+  onCreated,
+}: {
+  workspace: CrmWorkspace;
+  label?: string;
+  size?: "sm" | "md" | "lg";
+  className?: string;
+  refreshOnCreate?: boolean;
+  onCreated?: (row: TodayTaskApiRow) => void;
+}) {
+  const router = useRouter();
+  const { refreshTaskCount } = useTaskCounterContext();
+  const [open, setOpen] = React.useState(false);
+
+  const handleCreated = React.useCallback((row: TodayTaskApiRow) => {
+    onCreated?.(row);
+    void refreshTaskCount();
+    setOpen(false);
+    if (refreshOnCreate) {
+      router.refresh();
+    }
+  }, [onCreated, refreshOnCreate, refreshTaskCount, router]);
+
+  return (
+    <>
+      <Button
+        type="button"
+        size={size}
+        onClick={() => setOpen(true)}
+        className={cn("gap-2", className)}
+      >
+        <Plus className="h-4 w-4" />
+        {label}
+      </Button>
+
+      <TaskCreateModal
+        open={open}
+        onClose={() => setOpen(false)}
+        onCreated={handleCreated}
+        role={workspace.user.role}
+        workspace={workspace}
+      />
+    </>
   );
 }
 
@@ -518,6 +569,7 @@ function TeamPerformanceTable({ workspace }: { workspace: CrmWorkspace }) {
 type SupervisorPerformanceRow = CrmWorkspace["employees"][number] & {
   performanceScore: number;
   performanceScoreRaw: number;
+  hasPerformanceActivity: boolean;
 };
 type TeamPerformanceMetricKey = "overview" | "leads" | "calls" | "whatsapp" | "meetings" | "followUps" | "pendingTasks" | "overdueFollowUps" | "sales" | "conversion" | "score";
 
@@ -543,6 +595,13 @@ type TeamPerformanceDrilldownRow = {
 };
 type TeamPerformancePeriod = "today" | "week" | "month" | "year" | "custom";
 type TeamPerformanceSource = "table" | "mobile";
+const performancePeriodLabels: Record<TeamPerformancePeriod, string> = {
+  today: "Today",
+  week: "This Week",
+  month: "This Month",
+  year: "This Year",
+  custom: "Custom",
+};
 
 const teamPerformanceMetricLabels: Record<TeamPerformanceMetricKey, string> = {
   overview: "Activity Overview",
@@ -591,12 +650,56 @@ const teamPerformanceMetricValueNumber = (value: string | number) => {
   return Number.isNaN(parsed) ? 0 : parsed;
 };
 
+function hasPerformanceActivity(
+  row: Pick<SupervisorPerformanceRow, "leads" | "calls" | "whatsapp" | "emails" | "meetings" | "followUps" | "pendingTasks" | "overdueFollowUps" | "sales">,
+) {
+  return (
+    row.leads +
+    row.calls +
+    row.whatsapp +
+    row.emails +
+    row.meetings +
+    row.followUps +
+    row.pendingTasks +
+    row.overdueFollowUps +
+    row.sales
+  ) > 0;
+}
+
+function buildPerformanceScore(
+  row: Pick<SupervisorPerformanceRow, "leads" | "calls" | "whatsapp" | "emails" | "meetings" | "followUps" | "pendingTasks" | "overdueFollowUps" | "sales" | "conversionRate">,
+) {
+  const numericConversion = Number.parseInt(row.conversionRate.replace(/\D/g, ""), 10) || 0;
+  const rawScore =
+    row.sales * 24 +
+    row.leads * 8 +
+    row.followUps * 5 +
+    row.calls * 3 +
+    row.whatsapp * 3 +
+    row.emails * 2 +
+    row.meetings * 4 +
+    Math.round(numericConversion * 0.6) -
+    row.pendingTasks * 2 -
+    row.overdueFollowUps * 6;
+  const active = hasPerformanceActivity(row);
+
+  return {
+    performanceScoreRaw: active ? rawScore : 0,
+    performanceScore: active ? Math.max(0, Math.min(100, Math.round(rawScore))) : 0,
+    hasPerformanceActivity: active,
+  };
+}
+
+function performanceScoreLabel(row: Pick<SupervisorPerformanceRow, "performanceScore" | "hasPerformanceActivity">) {
+  return row.hasPerformanceActivity ? `${row.performanceScore}%` : "No activity";
+}
+
 const isTeamPerformanceMetricClickable = (
   metric: TeamPerformanceMetricKey,
   value: string | number,
 ): boolean => {
   if (metric === "overview") return true;
-  if (metric === "score") return Number(value) > 0;
+  if (metric === "score") return teamPerformanceMetricValueNumber(value) > 0;
   return teamPerformanceMetricValueNumber(value) > 0;
 };
 
@@ -640,50 +743,32 @@ function TeamPerformanceDrilldownTable({ rows }: { rows: TeamPerformanceDrilldow
 const supervisorKpiConfig = {
   "Total Marketers": {
     icon: Users,
-    accent: "bg-blue-500",
-    iconTone: "bg-blue-100 text-blue-700",
-    valueTone: "text-blue-700",
-    sparkStroke: "#2563EB",
+    tone: "bg-blue-600",
     helper: "Active marketers under your supervision",
   },
   "Total Leads": {
     icon: Target,
-    accent: "bg-indigo-500",
-    iconTone: "bg-indigo-100 text-indigo-700",
-    valueTone: "text-indigo-700",
-    sparkStroke: "#7C3AED",
+    tone: "bg-indigo-600",
     helper: "Total team pipeline opportunities",
   },
   "Follow-up Due": {
     icon: CalendarClock,
-    accent: "bg-orange-500",
-    iconTone: "bg-orange-100 text-orange-700",
-    valueTone: "text-orange-700",
-    sparkStroke: "#F97316",
+    tone: "bg-amber-500",
     helper: "Due today across your active team",
   },
   "Overdue Follow-ups": {
     icon: AlertTriangle,
-    accent: "bg-red-500",
-    iconTone: "bg-red-100 text-red-700",
-    valueTone: "text-red-700",
-    sparkStroke: "#EF4444",
+    tone: "bg-red-600",
     helper: "Urgent items needing escalation",
   },
   "Sales This Month": {
     icon: WalletCards,
-    accent: "bg-emerald-500",
-    iconTone: "bg-emerald-100 text-emerald-700",
-    valueTone: "text-emerald-700",
-    sparkStroke: "#10B981",
+    tone: "bg-emerald-600",
     helper: "Closed quotation value this month",
   },
   "Conversion Rate": {
     icon: Award,
-    accent: "bg-violet-500",
-    iconTone: "bg-violet-100 text-violet-700",
-    valueTone: "text-violet-700",
-    sparkStroke: "#8B5CF6",
+    tone: "bg-violet-600",
     helper: "Won deals versus total team leads",
   },
 } as const;
@@ -761,10 +846,9 @@ function SupervisorHeaderAction({
 
 function SupervisorKpiGrid({ items }: { items: CrmWorkspace["stats"] }) {
   return (
-    <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
       {items.map((item, index) => {
         const config = supervisorKpiConfig[item.title as keyof typeof supervisorKpiConfig];
-        const Icon = config.icon;
 
         return (
           <motion.div
@@ -776,19 +860,13 @@ function SupervisorKpiGrid({ items }: { items: CrmWorkspace["stats"] }) {
             whileHover={{ y: -3 }}
             className="h-full"
           >
-            <Card className="relative h-full overflow-hidden rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
-              <div className={cn("absolute inset-x-0 top-0 h-1", config.accent)} />
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className={cn("text-sm font-bold", config.valueTone)}>{item.title}</p>
-                  <p className={cn("mt-4 text-[2.35rem] font-black leading-none tracking-[-0.03em]", config.valueTone)}>{item.value}</p>
-                  <p className="mt-3 text-sm text-slate-500">{config.helper || item.helper}</p>
-                </div>
-                <div className={cn("flex h-14 w-14 shrink-0 items-center justify-center rounded-full shadow-sm", config.iconTone)}>
-                  <Icon className="h-6 w-6" strokeWidth={2.1} />
-                </div>
-              </div>
-            </Card>
+            <DashboardMetricCard
+              title={item.title}
+              value={item.value}
+              helper={config.helper || item.helper}
+              icon={config.icon}
+              tone={config.tone}
+            />
           </motion.div>
         );
       })}
@@ -797,6 +875,7 @@ function SupervisorKpiGrid({ items }: { items: CrmWorkspace["stats"] }) {
 }
 
 function performanceScoreVariant(score: number) {
+  if (score <= 0) return "bg-slate-300";
   if (score >= 75) return "bg-emerald-500";
   if (score >= 50) return "bg-blue-500";
   if (score >= 35) return "bg-amber-500";
@@ -877,7 +956,7 @@ function SupervisorTeamPerformancePanel({ rows }: { rows: SupervisorPerformanceR
                       <div className="min-w-[170px]">
                         <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
                           <span>Performance</span>
-                          <span>{row.performanceScore}%</span>
+                          <span>{performanceScoreLabel(row)}</span>
                         </div>
                         <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
                           <div className={cn("h-full rounded-full", performanceScoreVariant(row.performanceScore))} style={{ width: `${row.performanceScore}%` }} />
@@ -925,7 +1004,7 @@ function SupervisorTeamPerformancePanel({ rows }: { rows: SupervisorPerformanceR
                     <div className="mt-4">
                       <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
                         <span>Performance Score</span>
-                        <span>{row.performanceScore}%</span>
+                        <span>{performanceScoreLabel(row)}</span>
                       </div>
                       <div className="h-2.5 overflow-hidden rounded-full bg-white">
                         <div className={cn("h-full rounded-full", performanceScoreVariant(row.performanceScore))} style={{ width: `${row.performanceScore}%` }} />
@@ -1007,7 +1086,7 @@ function SupervisorTopPerformerPanel({ performer }: { performer?: SupervisorPerf
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-100 text-amber-600 shadow-sm">
               <Trophy className="h-7 w-7" />
             </div>
-            <Badge variant="warning">Top Score {performer.performanceScore}%</Badge>
+            <Badge variant="warning">{performer.hasPerformanceActivity ? `Top Score ${performer.performanceScore}%` : "No activity"}</Badge>
           </div>
           <div className="mt-5 flex items-center gap-4">
             <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-gradient-to-br from-slate-950 to-slate-700 text-lg font-black text-white shadow-lg">
@@ -1034,7 +1113,7 @@ function SupervisorTopPerformerPanel({ performer }: { performer?: SupervisorPerf
           <div className="mt-5">
             <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
               <span>Performance Score</span>
-              <span>{performer.performanceScore}%</span>
+              <span>{performanceScoreLabel(performer)}</span>
             </div>
             <div className="h-3 overflow-hidden rounded-full bg-white/90">
               <div className="h-full rounded-full bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500" style={{ width: `${performer.performanceScore}%` }} />
@@ -1314,7 +1393,7 @@ function SupervisorTeamPerformancePanelV2({
                               {row.performanceScore}%
                             </button>
                           ) : (
-                            <span>{row.performanceScore}%</span>
+                            <span>{performanceScoreLabel(row)}</span>
                           )}
                         </div>
                         <div className="h-2 overflow-hidden rounded-full bg-slate-100">
@@ -1361,7 +1440,7 @@ function SupervisorTeamPerformancePanelV2({
                     </div>
                     <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
                       {(["leads", "calls", "whatsapp", "meetings", "followUps", "pendingTasks", "overdueFollowUps", "sales", "conversion", "score"] as TeamPerformanceMetricKey[]).map((metric) => {
-                        const value = metric === "score" ? row.performanceScore : teamPerformanceMetricValue(row, metric);
+                        const value = metric === "score" ? performanceScoreLabel(row) : teamPerformanceMetricValue(row, metric);
                         const label = metric === "whatsapp" ? "WhatsApp" : metric === "followUps" ? "Follow-ups" : metric === "pendingTasks" ? "Pending" : metric === "overdueFollowUps" ? "Overdue" : teamPerformanceMetricLabels[metric];
                         const clickable = isTeamPerformanceMetricClickable(metric, value);
 
@@ -1391,7 +1470,7 @@ function SupervisorTeamPerformancePanelV2({
                     <div className="mt-4">
                       <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
                         <span>Performance Score</span>
-                        <span>{row.performanceScore}%</span>
+                        <span>{performanceScoreLabel(row)}</span>
                       </div>
                       <div className="h-2 overflow-hidden rounded-full bg-white">
                         <div className={cn("h-full rounded-full", performanceScoreVariant(row.performanceScore))} style={{ width: `${row.performanceScore}%` }} />
@@ -1485,7 +1564,7 @@ function SupervisorTopPerformerPanelV2({ performer }: { performer?: SupervisorPe
               </div>
             ))}
           </div>
-          <Badge variant="warning" className="mx-auto mt-5">Top Score {performer.performanceScore}%</Badge>
+          <Badge variant="warning" className="mx-auto mt-5">{performer.hasPerformanceActivity ? `Top Score ${performer.performanceScore}%` : "No activity"}</Badge>
           <Link href="/supervisor/rewards" className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-blue-600 text-sm font-semibold text-white transition hover:bg-blue-700">
             <Award className="h-4 w-4" />
             Give Reward
@@ -1651,15 +1730,14 @@ function SupervisorProductIntelligencePanelV2({ workspace }: { workspace: CrmWor
 
 type MarketerTaskFilter = TodayWorkFilter;
 
-const marketerKpiIcons = [ClipboardCheck, AlertTriangle, PhoneForwarded, Target, CalendarClock, Award] as const;
-const marketerKpiIconTones = [
-  "bg-blue-50 text-blue-700",
-  "bg-amber-50 text-amber-700",
-  "bg-violet-50 text-violet-700",
-  "bg-emerald-50 text-emerald-700",
-  "bg-rose-50 text-rose-700",
-  "bg-orange-50 text-orange-700",
-] as const;
+const marketerKpiConfig = {
+  "Today's Tasks": { icon: ClipboardCheck, tone: "bg-blue-600", helper: "Unified work queue" },
+  "Pending Tasks": { icon: AlertTriangle, tone: "bg-amber-500", helper: "Need your action" },
+  "Follow-ups Due": { icon: PhoneForwarded, tone: "bg-indigo-600", helper: "Overdue & today" },
+  "New Leads": { icon: Target, tone: "bg-emerald-600", helper: "Assigned leads" },
+  "Meetings Today": { icon: CalendarClock, tone: "bg-cyan-600", helper: "Scheduled meeting" },
+  "Reward Points": { icon: Award, tone: "bg-rose-600", helper: "This month" },
+} as const;
 
 function marketerActivityIcon(title: string, detail: string) {
   const haystack = `${title} ${detail}`.toLowerCase();
@@ -1686,23 +1764,17 @@ function MarketerKpiGrid({ workspace, tasks }: { workspace: CrmWorkspace; tasks:
 
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-      {cards.map((item, index) => {
-        const Icon = marketerKpiIcons[index];
+      {cards.map((item) => {
+        const config = marketerKpiConfig[item.title as keyof typeof marketerKpiConfig];
         return (
-          <Card key={item.title} className="border-slate-200 shadow-sm">
-            <div className="space-y-4 p-5">
-              <div className="flex items-start justify-between gap-3">
-                <div className={cn("flex h-11 w-11 items-center justify-center rounded-2xl", marketerKpiIconTones[index])}>
-                  <Icon className="h-5 w-5" />
-                </div>
-                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{item.title}</p>
-              </div>
-              <div>
-                <p className="text-3xl font-black text-slate-950">{item.value}</p>
-                <p className="mt-2 text-sm text-slate-500">{item.helper}</p>
-              </div>
-            </div>
-          </Card>
+          <DashboardMetricCard
+            key={item.title}
+            title={item.title}
+            value={item.value}
+            helper={item.helper || config.helper}
+            icon={config.icon}
+            tone={config.tone}
+          />
         );
       })}
     </div>
@@ -1710,7 +1782,6 @@ function MarketerKpiGrid({ workspace, tasks }: { workspace: CrmWorkspace; tasks:
 }
 
 function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
-  const [open, setOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
   const [actionError, setActionError] = React.useState("");
@@ -1764,7 +1835,13 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   }, []);
 
   React.useEffect(() => {
-    void loadTasks();
+    const timer = window.setTimeout(() => {
+      void loadTasks();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [loadTasks]);
 
   React.useEffect(() => {
@@ -1798,7 +1875,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
     scheduledRefreshTimers.current.push(timer);
   }, [loadTasks, refreshTaskCount]);
 
-  const handleCreated = (_row: TodayTaskApiRow) => {
+  const handleCreated = () => {
     void loadTasks();
     void refreshTaskCount();
   };
@@ -1862,10 +1939,13 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
           <DashboardCard
             title="Today's Tasks"
             action={
-              <Button type="button" onClick={() => setOpen(true)} size="sm" className="h-8 rounded-xl">
-                <Plus className="h-4 w-4" />
-                Add Task
-              </Button>
+              <CreateTodayTaskButton
+                workspace={workspace}
+                label="Add Task"
+                size="sm"
+                className="h-8 rounded-xl"
+                onCreated={handleCreated}
+              />
             }
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1923,17 +2003,6 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
           </DashboardCard>
         </div>
       </div>
-
-      <TaskCreateModal
-        open={open}
-        onClose={() => setOpen(false)}
-        onCreated={(row: TodayTaskApiRow) => {
-          handleCreated(row);
-          setOpen(false);
-        }}
-        role={role}
-        workspace={workspace}
-      />
 
       <WorkCompletionModal
         item={completionItem}
@@ -2057,13 +2126,6 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
   const router = useRouter();
   const searchParams = useSearchParams();
   const charts = chartData(workspace);
-  const periodLabels: Record<TeamPerformancePeriod, string> = {
-    today: "Today",
-    week: "This Week",
-    month: "This Month",
-    year: "This Year",
-    custom: "Custom",
-  };
   const periodOptions: TeamPerformancePeriod[] = ["today", "week", "month", "year", "custom"];
   const teamPerformanceRows = workspace.teamPerformance?.rows;
   const initialPeriod = workspace.teamPerformance?.period ?? "month";
@@ -2087,38 +2149,30 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
       .filter((item): item is CrmWorkspace["stats"][number] => Boolean(item));
   }, [workspace.stats]);
   const performanceRows = React.useMemo<SupervisorPerformanceRow[]>(() => {
-    const teamRows = teamPerformanceRows ?? workspace.employees.filter((row) => row.role === "Marketer");
-    const withRawScore = teamRows.map((row) => ({
-      ...row,
-      performanceScoreRaw:
-        row.sales * 30 +
-        row.leads * 7 +
-        row.followUps * 5 +
-        row.calls * 3 +
-        row.whatsapp * 3 +
-        row.meetings * 4 -
-        row.pendingTasks * 2 -
-        row.overdueFollowUps * 8,
-    }));
-    const highestRaw = Math.max(1, ...withRawScore.map((row) => Math.max(0, row.performanceScoreRaw)));
-
-    return withRawScore
+    const teamRows = teamPerformanceRows ?? [];
+    return teamRows
       .map((row) => ({
         ...row,
-        performanceScore: Math.max(0, Math.min(100, Math.round((Math.max(0, row.performanceScoreRaw) / highestRaw) * 100))),
+        ...buildPerformanceScore(row),
       }))
       .sort((left, right) => (
-        right.performanceScore - left.performanceScore ||
+        right.performanceScoreRaw - left.performanceScoreRaw ||
         right.sales - left.sales ||
         right.leads - left.leads ||
         right.followUps - left.followUps
       ));
-  }, [teamPerformanceRows, workspace.employees]);
+  }, [teamPerformanceRows]);
 
   React.useEffect(() => {
-    setPerformancePeriod(initialPeriod);
-    setCustomFrom(workspacePeriodFrom);
-    setCustomTo(workspacePeriodTo);
+    const frame = window.requestAnimationFrame(() => {
+      setPerformancePeriod(initialPeriod);
+      setCustomFrom(workspacePeriodFrom);
+      setCustomTo(workspacePeriodTo);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
   }, [initialPeriod, workspacePeriodFrom, workspacePeriodTo]);
 
   const updatePerformancePeriod = React.useCallback((period: TeamPerformancePeriod, from?: string, to?: string) => {
@@ -2168,7 +2222,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
                 : "text-slate-600 hover:bg-slate-50",
             )}
           >
-            {periodLabels[option]}
+            {performancePeriodLabels[option]}
           </button>
         ))}
       </div>
@@ -2226,8 +2280,8 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
       return from && to ? `Custom (${from} - ${to})` : "Custom";
     }
 
-    return periodLabels[period];
-  }, [periodLabels]);
+    return performancePeriodLabels[period];
+  }, []);
 
   const handlePerformanceMetricClick = React.useCallback(async (payload: TeamPerformanceDrilldownPayload) => {
     setDrilldownPayload(payload);
@@ -2300,6 +2354,18 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
         eyebrow="Supervisor Dashboard"
         title="Team performance overview"
         description="Monitor team leads, due follow-ups, product interest, and target achievement."
+        actions={
+          <>
+            <CreateTodayTaskButton
+              workspace={workspace}
+              label="Create Today's Task"
+              size="sm"
+              className="h-9 rounded-full bg-blue-600 px-4 text-white hover:bg-blue-700"
+              refreshOnCreate
+            />
+            <SupervisorHeaderAction>{performancePeriod === "month" ? "Current Month" : performancePeriodLabels[performancePeriod]}</SupervisorHeaderAction>
+          </>
+        }
       />
 
       <SupervisorKpiGrid items={supervisorStats} />
@@ -2320,7 +2386,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
 
       <div className="grid gap-6 xl:grid-cols-[1.45fr_0.88fr_1fr]" data-supervisor-section>
         <SupervisorSalesTrendPanelV2 data={charts.sales} />
-        <SupervisorTopPerformerPanelV2 performer={performanceRows[0]} />
+        <SupervisorTopPerformerPanelV2 performer={performanceRows.find((row) => row.hasPerformanceActivity)} />
         <SupervisorPendingFollowUpsPanelV2 rows={pendingFollowUps} />
       </div>
 
@@ -2371,49 +2437,43 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
 type AdminPerformanceRow = CrmWorkspace["employees"][number] & {
   performanceScore: number;
   performanceScoreRaw: number;
+  hasPerformanceActivity: boolean;
 };
 
 const adminKpiConfig = {
   "Total Users": {
     icon: Users,
-    accent: "border-blue-200 bg-blue-50/70 text-blue-700",
-    iconTone: "bg-blue-100 text-blue-700",
+    tone: "bg-blue-600",
     helper: "System users",
   },
   "Total Customers": {
     icon: BriefcaseBusiness,
-    accent: "border-emerald-200 bg-emerald-50/70 text-emerald-700",
-    iconTone: "bg-emerald-100 text-emerald-700",
+    tone: "bg-emerald-600",
     helper: "Active customer companies",
   },
   "Total Leads": {
     icon: Target,
-    accent: "border-indigo-200 bg-indigo-50/70 text-indigo-700",
-    iconTone: "bg-indigo-100 text-indigo-700",
+    tone: "bg-indigo-600",
     helper: "Live pipeline opportunities",
   },
   "Total Products": {
     icon: BriefcaseBusiness,
-    accent: "border-cyan-200 bg-cyan-50/70 text-cyan-700",
-    iconTone: "bg-cyan-100 text-cyan-700",
+    tone: "bg-cyan-600",
     helper: "Products in CRM catalog",
   },
   "Follow-ups Due": {
     icon: CalendarClock,
-    accent: "border-amber-200 bg-amber-50/70 text-amber-700",
-    iconTone: "bg-amber-100 text-amber-700",
+    tone: "bg-amber-500",
     helper: "Overdue and due today",
   },
   "Lead Conversion Rate": {
     icon: Award,
-    accent: "border-violet-200 bg-violet-50/70 text-violet-700",
-    iconTone: "bg-violet-100 text-violet-700",
+    tone: "bg-violet-600",
     helper: "Won vs total leads",
   },
   "Total Rewards": {
     icon: Trophy,
-    accent: "border-rose-200 bg-rose-50/70 text-rose-700",
-    iconTone: "bg-rose-100 text-rose-700",
+    tone: "bg-rose-600",
     helper: "Distributed reward points",
   },
 } as const;
@@ -2451,7 +2511,6 @@ function AdminKpiGrid({ items }: { items: { title: keyof typeof adminKpiConfig; 
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
       {items.map((item, index) => {
         const config = adminKpiConfig[item.title];
-        const Icon = config.icon;
 
         return (
           <motion.div
@@ -2463,20 +2522,13 @@ function AdminKpiGrid({ items }: { items: { title: keyof typeof adminKpiConfig; 
             whileHover={{ y: -2 }}
             className="h-full"
           >
-            <Card className="h-full rounded-[18px] border border-slate-200/80 bg-white p-4 shadow-[0_14px_32px_rgba(15,23,42,0.06)]">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className={cn("inline-flex rounded-full border px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.12em]", config.accent)}>
-                    {item.title}
-                  </div>
-                  <p className="mt-4 text-[2rem] font-black leading-none tracking-[-0.03em] text-slate-950">{item.value}</p>
-                  <p className="mt-2 text-sm text-slate-500">{item.helper || config.helper}</p>
-                </div>
-                <div className={cn("flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl", config.iconTone)}>
-                  <Icon className="h-5 w-5" />
-                </div>
-              </div>
-            </Card>
+            <DashboardMetricCard
+              title={item.title}
+              value={item.value}
+              helper={item.helper || config.helper}
+              icon={config.icon}
+              tone={config.tone}
+            />
           </motion.div>
         );
       })}
@@ -2723,13 +2775,13 @@ function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
                 </td>
                 <td className="px-3 py-4 font-semibold text-slate-700">{row.conversionRate}</td>
                 <td className="px-3 py-4">
-                  <div className="min-w-[156px]">
-                    <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
-                      <span>Score</span>
-                      <span>{row.performanceScore}%</span>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                      <div className={cn("h-full rounded-full", performanceScoreVariant(row.performanceScore))} style={{ width: `${row.performanceScore}%` }} />
+                    <div className="min-w-[156px]">
+                      <div className="mb-2 flex items-center justify-between gap-2 text-xs font-bold text-slate-500">
+                        <span>Score</span>
+                        <span>{performanceScoreLabel(row)}</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                        <div className={cn("h-full rounded-full", performanceScoreVariant(row.performanceScore))} style={{ width: `${row.performanceScore}%` }} />
                     </div>
                   </div>
                 </td>
@@ -2964,38 +3016,16 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
     ];
   }, [workspace]);
   const adminTeamRows = React.useMemo<AdminPerformanceRow[]>(() => {
-    const baseRows = (workspace.teamPerformance?.rows?.length ? workspace.teamPerformance.rows : workspace.employees)
+    const baseRows = (workspace.teamPerformance?.rows ?? [])
       .filter((row) => row.statusKey === "ACTIVE");
 
-    const rowsWithRaw = baseRows.map((row) => {
-      const numericConversion = Number.parseInt(row.conversionRate.replace(/\D/g, ""), 10) || 0;
-      const performanceScoreRaw =
-        row.sales * 30 +
-        row.leads * 8 +
-        row.calls * 4 +
-        row.whatsapp * 4 +
-        row.emails * 4 +
-        row.followUps * 5 +
-        numericConversion * 2 -
-        row.pendingTasks * 2 -
-        row.overdueFollowUps * 8;
-
-      return {
-        ...row,
-        performanceScoreRaw,
-        performanceScore: 0,
-      };
-    });
-
-    const highestRaw = Math.max(1, ...rowsWithRaw.map((row) => Math.max(row.performanceScoreRaw, 0)));
-
-    return rowsWithRaw
+    return baseRows
       .map((row) => ({
         ...row,
-        performanceScore: Math.max(0, Math.min(100, Math.round((Math.max(row.performanceScoreRaw, 0) / highestRaw) * 100))),
+        ...buildPerformanceScore(row),
       }))
-      .sort((left, right) => right.performanceScore - left.performanceScore || right.sales - left.sales || right.leads - left.leads);
-  }, [workspace.activities, workspace.employees]);
+      .sort((left, right) => right.performanceScoreRaw - left.performanceScoreRaw || right.sales - left.sales || right.leads - left.leads);
+  }, [workspace.teamPerformance?.rows]);
 
   React.useEffect(() => {
     if (!dashboardRef.current) return;
@@ -3022,7 +3052,18 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
         eyebrow="Admin Dashboard"
         title="Business Control Center"
         description="Monitor CRM performance, team activity, leads, customers, follow-ups, rewards, and system health from one executive dashboard."
-        actions={<SupervisorHeaderAction>Current Month</SupervisorHeaderAction>}
+        actions={
+          <>
+            <CreateTodayTaskButton
+              workspace={workspace}
+              label="Create Today's Task"
+              size="sm"
+              className="h-9 rounded-full bg-blue-600 px-4 text-white hover:bg-blue-700"
+              refreshOnCreate
+            />
+            <SupervisorHeaderAction>Current Month</SupervisorHeaderAction>
+          </>
+        }
       />
 
       <AdminKpiGrid items={adminStats} />
