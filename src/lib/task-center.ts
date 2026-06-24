@@ -2,6 +2,7 @@ import { FollowUpStatus, Priority, TaskStatus } from "@prisma/client";
 import { format } from "date-fns";
 import { buildCustomerScopeWhere, hasCustomerAccess } from "@/lib/customer-ownership";
 import { getPrisma } from "@/lib/prisma";
+import { normalizeTaskReminderValue } from "@/lib/task-reminders";
 import type { Role } from "@/lib/utils";
 
 export type TaskActor = {
@@ -1051,6 +1052,7 @@ export async function createTaskEntry(actor: TaskActor, input: {
   companyName?: string;
   description?: string;
   notes?: string;
+  reminder?: string;
   priority: TaskPriorityFilter;
   taskDateTime: Date;
   assignedToId?: string;
@@ -1078,6 +1080,7 @@ export async function createTaskEntry(actor: TaskActor, input: {
   const companyId = companyRecord.companyId;
   const companyName = companyRecord.companyName;
   const productId = input.productId?.trim();
+  const reminder = normalizeTaskReminderValue(input.reminder);
 
   if (productId) {
     const product = await prisma.productService.findUnique({
@@ -1100,6 +1103,7 @@ export async function createTaskEntry(actor: TaskActor, input: {
       taskDate,
       taskTime: taskDateTime,
       dueDate: taskDateTime,
+      reminder: reminder || null,
       isPrevious: taskDate < today,
       assignedBy: { connect: { id: actor.id } },
       assignedTo: { connect: { id: assignedToId } },
@@ -1153,6 +1157,7 @@ export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
   companyName?: string;
   description?: string;
   notes?: string;
+  reminder?: string;
   priority: TaskPriorityFilter;
   taskDateTime: Date;
   assignedToId?: string;
@@ -1199,6 +1204,7 @@ export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
   const companyId = companyRecord.companyId;
   const companyName = companyRecord.companyName;
   const productId = input.productId?.trim();
+  const reminder = normalizeTaskReminderValue(input.reminder);
 
   if (productId) {
     const product = await prisma.productService.findUnique({
@@ -1221,6 +1227,7 @@ export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
       taskDate,
       taskTime: taskDateTime,
       dueDate: taskDateTime,
+      reminder: reminder || null,
       isPrevious: taskDate < startOfToday(),
       assignedTo: { connect: { id: assignedToId } },
       ...(companyId ? { company: { connect: { id: companyId } } } : { company: { disconnect: true } }),

@@ -10,6 +10,7 @@ import { createTaskEntry } from "@/lib/task-center";
 import type { EmployeeRow } from "@/lib/crm-data";
 import { createSetupToken, hashPassword, verifyPassword } from "@/lib/password-auth";
 import { getPrisma } from "@/lib/prisma";
+import { normalizeTaskReminderValue } from "@/lib/task-reminders";
 import { hasCustomerAccess, resolveCustomerOwnerId } from "@/lib/customer-ownership";
 import { hasLeadAccess } from "@/lib/lead-ownership";
 import { roleHome, type Role } from "@/lib/utils";
@@ -1298,7 +1299,7 @@ export async function createTaskAction(formData: FormData) {
       status,
       completedAt: status === "COMPLETED" ? new Date() : undefined,
       completedById: status === "COMPLETED" ? user.id : undefined,
-      reminder: text(formData, "reminder"),
+      reminder: normalizeTaskReminderValue(text(formData, "reminder")),
       notes: text(formData, "notes"),
     },
   });
@@ -1823,6 +1824,9 @@ export async function createFollowUpAction(formData: FormData) {
   const method = text(formData, "method") ?? "Phone Call";
   const note = text(formData, "note") ?? "";
   const nextDiscussionPlan = text(formData, "nextDiscussionPlan") ?? "";
+  const requestedTaskTitle = text(formData, "taskTitle");
+  const allowedTaskTitles = new Set(["Call", "Follow-up", "Demo Send", "Quotation", "Sale Won", "Lead Lost"]);
+  const taskTitle = requestedTaskTitle && allowedTaskTitles.has(requestedTaskTitle) ? requestedTaskTitle : "Follow-up";
 
   const [company, linkedTask] = await Promise.all([
     companyId ? prisma.customerCompany.findUnique({ where: { id: companyId }, select: { id: true, name: true } }) : Promise.resolve(null),
@@ -1844,10 +1848,10 @@ export async function createFollowUpAction(formData: FormData) {
       name: user.name ?? undefined,
     },
     {
-      title: "Follow-up",
+      title: taskTitle,
       companyId: company?.id ?? companyId ?? undefined,
       companyName: company?.name ?? undefined,
-      description: note || nextDiscussionPlan || `${method} follow-up`,
+      description: note || nextDiscussionPlan || `${method} ${taskTitle}`,
       notes: nextDiscussionPlan || undefined,
       priority: "HIGH",
       taskDateTime: followUpDate,

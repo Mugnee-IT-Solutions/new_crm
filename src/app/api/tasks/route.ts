@@ -16,6 +16,7 @@ type CreateTaskBody = {
   companyName?: string;
   description?: string;
   notes?: string;
+  reminder?: string;
   priority?: TaskPriorityFilter;
   taskDateTime?: string;
   taskDate?: string;
@@ -46,6 +47,7 @@ export async function POST(request: Request) {
     const companyName = body.companyName?.trim();
     const description = body.description?.trim();
     const notes = body.notes?.trim();
+    const reminder = body.reminder?.trim();
     const assignedToId = body.assignedToId?.trim();
     const productId = body.productId?.trim();
     const customerContactPerson = body.customerContactPerson?.trim();
@@ -79,6 +81,7 @@ export async function POST(request: Request) {
         companyName,
         description,
         notes,
+        reminder,
         priority,
         taskDateTime,
         assignedToId,

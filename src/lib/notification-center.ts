@@ -1,6 +1,7 @@
 import { format, isBefore, startOfDay } from "date-fns";
 import type { NotificationType } from "@prisma/client";
 import { getPrisma } from "@/lib/prisma";
+import { taskReminderLabel, taskReminderOffsetMs } from "@/lib/task-reminders";
 import type { Role } from "@/lib/utils";
 
 type RequestUser = {
@@ -50,6 +51,12 @@ function formatNotificationType(type: string) {
 
 function taskDueAt(task: { taskTime: Date | null; dueDate: Date | null; taskDate: Date }) {
   return task.taskTime ?? task.dueDate ?? task.taskDate;
+}
+
+function taskReminderAt(task: { reminder: string | null; taskTime: Date | null; dueDate: Date | null; taskDate: Date }) {
+  const offset = taskReminderOffsetMs(task.reminder);
+  if (offset === null) return null;
+  return new Date(taskDueAt(task).getTime() - offset);
 }
 
 async function sendDueFollowUpEmail(input: {
@@ -133,12 +140,19 @@ async function syncDueNotifications(user: RequestUser) {
         taskDate: true,
         dueDate: true,
         taskTime: true,
+        reminder: true,
       },
       take: 100,
     }),
   ]);
 
   const overdueTaskRows = overdueTasks.filter((task) => isBefore(taskDueAt(task), now));
+  const reminderTaskRows = overdueTasks.filter((task) => {
+    const reminderAt = taskReminderAt(task);
+    if (!reminderAt) return false;
+    const dueAt = taskDueAt(task);
+    return reminderAt.getTime() <= now.getTime() && dueAt.getTime() >= now.getTime();
+  });
   const existing = await prisma.notification.findMany({
     where: {
       recipientId: user.id,
@@ -160,9 +174,19 @@ async function syncDueNotifications(user: RequestUser) {
               },
             ]
           : []),
+        ...(reminderTaskRows.length
+          ? [
+              {
+                type: "SYSTEM_ALERT" as NotificationType,
+                entity: "Task",
+                entityId: { in: reminderTaskRows.map((item) => item.id) },
+              },
+            ]
+          : []),
       ],
     },
     select: {
+      title: true,
       type: true,
       followUpId: true,
       entityId: true,
@@ -177,7 +201,7 @@ async function syncDueNotifications(user: RequestUser) {
   const existingTaskKeys = new Set(
     existing
       .filter((item) => item.entityId)
-      .map((item) => `${item.type}:${item.entityId}`),
+      .map((item) => `${item.type}:${item.title}:${item.entityId}`),
   );
 
   const notificationsToCreate = [
@@ -196,12 +220,25 @@ async function syncDueNotifications(user: RequestUser) {
       }];
     }),
     ...overdueTaskRows.flatMap((task) => {
-      const key = `SYSTEM_ALERT:${task.id}`;
+      const key = `SYSTEM_ALERT:Overdue Task:${task.id}`;
       if (existingTaskKeys.has(key)) return [];
       return [{
         recipientId: user.id,
         title: "Overdue Task",
         message: task.title,
+        type: "SYSTEM_ALERT" as const,
+        entity: "Task",
+        entityId: task.id,
+      }];
+    }),
+    ...reminderTaskRows.flatMap((task) => {
+      const key = `SYSTEM_ALERT:Task Reminder:${task.id}`;
+      if (existingTaskKeys.has(key)) return [];
+      const dueAt = taskDueAt(task);
+      return [{
+        recipientId: user.id,
+        title: "Task Reminder",
+        message: `${task.title} at ${format(dueAt, "dd MMM yyyy hh:mm a")} (${taskReminderLabel(task.reminder)})`,
         type: "SYSTEM_ALERT" as const,
         entity: "Task",
         entityId: task.id,

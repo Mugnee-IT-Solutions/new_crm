@@ -129,6 +129,7 @@ export type FollowUpRow = {
   priority: string;
   createdBy: string;
   createdAt: string;
+  completedAt: string;
 };
 
 export type TodayWorkItem = {
@@ -1431,11 +1432,12 @@ function mapFollowUpRow(followUp: FollowUpRecord): FollowUpRow {
     nextDiscussionPlan: followUp.nextDiscussionPlan ?? "-",
     status: bucket,
     bucket,
-    followUpDate: dateLabel(followUp.followUpDate),
+    followUpDate: dateLabel(followUp.followUpDate, "dd/MM/yyyy hh:mm a"),
     assignedTo: followUp.assignedTo?.name ?? "-",
     priority: labelize(followUpPriority ?? "MEDIUM"),
     createdBy: followUp.timelineItems[0]?.user?.name ?? "-",
-    createdAt: dateLabel(followUp.createdAt),
+    createdAt: dateLabel(followUp.createdAt, "dd/MM/yyyy hh:mm a"),
+    completedAt: dateLabel(followUp.completedAt, "dd/MM/yyyy hh:mm a"),
   };
 }
 

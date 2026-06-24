@@ -48,6 +48,50 @@ import { FormModal } from "@/components/shared/form-modal";
 
 const statIcons = [CalendarClock, ClipboardCheck, PhoneForwarded, Target, Trophy, Users, BriefcaseBusiness, WalletCards, Award, Bell];
 const chartColors = ["#2563EB", "#06B6D4", "#16A34A", "#F59E0B", "#4F46E5", "#8B5CF6", "#22C55E", "#DC2626", "#94A3B8"];
+const dashboardRoleTitles: Record<Role, string> = {
+  ADMIN: "CRM Control Desk",
+  SUPERVISOR: "Team Overview",
+  MARKETER: "Today's Sales Desk",
+};
+const dashboardGreetingLines: Record<Role, string> = {
+  ADMIN: "Everything important is ready at a glance.",
+  SUPERVISOR: "Your team snapshot is ready for the day.",
+  MARKETER: "Today's sales priorities are lined up.",
+};
+
+function getDashboardGreeting(hour: number) {
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+function getPreferredDashboardName(name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) return "there";
+  return trimmed.split(/\s+/)[0] ?? trimmed;
+}
+
+function useDashboardGreeting(name: string, role: Role) {
+  const [greeting, setGreeting] = React.useState(() => `Welcome back, ${getPreferredDashboardName(name)}`);
+
+  React.useEffect(() => {
+    const updateGreeting = () => {
+      const nextName = getPreferredDashboardName(name);
+      setGreeting(`${getDashboardGreeting(new Date().getHours())}, ${nextName}`);
+    };
+
+    updateGreeting();
+
+    const intervalId = window.setInterval(updateGreeting, 60_000);
+    return () => window.clearInterval(intervalId);
+  }, [name]);
+
+  return {
+    eyebrow: greeting,
+    title: dashboardRoleTitles[role],
+    description: `${greeting}. ${dashboardGreetingLines[role]}`,
+  };
+}
 
 function StatsGrid({ items }: { items: CrmWorkspace["stats"] }) {
   return (
@@ -2001,12 +2045,14 @@ function MarketerRecentActivities({ workspace }: { workspace: CrmWorkspace }) {
 
 export function MarketerDashboard({ workspace }: { workspace: CrmWorkspace }) {
   const marketerTasks = workspace.todayWorkItems.filter((item) => item.source !== "Plan");
+  const greeting = useDashboardGreeting(workspace.user.name, "MARKETER");
 
   return (
     <>
       <PageHeader
-        title={`Good Morning, ${workspace.user.name} 👋`}
-        description="Here’s what’s happening with your sales today."
+        eyebrow={greeting.eyebrow}
+        title={greeting.title}
+        description={greeting.description}
       />
 
       <MarketerKpiGrid workspace={workspace} tasks={marketerTasks} />
@@ -2024,6 +2070,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const greeting = useDashboardGreeting(workspace.user.name, "SUPERVISOR");
   const charts = chartData(workspace);
   const periodOptions: TeamPerformancePeriod[] = ["today", "week", "month"];
   const teamPerformanceRows = workspace.teamPerformance?.rows;
@@ -2189,9 +2236,9 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
   return (
     <div ref={dashboardRef} className="space-y-6">
       <PageHeader
-        eyebrow="Supervisor Dashboard"
-        title="Team performance overview"
-        description="Monitor team leads, due follow-ups, product interest, and target achievement."
+        eyebrow={greeting.eyebrow}
+        title={greeting.title}
+        description={greeting.description}
         actions={
           <>
             <CreateTodayTaskButton
@@ -2909,7 +2956,7 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const charts = chartData(workspace);
+  const greeting = useDashboardGreeting(workspace.user.name, "ADMIN");
   const workspacePeriod = workspace.teamPerformance?.period ?? null;
   const initialPeriod: TeamPerformancePeriod = isTeamPerformancePeriod(workspacePeriod) ? workspacePeriod : "today";
   const [performancePeriod, setPerformancePeriod] = React.useState<TeamPerformancePeriod>(initialPeriod);
@@ -3005,9 +3052,9 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
   return (
     <div ref={dashboardRef} className="space-y-6">
       <PageHeader
-        eyebrow="Admin Dashboard"
-        title="Business Control Center"
-        description="Monitor CRM performance, team activity, leads, customers, follow-ups, rewards, and system health from one executive dashboard."
+        eyebrow={greeting.eyebrow}
+        title={greeting.title}
+        description={greeting.description}
         actions={
           <>
             <CreateTodayTaskButton
