@@ -21,6 +21,9 @@ type CreateTaskBody = {
   taskDate?: string;
   assignedToId?: string;
   productId?: string;
+  customerContactPerson?: string;
+  customerPhone?: string;
+  customerCity?: string;
 };
 
 function parsePriority(value: unknown): TaskPriorityFilter {
@@ -45,6 +48,9 @@ export async function POST(request: Request) {
     const notes = body.notes?.trim();
     const assignedToId = body.assignedToId?.trim();
     const productId = body.productId?.trim();
+    const customerContactPerson = body.customerContactPerson?.trim();
+    const customerPhone = body.customerPhone?.trim();
+    const customerCity = body.customerCity?.trim();
     const priority = parsePriority(body.priority);
     const dateInput = body.taskDateTime?.trim() || body.taskDate?.trim() || "";
     const taskDateTime = dateInput ? parseTaskDateTimeInput(dateInput) : null;
@@ -77,6 +83,9 @@ export async function POST(request: Request) {
         taskDateTime,
         assignedToId,
         productId,
+        customerContactPerson,
+        customerPhone,
+        customerCity,
       },
     );
 

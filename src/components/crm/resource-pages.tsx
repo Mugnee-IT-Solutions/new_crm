@@ -834,10 +834,10 @@ function EntityOptions({ workspace, type }: { workspace: CrmWorkspace; type: "us
               : workspace.products.map((item) => [item.id, item.name]);
 
   return (
-    <>
+    <div className="space-y-5">
       <option value="">Select</option>
       {rows.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-    </>
+    </div>
   );
 }
 
@@ -3055,7 +3055,7 @@ export function LeadsPage({ workspace }: { role: Role; workspace: CrmWorkspace }
   };
 
   return (
-    <>
+    <div className="space-y-5">
       <PageHeader
         title="Leads"
         description="Manage opportunities with score, priority, ownership, communication count, and follow-up tracking."
@@ -3241,7 +3241,7 @@ export function LeadsPage({ workspace }: { role: Role; workspace: CrmWorkspace }
           </div>
         ) : null}
       </FormModal>
-    </>
+    </div>
   );
 }
 
@@ -4422,6 +4422,9 @@ export function TaskCreateModal({
   const [title, setTitle] = React.useState("Call");
   const [companyId, setCompanyId] = React.useState("");
   const [companyLabel, setCompanyLabel] = React.useState("");
+  const [customerContactPerson, setCustomerContactPerson] = React.useState("");
+  const [customerPhone, setCustomerPhone] = React.useState("");
+  const [customerCity, setCustomerCity] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [productId, setProductId] = React.useState("");
   const [assignedToId, setAssignedToId] = React.useState("");
@@ -4461,12 +4464,16 @@ export function TaskCreateModal({
     if (role === "SUPERVISOR") return workspace.user.id ?? assigneeOptions[0]?.id ?? "";
     return assigneeOptions[0]?.id ?? "";
   }, [assigneeOptions, role, workspace.user.id]);
+  const trimmedCompanyLabel = companyLabel.trim();
 
   React.useEffect(() => {
     if (!open) return;
     setTitle(initialTask?.title || "Call");
     setCompanyId(initialTask?.companyId ?? "");
     setCompanyLabel(initialTask?.companyName ?? "");
+    setCustomerContactPerson("");
+    setCustomerPhone("");
+    setCustomerCity("");
     setDescription(initialTask?.description && initialTask.description !== "-" ? initialTask.description : "");
     setProductId(initialTask?.productId ?? "");
     setAssignedToId(initialTask?.assignedToId ?? defaultAssigneeId);
@@ -4480,8 +4487,8 @@ export function TaskCreateModal({
     setPending(true);
     setMessage("");
 
-    if (!companyId) {
-      setMessage("Please select a company from the list.");
+    if (!companyId && !trimmedCompanyLabel) {
+      setMessage("Please select or type a company name.");
       setPending(false);
       return;
     }
@@ -4499,12 +4506,15 @@ export function TaskCreateModal({
         body: JSON.stringify({
           title,
           companyId,
-          companyName: companyLabel,
+          companyName: trimmedCompanyLabel,
           description,
           productId,
           assignedToId,
           priority,
           taskDateTime,
+          customerContactPerson,
+          customerPhone,
+          customerCity,
         }),
       });
       const result = await response.json();
@@ -4602,9 +4612,48 @@ export function TaskCreateModal({
             setCompanyId(value);
             setCompanyLabel(label);
           }}
-          required
-          placeholder="Search company"
+          placeholder="Search or type company"
         />
+        <div className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/80 p-4">
+          <p className="text-sm font-semibold text-slate-700">
+            If the customer does not exist yet, simply type a new company name here.
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            When the task is saved, that company will be added to Customers automatically. Fill the optional fields below to save a more complete customer record.
+          </p>
+          <p className="hidden">
+            Existing customer না থাকলে নতুন company name type করলেই save হবে.
+          </p>
+          <p className="hidden">
+            Task save করার সময় নতুন company automatically customer list-এ add হয়ে যাবে. নিচের fields গুলো দিলে record আরও complete হবে.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <label className="space-y-1.5">
+              <span className="text-sm font-semibold text-slate-700">Contact Person</span>
+              <Input
+                value={customerContactPerson}
+                onChange={(event) => setCustomerContactPerson(event.target.value)}
+                placeholder="Optional"
+              />
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-sm font-semibold text-slate-700">Phone</span>
+              <Input
+                value={customerPhone}
+                onChange={(event) => setCustomerPhone(event.target.value)}
+                placeholder="Optional"
+              />
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-sm font-semibold text-slate-700">City / Area</span>
+              <Input
+                value={customerCity}
+                onChange={(event) => setCustomerCity(event.target.value)}
+                placeholder="Optional"
+              />
+            </label>
+          </div>
+        </div>
         <label className="block space-y-1.5">
           <span className="text-sm font-semibold text-slate-700">Task Details</span>
           <textarea
@@ -6189,6 +6238,37 @@ function productAccentTone(seed: string) {
   return tones[index];
 }
 
+function normalizeProductLookup(value?: string | null) {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function matchesProductLead(product: ProductRow, lead: LeadRow) {
+  if (lead.productInterestId && lead.productInterestId === product.id) return true;
+  return normalizeProductLookup(lead.productInterest) === normalizeProductLookup(product.name);
+}
+
+function productRatingFromScore(score?: number | null) {
+  if (typeof score !== "number" || !Number.isFinite(score) || score <= 0) {
+    return { label: "No rating yet", stars: 0, tone: "text-slate-400" };
+  }
+
+  if (score >= 80) return { label: "Hot", stars: 5, tone: "text-emerald-600" };
+  if (score >= 60) return { label: "Strong", stars: 4, tone: "text-blue-600" };
+  if (score >= 40) return { label: "Warm", stars: 3, tone: "text-amber-600" };
+  if (score >= 20) return { label: "Early", stars: 2, tone: "text-orange-500" };
+  return { label: "Cold", stars: 1, tone: "text-rose-500" };
+}
+
+function productStageBadgeVariant(stage?: string | null): "default" | "success" | "warning" | "danger" | "neutral" | "violet" {
+  const normalized = stage?.trim().toLowerCase() ?? "";
+  if (!normalized) return "neutral";
+  if (normalized.includes("won") || normalized.includes("sale")) return "success";
+  if (normalized.includes("lost") || normalized.includes("failed")) return "danger";
+  if (normalized.includes("quotation") || normalized.includes("demo") || normalized.includes("negotiation")) return "violet";
+  if (normalized.includes("follow")) return "warning";
+  return "default";
+}
+
 function ProductVisual({ product }: { product: ProductRow }) {
   const tone = productAccentTone(product.name);
 
@@ -6199,7 +6279,7 @@ function ProductVisual({ product }: { product: ProductRow }) {
         <div className="min-w-0">
           <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-white/70">{product.category || "Product"}</p>
           <h2 className="mt-2 truncate text-2xl font-black">{product.name}</h2>
-          <p className="mt-2 text-sm font-medium text-white/80">{product.brand || "No brand"} • {product.status}</p>
+          <p className="mt-2 text-sm font-medium text-white/80">{product.brand || "No brand"} / {product.status}</p>
         </div>
         <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-sm font-black shadow-lg backdrop-blur">
           {formatCurrency(product.price)}
@@ -6522,7 +6602,6 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
 export function ProductDetailsPage({ role, workspace, product, productEngagement }: { role: Role; workspace: CrmWorkspace; product?: ProductRow; productEngagement?: ProductEngagementData }) {
   const active = product;
   if (!active) return <EmptyState title="Product not found" description="The requested product is not available." />;
-  const opportunities = workspace.leads.filter((lead) => lead.productInterest === active.name).slice(0, 8);
   const engagement = productEngagement ?? {
     summary: {
       totalCompaniesContacted: 0,
@@ -6537,85 +6616,300 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
     filters: {},
     filterOptions: { communicationTypes: [], assignedUsers: [] },
   };
-  const recentConversations = engagement.rows.slice(0, 5);
+  const productLeads = workspace.leads.filter((lead) => matchesProductLead(active, lead));
+  const productLeadMap = new Map(productLeads.map((lead) => [lead.id, lead]));
+  const fallbackEngagementRows = productLeads
+    .map((lead) => ({
+      id: `fallback-${lead.id}`,
+      companyId: lead.companyId ?? null,
+      leadId: lead.id,
+      companyName: lead.company || lead.customerName || "-",
+      leadName: lead.title || "-",
+      communicationType: "-",
+      summary: lead.notes || "-",
+      discussionTopic: active.name,
+      nextFollowUpDate: lead.followUpDate || "-",
+      lastContactDate: lead.createdAt || "-",
+      status: lead.status || "Interested",
+      assignedMarketer: lead.assignedTo || "-",
+      communicationCount: lead.communicationCount,
+      followUpCount: lead.followUpCount,
+      quotationCount: 0,
+      probability: lead.purchaseProbability,
+    }))
+    .sort((left, right) => right.communicationCount - left.communicationCount || right.probability - left.probability);
+  const insightSourceRows = engagement.rows.length ? engagement.rows : fallbackEngagementRows;
+  const customerInsightRows = insightSourceRows.map((row) => {
+    const relatedLead =
+      (row.leadId ? productLeadMap.get(row.leadId) : undefined) ??
+      productLeads.find((lead) => {
+        if (row.companyId && lead.companyId === row.companyId) return true;
+        return row.companyName !== "-" && row.companyName === lead.company;
+      });
+    const rating = productRatingFromScore(relatedLead?.score);
+
+    return {
+      ...row,
+      customerName: row.companyName !== "-" ? row.companyName : relatedLead?.company || relatedLead?.customerName || "-",
+      leadDisplayName: row.leadName !== "-" ? row.leadName : relatedLead?.title || "-",
+      stage: row.status !== "-" ? row.status : relatedLead?.status || "Interested",
+      assignedOwner: row.assignedMarketer !== "-" ? row.assignedMarketer : relatedLead?.assignedTo || "-",
+      probability: relatedLead?.purchaseProbability ?? 0,
+      ratingLabel: rating.label,
+      ratingTone: rating.tone,
+      ratingStars: rating.stars,
+      ratingScore: relatedLead?.score ?? 0,
+      nextFollowUpDisplay: row.nextFollowUpDate !== "-" ? row.nextFollowUpDate : relatedLead?.followUpDate || "-",
+      lastContactDisplay: row.lastContactDate !== "-" ? row.lastContactDate : relatedLead?.createdAt || "-",
+    };
+  });
+  const recentConversations = customerInsightRows.slice(0, 4);
+  const opportunities = customerInsightRows.slice(0, 8);
+  const descriptionText = active.description && active.description !== "-" ? active.description : "No product summary saved yet.";
+  const specificationText = active.specification && active.specification !== "-" ? active.specification : "No specification saved yet.";
+  const averageScore = productLeads.length
+    ? Math.round(productLeads.reduce((sum, lead) => sum + lead.score, 0) / productLeads.length)
+    : 0;
+  const averageProbability = productLeads.length
+    ? Math.round(productLeads.reduce((sum, lead) => sum + lead.purchaseProbability, 0) / productLeads.length)
+    : 0;
+  const averageRating = productRatingFromScore(averageScore);
+  const stageOrder = ["Interested", "Follow-up", "Demo", "Quotation", "Negotiation", "Won", "Lost"];
+  const stageSummaryMap = new Map<string, number>();
+  for (const row of customerInsightRows) {
+    const key = row.stage || "Interested";
+    stageSummaryMap.set(key, (stageSummaryMap.get(key) ?? 0) + 1);
+  }
+  const stageSummary = Array.from(stageSummaryMap.entries())
+    .map(([name, leads]) => ({ name, leads }))
+    .sort((left, right) => {
+      const leftIndex = stageOrder.indexOf(left.name);
+      const rightIndex = stageOrder.indexOf(right.name);
+      const safeLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
+      const safeRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
+      return safeLeft - safeRight || right.leads - left.leads;
+    });
+  const assignedTeam = Array.from(
+    customerInsightRows.reduce((map, row) => {
+      if (!row.assignedOwner || row.assignedOwner === "-") return map;
+      const entry = map.get(row.assignedOwner) ?? {
+        name: row.assignedOwner,
+        customers: new Set<string>(),
+        leadCount: 0,
+        communicationCount: 0,
+        followUpCount: 0,
+      };
+      entry.customers.add(row.customerName);
+      entry.leadCount += row.leadId ? 1 : 0;
+      entry.communicationCount += row.communicationCount;
+      entry.followUpCount += row.followUpCount;
+      map.set(row.assignedOwner, entry);
+      return map;
+    }, new Map<string, { name: string; customers: Set<string>; leadCount: number; communicationCount: number; followUpCount: number }>()),
+  )
+    .map(([name, entry]) => ({
+      name,
+      customerCount: entry.customers.size,
+      leadCount: entry.leadCount,
+      communicationCount: entry.communicationCount,
+      followUpCount: entry.followUpCount,
+    }))
+    .sort((left, right) => right.communicationCount - left.communicationCount || right.customerCount - left.customerCount);
 
   return (
-    <>
+    <div className="space-y-5">
       <Link href={rolePath(role, "products")} className="inline-flex items-center gap-2 text-sm font-bold text-blue-700">
         <ArrowLeft className="h-4 w-4" />
         Back to products
       </Link>
-      <div className="grid gap-5 xl:grid-cols-[360px_1fr]">
-        <Card className="p-5">
-          <ProductVisual product={active} />
-          <h1 className="mt-5 text-2xl font-black text-slate-950">{active.name}</h1>
-          <p className="text-sm text-slate-500">{active.category} / {active.brand}</p>
-          <p className="mt-3 text-xl font-black text-blue-700">{formatCurrency(active.price)}</p>
-        </Card>
-        <div className="grid gap-5">
-          <DashboardCard title="Specification"><p className="text-sm leading-6 text-slate-600">{active.specification}</p></DashboardCard>
-          <div className="grid gap-5 xl:grid-cols-4">
-            <StatCard title="Companies Contacted" value={String(engagement.summary.totalCompaniesContacted)} helper="Product conversations" icon={WalletCards} tone="bg-blue-100 text-blue-700" />
-            <StatCard title="Total Communications" value={String(engagement.summary.totalCommunicationCount)} helper="Calls, meetings, emails, WhatsApp" icon={MessageSquare} tone="bg-indigo-100 text-indigo-700" />
-            <StatCard title="Follow-up Count" value={String(engagement.summary.followUpCount)} helper="Open discussions" icon={CalendarClock} tone="bg-amber-100 text-amber-700" />
-            <StatCard title="Conversion Rate" value={`${engagement.summary.conversionRate}%`} helper="Leads to sales" icon={Check} tone="bg-violet-100 text-violet-700" />
-          </div>
-          <div className="grid gap-5 xl:grid-cols-[1.1fr_1.3fr]">
-            <DashboardCard title="Product Activity Summary">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                  <p className="text-xs font-bold uppercase text-slate-500">Company Conversations</p>
-                  <p className="mt-2 text-2xl font-black text-slate-950">{engagement.summary.totalCompaniesContacted}</p>
-                  <p className="mt-1 text-sm text-slate-500">How many companies have been contacted about this product.</p>
+      <div className="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
+        <div className="space-y-5">
+          <Card className="p-5">
+            <ProductVisual product={active} />
+            <div className="mt-5 space-y-4">
+              <div>
+                <h1 className="text-2xl font-black text-slate-950">{active.name}</h1>
+                <p className="mt-1 text-sm text-slate-500">{active.category || "Product"} / {active.brand || "No brand"}</p>
+              </div>
+              <div className="rounded-[24px] border border-slate-200 bg-slate-50/90 p-4">
+                <p className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-500">Price & Positioning</p>
+                <p className="mt-3 text-2xl font-black text-blue-700">{formatCurrency(active.price)}</p>
+                <p className="mt-3 text-sm leading-6 text-slate-600">{descriptionText}</p>
+              </div>
+              <div className="grid gap-3">
+                <div className="rounded-[22px] border border-slate-200 bg-white p-4">
+                  <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Specification</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{specificationText}</p>
                 </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                  <p className="text-xs font-bold uppercase text-slate-500">Leads Involved</p>
-                  <p className="mt-2 text-2xl font-black text-slate-950">{engagement.summary.totalLeadsInterested}</p>
-                  <p className="mt-1 text-sm text-slate-500">Leads currently connected to this product.</p>
-                </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                  <p className="text-xs font-bold uppercase text-slate-500">Follow-ups Created</p>
-                  <p className="mt-2 text-2xl font-black text-slate-950">{engagement.summary.followUpCount}</p>
-                  <p className="mt-1 text-sm text-slate-500">Total follow-ups generated from product discussions.</p>
-                </div>
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                  <p className="text-xs font-bold uppercase text-slate-500">Quotation / Sales</p>
-                  <p className="mt-2 text-2xl font-black text-slate-950">{engagement.summary.quotationSentCount} / {engagement.summary.salesCount}</p>
-                  <p className="mt-1 text-sm text-slate-500">Sent quotations alongside converted sales.</p>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <div className="rounded-[22px] border border-slate-200 bg-white p-4">
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Sales Snapshot</p>
+                    <p className="mt-2 text-lg font-black text-slate-950">{engagement.summary.quotationSentCount} Quotations / {engagement.summary.salesCount} Sales</p>
+                    <p className="mt-1 text-sm text-slate-500">Actual quotation and converted sale count from CRM records.</p>
+                  </div>
+                  <div className="rounded-[22px] border border-slate-200 bg-white p-4">
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Average Probability</p>
+                    <p className="mt-2 text-lg font-black text-slate-950">{averageProbability}%</p>
+                    <p className="mt-1 text-sm text-slate-500">{averageProbability ? "Based on linked lead pipeline probability." : "No lead probability saved yet."}</p>
+                  </div>
                 </div>
               </div>
-            </DashboardCard>
-            <DashboardCard title="Recent Product Conversations">
+            </div>
+          </Card>
+          <Card className="p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Assigned Team</p>
+                <h2 className="mt-1 text-lg font-black text-slate-950">Who is handling this product</h2>
+              </div>
+              <Badge variant="neutral">{assignedTeam.length} owners</Badge>
+            </div>
+            <div className="mt-4 space-y-3">
+              {assignedTeam.length ? assignedTeam.map((member) => (
+                <div key={member.name} className="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-black text-slate-950">{member.name}</p>
+                    <Badge variant="default">{member.customerCount} customers</Badge>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold text-slate-500">
+                    <span>{member.leadCount} leads</span>
+                    <span>{member.communicationCount} communications</span>
+                    <span>{member.followUpCount} follow-ups</span>
+                  </div>
+                </div>
+              )) : (
+                <p className="text-sm font-semibold text-slate-500">No marketer or supervisor has been linked to this product yet.</p>
+              )}
+            </div>
+          </Card>
+        </div>
+        <div className="space-y-5">
+          <Card className="overflow-hidden border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-blue-50/70 p-5 shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.22em] text-blue-600">Product Command Center</p>
+                <h2 className="mt-1 text-2xl font-black text-slate-950">Easy product overview for admin and supervisor</h2>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                  Interested customers, assigned owners, call count, pipeline stage, and CRM rating are all shown here from saved leads, communications, quotations, and follow-ups.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="neutral">{active.category || "Product"}</Badge>
+                {active.brand && active.brand !== "-" ? <Badge variant="neutral">{active.brand}</Badge> : null}
+                <Badge variant={active.status === "Active" ? "success" : "neutral"}>{active.status}</Badge>
+                <Badge variant={engagement.summary.conversionRate > 0 ? "success" : "warning"}>{engagement.summary.conversionRate}% conversion</Badge>
+              </div>
+            </div>
+          </Card>
+          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-5">
+            <StatCard title="Interested Customers" value={String(engagement.summary.totalCompaniesContacted)} helper="Companies or leads linked to this product" icon={Building2} tone="bg-blue-100 text-blue-700" />
+            <StatCard title="Assigned Marketers" value={String(assignedTeam.length)} helper={assignedTeam[0] ? `${assignedTeam[0].name} currently leading` : "No owner assigned yet"} icon={UserPlus} tone="bg-emerald-100 text-emerald-700" />
+            <StatCard title="Calls / Communications" value={String(engagement.summary.totalCommunicationCount)} helper="Phone, WhatsApp, email, and meetings" icon={PhoneCall} tone="bg-indigo-100 text-indigo-700" />
+            <StatCard title="Open Follow-ups" value={String(engagement.summary.followUpCount)} helper="Saved next steps for this product" icon={CalendarClock} tone="bg-amber-100 text-amber-700" />
+            <StatCard title="Average CRM Rating" value={averageScore ? `${averageScore}/100` : "0"} helper={averageScore ? averageRating.label : "No rating yet"} icon={Star} tone="bg-rose-100 text-rose-700" />
+          </div>
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.9fr)]">
+            <div className="contents">
+              <DashboardCard title="Interested Customers">
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {customerInsightRows.length ? customerInsightRows.slice(0, 6).map((row) => (
+                    <div key={`customer-${row.id}`} className="rounded-[22px] border border-slate-200 bg-slate-50/85 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-black text-slate-950">
+                            <EntityLink href={row.companyId ? `/customers/${row.companyId}` : undefined} className="font-black">{row.customerName}</EntityLink>
+                          </p>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">
+                            {row.leadId ? <EntityLink href={`/leads/${row.leadId}`} className="font-semibold">{row.leadDisplayName}</EntityLink> : row.leadDisplayName}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Badge variant={productStageBadgeVariant(row.stage)}>{row.stage}</Badge>
+                          {row.assignedOwner !== "-" ? <Badge variant="neutral">{row.assignedOwner}</Badge> : null}
+                        </div>
+                      </div>
+                      <div className="mt-3 flex items-center gap-1">
+                        {Array.from({ length: 5 }).map((_, index) => (
+                          <Star key={`${row.id}-star-${index}`} className={cn("h-3.5 w-3.5", index < row.ratingStars ? `${row.ratingTone} fill-current` : "text-slate-200")} />
+                        ))}
+                        <span className="ml-1 text-xs font-bold text-slate-500">{row.ratingScore ? `${row.ratingScore}/100 ${row.ratingLabel}` : "No rating yet"}</span>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-3 text-xs font-semibold text-slate-500">
+                        <span>{row.communicationCount} communications</span>
+                        <span>{row.followUpCount} follow-ups</span>
+                        <span>{row.quotationCount} quotations</span>
+                        <span>{row.probability}% probability</span>
+                      </div>
+                      <div className="mt-3 space-y-1 text-xs text-slate-500">
+                        <p>Last contact: {row.lastContactDisplay}</p>
+                        <p>{row.nextFollowUpDisplay !== "-" ? `Next follow-up: ${row.nextFollowUpDisplay}` : "No upcoming follow-up"}</p>
+                      </div>
+                    </div>
+                  )) : (
+                    <p className="text-sm font-semibold text-slate-500">No customer interest or pipeline activity has been saved for this product yet.</p>
+                  )}
+                </div>
+              </DashboardCard>
+              <div className="space-y-5">
+                <DashboardCard title="Customer Stage Snapshot">
+                  <div className="space-y-3">
+                    <div className="rounded-[22px] border border-blue-100 bg-blue-50/70 p-4">
+                      <p className="text-[11px] font-black uppercase tracking-[0.18em] text-blue-600">Pipeline Health</p>
+                      <p className="mt-2 text-lg font-black text-slate-950">{stageSummary.length ? `${stageSummary[0]?.name} is the busiest stage` : "No stage activity yet"}</p>
+                      <p className="mt-1 text-sm text-slate-600">
+                        {stageSummary.length ? `${stageSummary[0]?.leads ?? 0} active customer records are currently sitting in the top stage bucket.` : "Once calls, follow-ups, or leads are created, the live stage mix will appear here."}
+                      </p>
+                    </div>
+                    {stageSummary.length ? stageSummary.map((stage) => (
+                      <div key={stage.name} className="rounded-[20px] border border-slate-200 bg-white p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <Badge variant={productStageBadgeVariant(stage.name)}>{stage.name}</Badge>
+                            <span className="text-sm font-semibold text-slate-600">{stage.leads} customers</span>
+                          </div>
+                          <span className="text-sm font-black text-slate-950">
+                            {customerInsightRows.length ? Math.round((stage.leads / customerInsightRows.length) * 100) : 0}%
+                          </span>
+                        </div>
+                      </div>
+                    )) : (
+                      <p className="text-sm font-semibold text-slate-500">No stage distribution available yet.</p>
+                    )}
+                  </div>
+                </DashboardCard>
+                <DashboardCard title="Recent Product Conversations">
               <div className="space-y-3">
                 {recentConversations.length ? recentConversations.map((row) => (
                   <div key={`conversation-${row.id}`} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="text-sm font-black text-slate-950">
-                          <EntityLink href={row.companyId ? `/customers/${row.companyId}` : undefined} className="font-black">{row.companyName}</EntityLink>
+                          <EntityLink href={row.companyId ? `/customers/${row.companyId}` : undefined} className="font-black">{row.customerName}</EntityLink>
                         </p>
                         <p className="text-xs font-semibold text-slate-500">
-                          {row.leadId ? <EntityLink href={`/leads/${row.leadId}`} className="font-semibold">{row.leadName}</EntityLink> : row.leadName}
-                          {row.assignedMarketer !== "-" ? <span> · {row.assignedMarketer}</span> : null}
+                          {row.leadId ? <EntityLink href={`/leads/${row.leadId}`} className="font-semibold">{row.leadDisplayName}</EntityLink> : row.leadDisplayName}
+                          {row.assignedOwner !== "-" ? <span> / {row.assignedOwner}</span> : null}
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <StatusBadge value={row.communicationType} />
-                        <StatusBadge value={row.status} />
+                        <Badge variant={productStageBadgeVariant(row.stage)}>{row.stage}</Badge>
                       </div>
                     </div>
                     {row.discussionTopic !== "-" ? <p className="mt-3 text-xs font-bold uppercase text-slate-500">Topic: <span className="normal-case text-slate-700">{row.discussionTopic}</span></p> : null}
                     <p className="mt-2 text-sm leading-6 text-slate-600">{row.summary !== "-" ? row.summary : "No discussion summary recorded yet."}</p>
                     <div className="mt-3 flex flex-wrap gap-4 text-xs font-semibold text-slate-500">
-                      <span>Last Contact: {row.lastContactDate}</span>
+                      <span>Last Contact: {row.lastContactDisplay}</span>
+                      <span>Calls: {row.communicationCount}</span>
                       <span>Follow-ups: {row.followUpCount}</span>
-                      <span>Communications: {row.communicationCount}</span>
-                      {row.nextFollowUpDate !== "-" ? <span>Next Follow-up: {row.nextFollowUpDate}</span> : null}
+                      {row.nextFollowUpDisplay !== "-" ? <span>Next Follow-up: {row.nextFollowUpDisplay}</span> : null}
                     </div>
                   </div>
                 )) : <p className="text-sm font-semibold text-slate-500">No saved communication history for this product yet.</p>}
               </div>
-            </DashboardCard>
+                </DashboardCard>
+              </div>
+            </div>
           </div>
           <Card className="p-5">
             <Tabs
@@ -6627,27 +6921,46 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
             >
               {(value) => value === "overview" ? (
                 <div className="grid gap-5">
-                  <ChartCard title="Product Opportunity Pipeline"><ProductBarChart data={workspace.productOpportunities.map((item) => ({ name: item.name, leads: item.interestedCustomers }))} /></ChartCard>
-                  <DashboardCard title="Product-wise Opportunity">
+                  <ChartCard title="Opportunity Stage Mix">
+                    {stageSummary.length ? (
+                      <ProductBarChart data={stageSummary.map((item) => ({ name: item.name, leads: item.leads }))} />
+                    ) : (
+                      <div className="rounded-[22px] border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm font-semibold text-slate-500">
+                        No live stage data is available for this product yet.
+                      </div>
+                    )}
+                  </ChartCard>
+                  <DashboardCard title="Customer Opportunity Table">
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
-                          <tr>{["Customer", "Lead", "Status", "Probability"].map((heading) => <th key={heading} className="px-4 py-3 font-bold">{heading}</th>)}</tr>
+                          <tr>{["Customer", "Assigned", "Stage", "Calls", "Rating", "Probability"].map((heading) => <th key={heading} className="px-4 py-3 font-bold">{heading}</th>)}</tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {opportunities.length ? opportunities.map((lead) => (
-                            <tr key={lead.id}>
+                          {opportunities.length ? opportunities.map((row) => (
+                            <tr key={row.id}>
                               <td className="px-4 py-3">
-                                <EntityLink href={lead.companyId ? `/customers/${lead.companyId}` : undefined} className="font-bold">{lead.company}</EntityLink>
+                                <div className="min-w-[220px]">
+                                  <EntityLink href={row.companyId ? `/customers/${row.companyId}` : undefined} className="font-bold">{row.customerName}</EntityLink>
+                                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                                    {row.leadId ? <EntityLink href={`/leads/${row.leadId}`} className="font-semibold">{row.leadDisplayName}</EntityLink> : row.leadDisplayName}
+                                  </p>
+                                </div>
                               </td>
+                              <td className="px-4 py-3 font-semibold text-slate-700">{row.assignedOwner}</td>
+                              <td className="px-4 py-3"><Badge variant={productStageBadgeVariant(row.stage)}>{row.stage}</Badge></td>
+                              <td className="px-4 py-3 font-semibold text-slate-700">{row.communicationCount}</td>
                               <td className="px-4 py-3">
-                                <EntityLink href={`/leads/${lead.id}`} className="font-bold">{lead.title}</EntityLink>
+                                <div className="flex items-center gap-1">
+                                  {Array.from({ length: 5 }).map((_, index) => (
+                                    <Star key={`${row.id}-table-star-${index}`} className={cn("h-3.5 w-3.5", index < row.ratingStars ? `${row.ratingTone} fill-current` : "text-slate-200")} />
+                                  ))}
+                                </div>
                               </td>
-                              <td className="px-4 py-3"><StatusBadge value={lead.status} /></td>
-                              <td className="px-4 py-3 font-bold text-slate-900">{lead.purchaseProbability}%</td>
+                              <td className="px-4 py-3 font-bold text-slate-900">{row.probability}%</td>
                             </tr>
                           )) : (
-                            <tr><td colSpan={4} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">No saved opportunities for this product yet.</td></tr>
+                            <tr><td colSpan={6} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">No saved opportunities for this product yet.</td></tr>
                           )}
                         </tbody>
                       </table>
@@ -6728,9 +7041,9 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
               )}
             </Tabs>
           </Card>
-        </div>
       </div>
-    </>
+    </div>
+  </div>
   );
 }
 

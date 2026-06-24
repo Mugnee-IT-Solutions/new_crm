@@ -532,6 +532,103 @@ export async function syncPreviousTaskFlags() {
   });
 }
 
+async function resolveTaskCompanyRecord(
+  prisma: ReturnType<typeof getPrisma>,
+  actor: TaskActor,
+  assignedToId: string,
+  input: {
+    title: string;
+    companyId?: string;
+    companyName?: string;
+    description?: string;
+    notes?: string;
+    customerContactPerson?: string;
+    customerPhone?: string;
+    customerCity?: string;
+  },
+) {
+  const companyId = input.companyId?.trim();
+  const companyName = input.companyName?.trim();
+
+  if (companyId) {
+    if (!(await hasCustomerAccess(prisma, { id: actor.id, role: actor.role }, companyId))) {
+      throw new TaskInputError("You are not allowed to use this customer record.", 403);
+    }
+
+    const company = await prisma.customerCompany.findUnique({
+      where: { id: companyId },
+      select: { id: true, name: true },
+    });
+
+    if (!company) {
+      throw new TaskInputError("Selected company was not found.");
+    }
+
+    return {
+      companyId: company.id,
+      companyName: company.name,
+      createdCustomer: false,
+    };
+  }
+
+  if (!companyName) {
+    throw new TaskInputError("Company is required.");
+  }
+
+  const normalizedCompanyName = normalizeText(companyName);
+  const matchedCompany = await prisma.customerCompany.findFirst({
+    where: {
+      AND: [
+        await buildCustomerScopeWhere(prisma, { id: actor.id, role: actor.role }),
+        { name: { equals: normalizedCompanyName, mode: "insensitive" } },
+      ],
+    },
+    select: { id: true, name: true },
+  });
+
+  if (matchedCompany) {
+    return {
+      companyId: matchedCompany.id,
+      companyName: matchedCompany.name,
+      createdCustomer: false,
+    };
+  }
+
+  const customerPhone = input.customerPhone?.trim() ?? "";
+  const customerContactPerson = input.customerContactPerson?.trim();
+  const customerCity = input.customerCity?.trim();
+  const taskNotes = [
+    `Auto-created from task: ${normalizeText(input.title)}`,
+    input.description?.trim() ? normalizeText(input.description) : "",
+    input.notes?.trim() ? `Task note: ${normalizeText(input.notes)}` : "",
+  ].filter(Boolean);
+
+  const createdCustomer = await prisma.customerCompany.create({
+    data: {
+      name: normalizedCompanyName,
+      contactPerson: customerContactPerson ? normalizeText(customerContactPerson) : undefined,
+      phone: customerPhone,
+      city: customerCity ? normalizeText(customerCity) : undefined,
+      industry: "General",
+      notes: taskNotes.join("\n\n"),
+      rawData: {
+        "Lead Source": "Task Auto Create",
+        "Primary Phone": customerPhone,
+        "Contact Person 1 Name": customerContactPerson ?? "",
+        "City / Zilla": customerCity ?? "",
+      },
+      assignedTo: { connect: { id: assignedToId } },
+    },
+    select: { id: true, name: true },
+  });
+
+  return {
+    companyId: createdCustomer.id,
+    companyName: createdCustomer.name,
+    createdCustomer: true,
+  };
+}
+
 export async function getTodayTasks(actor: TaskActor, filters: TaskFilters = {}) {
   const prisma = getPrisma();
   await syncPreviousTaskFlags();
@@ -958,6 +1055,9 @@ export async function createTaskEntry(actor: TaskActor, input: {
   taskDateTime: Date;
   assignedToId?: string;
   productId?: string;
+  customerContactPerson?: string;
+  customerPhone?: string;
+  customerCity?: string;
 }) {
   const prisma = getPrisma();
   const today = startOfToday();
@@ -965,48 +1065,19 @@ export async function createTaskEntry(actor: TaskActor, input: {
   const taskDateTime = new Date(input.taskDateTime);
   const taskDate = startOfDay(taskDateTime);
   const assignedToId = await resolveAssignedTaskUser(prisma, actor, input.assignedToId);
-
-  let companyId = input.companyId?.trim();
-  let companyName = input.companyName?.trim();
+  const companyRecord = await resolveTaskCompanyRecord(prisma, actor, assignedToId, {
+    title: normalizedTitle,
+    companyId: input.companyId,
+    companyName: input.companyName,
+    description: input.description,
+    notes: input.notes,
+    customerContactPerson: input.customerContactPerson,
+    customerPhone: input.customerPhone,
+    customerCity: input.customerCity,
+  });
+  const companyId = companyRecord.companyId;
+  const companyName = companyRecord.companyName;
   const productId = input.productId?.trim();
-
-  if (companyId) {
-    if (!(await hasCustomerAccess(prisma, { id: actor.id, role: actor.role }, companyId))) {
-      throw new TaskInputError("You are not allowed to use this customer record.", 403);
-    }
-    const company = await prisma.customerCompany.findUnique({
-      where: { id: companyId },
-      select: { id: true, name: true },
-    });
-
-    if (!company) {
-      throw new TaskInputError("Selected company was not found.");
-    }
-
-    companyId = company.id;
-    companyName = company.name;
-  } else if (companyName) {
-    const matchedCompany = await prisma.customerCompany.findFirst({
-      where: {
-        AND: [
-          await buildCustomerScopeWhere(prisma, { id: actor.id, role: actor.role }),
-          { name: { equals: normalizeText(companyName), mode: "insensitive" } },
-        ],
-      },
-      select: { id: true, name: true },
-    });
-
-    if (matchedCompany) {
-      companyId = matchedCompany.id;
-      companyName = matchedCompany.name;
-    }
-  } else {
-    throw new TaskInputError("Company is required.");
-  }
-
-  if (!companyName) {
-    throw new TaskInputError("Company is required.");
-  }
 
   if (productId) {
     const product = await prisma.productService.findUnique({
@@ -1046,6 +1117,20 @@ export async function createTaskEntry(actor: TaskActor, input: {
     description: `${task.title} assigned to ${task.assignedTo?.name ?? "marketer"}`,
   });
 
+  if (companyRecord.createdCustomer && task.companyId) {
+    await prisma.activityTimeline.create({
+      data: {
+        title: "Customer Created",
+        description: `${task.companyName ?? companyName} was added from task planning.`,
+        entity: "CustomerCompany",
+        entityId: task.companyId,
+        userId: actor.id,
+        companyId: task.companyId,
+        taskId: task.id,
+      },
+    });
+  }
+
   if (assignedToId !== actor.id) {
     await prisma.notification.create({
       data: {
@@ -1072,6 +1157,9 @@ export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
   taskDateTime: Date;
   assignedToId?: string;
   productId?: string;
+  customerContactPerson?: string;
+  customerPhone?: string;
+  customerCity?: string;
 }) {
   const prisma = getPrisma();
   await syncPreviousTaskFlags();
@@ -1097,45 +1185,20 @@ export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
   const taskDateTime = new Date(input.taskDateTime);
   const taskDate = startOfDay(taskDateTime);
   const assignedToId = await resolveAssignedTaskUser(prisma, actor, input.assignedToId || existing.assignedToId || undefined);
-  let companyId = input.companyId?.trim();
-  let companyName = input.companyName?.trim();
+  const requestedCompanyName = input.companyName?.trim();
+  const companyRecord = await resolveTaskCompanyRecord(prisma, actor, assignedToId, {
+    title: input.title,
+    companyId: input.companyId?.trim() || (!requestedCompanyName ? existing.companyId || undefined : undefined),
+    companyName: requestedCompanyName || existing.companyName || undefined,
+    description: input.description,
+    notes: input.notes,
+    customerContactPerson: input.customerContactPerson,
+    customerPhone: input.customerPhone,
+    customerCity: input.customerCity,
+  });
+  const companyId = companyRecord.companyId;
+  const companyName = companyRecord.companyName;
   const productId = input.productId?.trim();
-
-  if (companyId) {
-    if (!(await hasCustomerAccess(prisma, { id: actor.id, role: actor.role }, companyId))) {
-      throw new TaskInputError("You are not allowed to use this customer record.", 403);
-    }
-    const company = await prisma.customerCompany.findUnique({
-      where: { id: companyId },
-      select: { id: true, name: true },
-    });
-    if (!company) {
-      throw new TaskInputError("Selected company was not found.");
-    }
-    companyId = company.id;
-    companyName = company.name;
-  } else if (companyName) {
-    const matchedCompany = await prisma.customerCompany.findFirst({
-      where: {
-        AND: [
-          await buildCustomerScopeWhere(prisma, { id: actor.id, role: actor.role }),
-          { name: { equals: normalizeText(companyName), mode: "insensitive" } },
-        ],
-      },
-      select: { id: true, name: true },
-    });
-    if (matchedCompany) {
-      companyId = matchedCompany.id;
-      companyName = matchedCompany.name;
-    }
-  } else if (existing.companyId && existing.companyName) {
-    companyId = existing.companyId;
-    companyName = existing.companyName;
-  }
-
-  if (!companyName) {
-    throw new TaskInputError("Company is required.");
-  }
 
   if (productId) {
     const product = await prisma.productService.findUnique({
@@ -1173,6 +1236,20 @@ export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
     title: "Task Updated",
     description: `${updated.title} updated`,
   });
+
+  if (companyRecord.createdCustomer && updated.companyId) {
+    await prisma.activityTimeline.create({
+      data: {
+        title: "Customer Created",
+        description: `${updated.companyName ?? companyName} was added from task planning.`,
+        entity: "CustomerCompany",
+        entityId: updated.companyId,
+        userId: actor.id,
+        companyId: updated.companyId,
+        taskId: updated.id,
+      },
+    });
+  }
 
   return mapTaskRecord(updated);
 }
