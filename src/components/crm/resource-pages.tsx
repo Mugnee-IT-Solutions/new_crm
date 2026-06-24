@@ -3997,53 +3997,10 @@ function CustomerPdfImportModal({
 
         {preview ? (
           <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
-                <p className="text-xs font-bold uppercase text-blue-600">Rows Ready</p>
-                <p className="mt-1 text-2xl font-black text-slate-950">{preview.totalRows}</p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                <p className="text-xs font-bold uppercase text-slate-500">Division</p>
-                <p className="mt-1 text-sm font-bold text-slate-900">{preview.context?.division || "-"}</p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                <p className="text-xs font-bold uppercase text-slate-500">District</p>
-                <p className="mt-1 text-sm font-bold text-slate-900">{preview.context?.district || "-"}</p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                <p className="text-xs font-bold uppercase text-slate-500">Thana</p>
-                <p className="mt-1 text-sm font-bold text-slate-900">{preview.context?.thana || "-"}</p>
-              </div>
+            <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
+              <p className="text-xs font-bold uppercase text-blue-600">Rows Ready</p>
+              <p className="mt-1 text-2xl font-black text-slate-950">{preview.totalRows}</p>
             </div>
-
-            {preview.previewRows.length ? (
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-black text-slate-950">PDF Preview</p>
-                  <span className="text-xs font-semibold text-slate-500">First {preview.previewRows.length} rows</span>
-                </div>
-                <div className="mt-3 overflow-hidden rounded-2xl border border-slate-100">
-                  <table className="min-w-full divide-y divide-slate-200 text-sm">
-                    <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
-                      <tr>
-                        <th className="px-3 py-2">Company</th>
-                        <th className="px-3 py-2">Phone</th>
-                        <th className="px-3 py-2">Location</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                      {preview.previewRows.map((row, index) => (
-                        <tr key={`${row.companyName}-${index}`}>
-                          <td className="px-3 py-2 font-semibold text-slate-900">{row.companyName}</td>
-                          <td className="px-3 py-2 text-slate-700">{row.primaryPhone}</td>
-                          <td className="px-3 py-2 text-slate-600">{row.address || row.city || "-"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ) : null}
 
             {role !== "MARKETER" && !assignLater ? (
               <div className="rounded-2xl border border-slate-200 bg-white p-4">

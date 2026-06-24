@@ -829,6 +829,167 @@ function parsePdfMadrashaRows(rawLines: string[]) {
   return finalizeParsedCustomerRows(rawRows);
 }
 
+function parsePdfMadrashaColumnRows(rawLines: string[]) {
+  let division = "";
+  let district = "";
+  let thana = "";
+  let serials: string[] = [];
+  let eiins: string[] = [];
+  let companyNames: string[] = [];
+  let villages: string[] = [];
+  let mobiles: string[] = [];
+  let activeColumn: "serials" | "eiins" | "names" | "villages" | "mobiles" | null = null;
+  const rawRows: Record<string, unknown>[] = [];
+
+  const normalizeInlineValue = (value: string) => value.replace(/\s+/g, " ").trim();
+  const hasPageData = () => serials.length || eiins.length || companyNames.length || villages.length || mobiles.length;
+  const resetPageData = () => {
+    serials = [];
+    eiins = [];
+    companyNames = [];
+    villages = [];
+    mobiles = [];
+    activeColumn = null;
+  };
+
+  const flushPage = () => {
+    const rowCount = Math.max(serials.length, eiins.length, companyNames.length, villages.length, mobiles.length);
+    for (let index = 0; index < rowCount; index += 1) {
+      const sl = normalizeInlineValue(serials[index] ?? "");
+      const eiin = normalizeInlineValue(eiins[index] ?? "");
+      const companyName = normalizeInlineValue(companyNames[index] ?? "");
+      const village = normalizeInlineValue(villages[index] ?? "");
+      const mobile = normalizePhone(mobiles[index] ?? "");
+
+      if (!sl && !eiin && !companyName && !village && !mobile) continue;
+
+      const address = [village, thana, district, division].filter(Boolean).join(", ");
+      const note = [
+        eiin ? `EIIN: ${eiin}` : "",
+        thana ? `Thana: ${thana}` : "",
+        district ? `District: ${district}` : "",
+        division ? `Division: ${division}` : "",
+      ].filter(Boolean).join(" | ");
+
+      rawRows.push({
+        "SL": sl,
+        "Industry": "Madrasha",
+        "Company Name": companyName,
+        "City/Zilla": district || thana || division,
+        "Address": address,
+        "Primary Phone": mobile,
+        "Phone 2": "",
+        "Phone 3": "",
+        "Primary Email": "",
+        "Email 2": "",
+        "Website": "",
+        "Note": note,
+        "Contact Person 1 Name": "",
+        "Contact Person 1 Designation": "",
+        "Contact Person 1 Department": "",
+        "Contact Person 1 Phone 1": "",
+        "Contact Person 1 Phone 2": "",
+        "Contact Person 1 Email 1": "",
+        "Contact Person 1 Email 2": "",
+        "Contact Person 2 Name": "",
+        "Contact Person 2 Designation": "",
+        "Contact Person 2 Department": "",
+        "Contact Person 2 Phone 1": "",
+        "Contact Person 2 Phone 2": "",
+        "Contact Person 2 Email 1": "",
+        "Contact Person 2 Email 2": "",
+        "Lead Source": "PDF Import",
+        "EIIN": eiin,
+        "Village/Road": village,
+        "Division": division,
+        "District": district,
+        "Thana": thana,
+      } satisfies Record<string, unknown>);
+    }
+    resetPageData();
+  };
+
+  for (let index = 0; index < rawLines.length; index += 1) {
+    const line = (rawLines[index] ?? "").replace(/\r/g, "").trim();
+    if (!line) continue;
+    if (/^list of madrasha$/i.test(line)) continue;
+    if (/^page\s+\d+$/i.test(line)) continue;
+
+    const divisionMatch = line.match(/^(.*?)(?:\s*)Division$/i);
+    if (divisionMatch?.[1]) {
+      if (hasPageData()) flushPage();
+      division = normalizeInlineValue(divisionMatch[1]);
+      continue;
+    }
+
+    const districtMatch = line.match(/^(.*?)(?:\s*)District$/i);
+    if (districtMatch?.[1]) {
+      district = normalizeInlineValue(districtMatch[1]);
+      continue;
+    }
+
+    const thanaMatch = line.match(/^(.*?)(?:\s*)Thana$/i);
+    if (thanaMatch?.[1]) {
+      thana = normalizeInlineValue(thanaMatch[1]);
+      activeColumn = "serials";
+      continue;
+    }
+
+    if (/^Sl$/i.test(line)) {
+      activeColumn = "eiins";
+      continue;
+    }
+
+    if (/^Eiin$/i.test(line)) {
+      activeColumn = "names";
+      continue;
+    }
+
+    if (/^Name$/i.test(line)) {
+      activeColumn = "villages";
+      continue;
+    }
+
+    if (/^Village\/Road$/i.test(line)) {
+      activeColumn = "mobiles";
+      continue;
+    }
+
+    if (/^Mobile$/i.test(line)) {
+      flushPage();
+      continue;
+    }
+
+    if (activeColumn === "serials") {
+      serials.push(line);
+      continue;
+    }
+    if (activeColumn === "eiins") {
+      eiins.push(line);
+      continue;
+    }
+    if (activeColumn === "names") {
+      companyNames.push(line);
+      continue;
+    }
+    if (activeColumn === "villages") {
+      villages.push(line);
+      continue;
+    }
+    if (activeColumn === "mobiles") {
+      mobiles.push(line);
+    }
+  }
+
+  if (hasPageData()) flushPage();
+
+  if (!rawRows.length) {
+    return { rows: [] as ParsedCustomerRow[], failed: [] as CustomerImportFailure[] };
+  }
+
+  return finalizeParsedCustomerRows(rawRows);
+}
+
 async function parsePdfRows(buffer: Buffer) {
   const expectedHeaders = CUSTOMER_TEMPLATE_COLUMNS.map(normalizeHeader);
 
@@ -885,6 +1046,10 @@ async function parsePdfRows(buffer: Buffer) {
   }
 
   if (headerIndex < 0 || !delimiter) {
+    const madrashaColumnParsed = parsePdfMadrashaColumnRows(rawLines);
+    if (madrashaColumnParsed.rows.length) {
+      return madrashaColumnParsed;
+    }
     const madrashaParsed = parsePdfMadrashaRows(rawLines);
     if (madrashaParsed.rows.length) {
       return madrashaParsed;
