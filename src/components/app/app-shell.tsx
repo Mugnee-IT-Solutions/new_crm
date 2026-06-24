@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import * as React from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { gsap } from "gsap";
 import { ChevronLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
@@ -42,6 +42,8 @@ type NotificationCenterContextValue = {
 };
 
 const NotificationCenterContext = React.createContext<NotificationCenterContextValue | null>(null);
+
+export const CRM_LIVE_SYNC_EVENT = "crm:live-sync";
 
 function parseTaskCount(payload: unknown) {
   const rows = typeof payload === "object" && payload !== null ? (payload as { rows?: unknown }).rows : undefined;
@@ -252,6 +254,7 @@ export function AppShell({
   sidebarCounts?: SidebarCounts;
   children: ReactNode;
 }) {
+  const router = useRouter();
   const { taskCount, leadCount, refreshTaskCount, refreshLeadCount } = useSidebarCounterSync(sidebarCounts?.tasks, sidebarCounts?.leads);
   const notificationCenter = useNotificationCenter(unreadCount);
   const [collapsed, setCollapsed] = React.useState(false);
@@ -259,6 +262,8 @@ export function AppShell({
   const pathname = usePathname();
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const shellUser = user ?? fallbackUser(role);
+  const liveSyncEnabled = role !== "MARKETER";
+  const refreshNotifications = notificationCenter.refreshNotifications;
   const counts = React.useMemo(() => {
     if (!sidebarCounts) {
       return {
@@ -292,6 +297,45 @@ export function AppShell({
 
     return () => context.revert();
   }, [pathname]);
+
+  const performLiveSync = React.useCallback((reason: "focus" | "interval" | "visible") => {
+    window.dispatchEvent(new CustomEvent(CRM_LIVE_SYNC_EVENT, { detail: { reason, at: Date.now() } }));
+    void refreshTaskCount();
+    void refreshLeadCount();
+    void refreshNotifications();
+    React.startTransition(() => {
+      router.refresh();
+    });
+  }, [refreshLeadCount, refreshNotifications, refreshTaskCount, router]);
+
+  React.useEffect(() => {
+    if (!liveSyncEnabled) return;
+
+    const syncIfVisible = (reason: "focus" | "interval" | "visible") => {
+      if (document.visibilityState !== "visible") return;
+      window.setTimeout(() => performLiveSync(reason), 0);
+    };
+
+    const timer = window.setInterval(() => {
+      syncIfVisible("interval");
+    }, 12000);
+
+    const handleFocus = () => syncIfVisible("focus");
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        syncIfVisible("visible");
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [liveSyncEnabled, performLiveSync]);
 
   return (
     <TaskCounterContext.Provider value={{ taskCount, leadCount, refreshTaskCount, refreshLeadCount }}>

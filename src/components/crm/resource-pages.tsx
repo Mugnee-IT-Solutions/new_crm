@@ -56,7 +56,7 @@ import { FormModal } from "@/components/shared/form-modal";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { StatCard } from "@/components/shared/stat-card";
-import { useTaskCounterContext } from "@/components/app/app-shell";
+import { CRM_LIVE_SYNC_EVENT, useTaskCounterContext } from "@/components/app/app-shell";
 import {
   completeFollowUpWithCommunicationAction,
   completeTaskWithFollowUpAction,
@@ -4430,8 +4430,37 @@ export function TaskCreateModal({
   const [pending, setPending] = React.useState(false);
   const [message, setMessage] = React.useState("");
   const isEditing = Boolean(initialTask?.id);
-  const defaultAssigneeId = workspace.user.id ?? "";
   const taskTitleOptions = ["Call", "Follow-up", "Quotation", "Sale"];
+  const assignableMembers = React.useMemo(() => {
+    if (role === "MARKETER") return [];
+
+    const activeEmployees = workspace.employees.filter((employee) => employee.statusKey === "ACTIVE");
+    const ownId = workspace.user.id ?? "";
+
+    if (role === "SUPERVISOR") {
+      return activeEmployees.filter(
+        (employee) => employee.id === ownId || (employee.roleKey === "MARKETER" && employee.supervisorId === ownId),
+      );
+    }
+
+    return activeEmployees.filter((employee) => employee.roleKey === "SUPERVISOR" || employee.roleKey === "MARKETER");
+  }, [role, workspace.employees, workspace.user.id]);
+  const assigneeOptions = React.useMemo(() => {
+    const currentAssignee = initialTask?.assignedToId
+      ? workspace.employees.find((employee) => employee.id === initialTask.assignedToId) ?? null
+      : null;
+
+    if (!currentAssignee || assignableMembers.some((employee) => employee.id === currentAssignee.id)) {
+      return assignableMembers;
+    }
+
+    return [currentAssignee, ...assignableMembers];
+  }, [assignableMembers, initialTask?.assignedToId, workspace.employees]);
+  const defaultAssigneeId = React.useMemo(() => {
+    if (role === "MARKETER") return workspace.user.id ?? "";
+    if (role === "SUPERVISOR") return workspace.user.id ?? assigneeOptions[0]?.id ?? "";
+    return assigneeOptions[0]?.id ?? "";
+  }, [assigneeOptions, role, workspace.user.id]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -4453,6 +4482,12 @@ export function TaskCreateModal({
 
     if (!companyId) {
       setMessage("Please select a company from the list.");
+      setPending(false);
+      return;
+    }
+
+    if (role !== "MARKETER" && !assignedToId) {
+      setMessage(assigneeOptions.length ? "Please select who will handle this task." : "No active teammate is available for this assignment.");
       setPending(false);
       return;
     }
@@ -4509,7 +4544,7 @@ export function TaskCreateModal({
   return (
     <FormModal open={open} title={isEditing ? "Edit Task" : "Add Task"} onClose={onClose} panelClassName="max-w-2xl">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className={cn("grid gap-3", role === "MARKETER" ? "sm:grid-cols-2" : "sm:grid-cols-2 xl:grid-cols-3")}>
           <label className="block space-y-1.5">
             <span className="text-sm font-semibold text-slate-700">Task Title</span>
             <select
@@ -4532,6 +4567,30 @@ export function TaskCreateModal({
               {workspace.products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
             </select>
           </label>
+          {role !== "MARKETER" ? (
+            <label className="space-y-1.5">
+              <span className="text-sm font-semibold text-slate-700">Assign To</span>
+              <select
+                value={assignedToId}
+                onChange={(event) => setAssignedToId(event.target.value)}
+                className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                disabled={!assigneeOptions.length}
+                required
+              >
+                {assigneeOptions.length ? null : <option value="">No active teammate available</option>}
+                {assigneeOptions.map((employee) => (
+                  <option key={employee.id} value={employee.id}>
+                    {employee.name} ({employee.role})
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-slate-500">
+                {role === "SUPERVISOR"
+                  ? "Assign to yourself or any active marketer in your team."
+                  : "Assign to any active supervisor or marketer."}
+              </p>
+            </label>
+          ) : null}
         </div>
         <SearchableEntitySelect
           label="Company Name"
@@ -5415,6 +5474,19 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
   }, [loadTasks]);
 
   React.useEffect(() => {
+    if (role === "MARKETER") return;
+
+    const handleLiveSync = () => {
+      void loadTasks();
+    };
+
+    window.addEventListener(CRM_LIVE_SYNC_EVENT, handleLiveSync);
+    return () => {
+      window.removeEventListener(CRM_LIVE_SYNC_EVENT, handleLiveSync);
+    };
+  }, [loadTasks, role]);
+
+  React.useEffect(() => {
     return () => {
       for (const timer of scheduledRefreshTimers.current) {
         window.clearTimeout(timer);
@@ -5503,6 +5575,14 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
   const marketerScopedCompletedTasks = React.useMemo(
     () => completedTasks.filter((task) => workspace.employees.some((employee) => employee.roleKey === "MARKETER" && employee.id === task.assignedToId)),
     [completedTasks, workspace.employees],
+  );
+  const adminManagedVisibleTasks = React.useMemo(
+    () => visibleTasks.filter((task) => task.assignedToId === workspace.user.id || task.assignedById === workspace.user.id),
+    [visibleTasks, workspace.user.id],
+  );
+  const adminManagedCompletedTasks = React.useMemo(
+    () => completedTasks.filter((task) => task.assignedToId === workspace.user.id || task.assignedById === workspace.user.id),
+    [completedTasks, workspace.user.id],
   );
 
   const handleAddFollowUp = React.useCallback((task: CompletedWorkItem) => {
@@ -5704,14 +5784,14 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.95fr)]">
               <DashboardCard
                 title={role === "ADMIN" ? "My Work Log" : "Today's Tasks"}
-                action={<Badge variant={counts.overdue ? "warning" : "neutral"}>{role === "ADMIN" ? myVisibleTasks.length : pendingCount} Pending</Badge>}
+                action={<Badge variant={counts.overdue ? "warning" : "neutral"}>{role === "ADMIN" ? adminManagedVisibleTasks.length : pendingCount} Pending</Badge>}
                 className="rounded-[16px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]"
               >
                 <TodayWorkQueueList
-                  rows={role === "ADMIN" ? myVisibleTasks : visibleTasks}
+                  rows={role === "ADMIN" ? adminManagedVisibleTasks : visibleTasks}
                   loading={loading}
                   viewerRole={role}
-                  emptyMessage={role === "ADMIN" ? "No personal work log pending right now." : "No pending work items match this view."}
+                  emptyMessage={role === "ADMIN" ? "No assigned or created work log is pending right now." : "No pending work items match this view."}
                   activeItemId={completionItem?.id ?? null}
                   onOpen={setDetailItem}
                   onEdit={setEditingTask}
@@ -5725,14 +5805,14 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
 
               <DashboardCard
                 title={role === "ADMIN" ? "My Completed Work" : "Completed Tasks"}
-                action={<Badge variant="neutral">{role === "ADMIN" ? myCompletedTasks.length : completedCount} Completed</Badge>}
+                action={<Badge variant="neutral">{role === "ADMIN" ? adminManagedCompletedTasks.length : completedCount} Completed</Badge>}
                 className="rounded-[16px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]"
               >
                 <CompletedWorkList
-                  rows={role === "ADMIN" ? myCompletedTasks : completedTasks}
+                  rows={role === "ADMIN" ? adminManagedCompletedTasks : completedTasks}
                   loading={loading}
                   viewerRole={role}
-                  emptyMessage={role === "ADMIN" ? "No completed personal work yet." : "No completed work yet."}
+                  emptyMessage={role === "ADMIN" ? "No completed assigned or created work yet." : "No completed work yet."}
                   onAddFollowUp={handleAddFollowUp}
                   onOpen={setDetailItem}
                   previewCount={6}
@@ -6097,19 +6177,47 @@ export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorks
   );
 }
 
+function productAccentTone(seed: string) {
+  const tones = [
+    { avatar: "from-blue-600 to-indigo-600", surface: "from-blue-700 via-indigo-600 to-cyan-500" },
+    { avatar: "from-emerald-600 to-teal-600", surface: "from-emerald-700 via-teal-600 to-cyan-500" },
+    { avatar: "from-fuchsia-600 to-violet-600", surface: "from-fuchsia-700 via-violet-600 to-indigo-500" },
+    { avatar: "from-orange-500 to-amber-500", surface: "from-orange-600 via-amber-500 to-yellow-400" },
+  ];
+  const source = seed.trim() || "A";
+  const index = Array.from(source).reduce((sum, character) => sum + character.charCodeAt(0), 0) % tones.length;
+  return tones[index];
+}
+
 function ProductVisual({ product }: { product: ProductRow }) {
+  const tone = productAccentTone(product.name);
+
   return (
-    <div className="relative h-36 overflow-hidden rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-500 p-4">
-      <div className="absolute right-4 top-4 h-16 w-12 rounded-xl bg-slate-950/75 shadow-xl" />
-      <div className="absolute bottom-4 left-4 h-20 w-28 rounded-2xl border-4 border-slate-900 bg-white/85 shadow-xl">
-        <div className="h-full rounded-xl bg-gradient-to-br from-white/20 to-slate-950/15" />
+    <div className={cn("relative overflow-hidden rounded-[28px] bg-gradient-to-br p-6 text-white shadow-[0_20px_44px_rgba(15,23,42,0.16)]", tone.surface)}>
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.22),transparent_42%)]" />
+      <div className="relative flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-white/70">{product.category || "Product"}</p>
+          <h2 className="mt-2 truncate text-2xl font-black">{product.name}</h2>
+          <p className="mt-2 text-sm font-medium text-white/80">{product.brand || "No brand"} • {product.status}</p>
+        </div>
+        <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-sm font-black shadow-lg backdrop-blur">
+          {formatCurrency(product.price)}
+        </span>
       </div>
-      <p className="relative z-10 max-w-28 text-sm font-black text-white drop-shadow">{product.name}</p>
+      <div className="relative mt-8 flex flex-wrap gap-2.5 text-xs font-bold text-white/90">
+        <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 backdrop-blur">{product.interestedCustomers} interested</span>
+        <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 backdrop-blur">{product.communicationCount} communications</span>
+        <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 backdrop-blur">{product.followUpCount} follow-ups</span>
+        <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 backdrop-blur">{product.conversionRate}% conversion</span>
+      </div>
     </div>
   );
 }
 
 export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
+  const router = useRouter();
+  const [, startRefresh] = React.useTransition();
   const [open, setOpen] = React.useState(false);
   const [products, setProducts] = React.useState(workspace.products);
   const [editingProductId, setEditingProductId] = React.useState<string | null>(null);
@@ -6124,6 +6232,34 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
   React.useEffect(() => {
     setProducts(workspace.products);
   }, [workspace.products]);
+
+  const productAssignments = React.useMemo(() => {
+    const normalize = (value: string) => value.trim().toLowerCase();
+    const summary = new Map<string, { assignedMarketers: string[]; assignedCount: number; leadCount: number }>();
+
+    for (const product of products) {
+      const matchedLeads = workspace.leads.filter((lead) => {
+        if (lead.productInterestId && lead.productInterestId === product.id) return true;
+        return Boolean(lead.productInterest) && normalize(lead.productInterest) === normalize(product.name);
+      });
+
+      const assignedMarketers = Array.from(
+        new Map(
+          matchedLeads
+            .filter((lead) => lead.assignedTo && lead.assignedTo !== "-")
+            .map((lead) => [lead.assignedToId ?? lead.assignedTo, lead.assignedTo]),
+        ).values(),
+      );
+
+      summary.set(product.id, {
+        assignedMarketers,
+        assignedCount: assignedMarketers.length,
+        leadCount: matchedLeads.length,
+      });
+    }
+
+    return summary;
+  }, [products, workspace.leads]);
 
   return (
     <>
@@ -6159,56 +6295,143 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
           {feedback.message}
         </div>
       ) : null}
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        {products.map((product) => (
-          <div key={product.id} className="group rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-xl">
-            <div className="flex items-start justify-between gap-3">
-              <Link href={`/products/${product.id}`} className="min-w-0 flex-1">
-                <ProductVisual product={product} />
-              </Link>
-              <div className="flex shrink-0 items-center gap-1">
-                <Link href={`/products/${product.id}`} className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-blue-50 hover:text-blue-700" aria-label="View product">
-                  <Eye className="h-4 w-4" />
+      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        {products.map((product) => {
+          const tone = productAccentTone(product.name);
+          const assignedSnapshot = productAssignments.get(product.id) ?? { assignedMarketers: [], assignedCount: 0, leadCount: 0 };
+          const previewAssignees = assignedSnapshot.assignedMarketers.slice(0, 3);
+          const hiddenAssigneeCount = assignedSnapshot.assignedCount - previewAssignees.length;
+
+          return (
+            <div key={product.id} className="group rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_18px_38px_rgba(15,23,42,0.07)] transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_24px_48px_rgba(37,99,235,0.14)]">
+              <div className="flex items-start justify-between gap-3">
+                <Link href={`/products/${product.id}`} className="min-w-0 flex-1">
+                  <div className="flex items-start gap-4">
+                    <span className={cn("inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br text-sm font-black text-white shadow-lg", tone.avatar)}>
+                      {initials(product.name || "PR")}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-slate-400">{product.category || "Product"}</p>
+                      <h3 className="truncate text-lg font-black text-slate-950">{product.name}</h3>
+                      <p className="mt-1 truncate text-sm text-slate-500">
+                        {product.brand || "No brand"} • {formatCurrency(product.price)}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {previewAssignees.length ? (
+                          previewAssignees.map((name) => (
+                            <span key={`${product.id}-${name}`} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                              <span className={cn("inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-black ring-1", avatarTone(name))}>
+                                {initials(name)}
+                              </span>
+                              <span className="max-w-24 truncate">{name}</span>
+                            </span>
+                          ))
+                        ) : (
+                          <span className="inline-flex items-center rounded-full border border-dashed border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-400">
+                            No assignee yet
+                          </span>
+                        )}
+                        {hiddenAssigneeCount > 0 ? (
+                          <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-500">
+                            +{hiddenAssigneeCount} more
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
                 </Link>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Edit product"
-                  onClick={() => {
-                    setFeedback(null);
-                    setEditingProductId(product.id);
-                    setOpen(true);
-                  }}
-                >
-                  <Edit className="h-4 w-4" />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Delete product"
-                  className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                  onClick={() => {
-                    setFeedback(null);
-                    setDeleteProductId(product.id);
-                  }}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Link href={`/products/${product.id}`} className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-blue-50 hover:text-blue-700" aria-label="View product">
+                    <Eye className="h-4 w-4" />
+                  </Link>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Edit product"
+                    onClick={() => {
+                      setFeedback(null);
+                      setEditingProductId(product.id);
+                      setOpen(true);
+                    }}
+                  >
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Delete product"
+                    className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                    onClick={() => {
+                      setFeedback(null);
+                      setDeleteProductId(product.id);
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
+                  <span className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
+                    <Target className="h-3.5 w-3.5 text-blue-600" />
+                    Interested
+                  </span>
+                  <span className="text-sm font-black text-slate-950">{product.interestedCustomers}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
+                  <span className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
+                    <UserPlus className="h-3.5 w-3.5 text-violet-600" />
+                    Assigned
+                  </span>
+                  <span className="text-sm font-black text-slate-950">{assignedSnapshot.assignedCount}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
+                  <span className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
+                    <MessageSquare className="h-3.5 w-3.5 text-emerald-600" />
+                    Calls & Comms
+                  </span>
+                  <span className="text-sm font-black text-slate-950">{product.communicationCount}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
+                  <span className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
+                    <CalendarClock className="h-3.5 w-3.5 text-amber-600" />
+                    Follow-ups
+                  </span>
+                  <span className="text-sm font-black text-slate-950">{product.followUpCount}</span>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 border-t border-slate-100 pt-4 sm:grid-cols-3">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">Quotations</p>
+                  <p className="mt-1 text-lg font-black text-slate-950">{product.quotationCount}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">Sales</p>
+                  <p className="mt-1 text-lg font-black text-slate-950">{product.salesCount}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">Conversion</p>
+                  <p className="mt-1 text-lg font-black text-blue-700">{product.conversionRate}%</p>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4 text-xs font-semibold text-slate-500">
+                <span className="inline-flex items-center gap-2">
+                  <Building2 className="h-3.5 w-3.5 text-slate-400" />
+                  {assignedSnapshot.leadCount} live lead record{assignedSnapshot.leadCount === 1 ? "" : "s"}
+                </span>
+                <Link href={`/products/${product.id}`} className="inline-flex items-center gap-1.5 text-sm font-bold text-blue-700 transition hover:text-blue-800">
+                  Open product
+                  <ArrowLeft className="h-3.5 w-3.5 rotate-180" />
+                </Link>
               </div>
             </div>
-            <div className="mt-4">
-              <Link href={`/products/${product.id}`} className="block">
-                <h3 className="text-base font-black text-slate-950">{product.name}</h3>
-              </Link>
-              <p className="text-sm text-slate-500">{product.category} / {product.brand}</p>
-              <p className="mt-2 text-sm font-black text-slate-900">{formatCurrency(product.price)}</p>
-              <div className="mt-4 flex items-center justify-between text-sm"><span className="text-slate-500">Interested Customers</span><span className="font-black text-slate-950">{product.interestedCustomers}</span></div>
-              <div className="mt-2 flex items-center justify-between text-sm"><span className="text-slate-500">Conversion Rate</span><span className="font-black text-blue-700">{product.conversionRate}%</span></div>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {!products.length ? <EmptyState title="No products yet" description="Create your real product or service catalog to start tracking opportunities." /> : null}
       <FormModal title={editingProduct ? "Update Product / Service" : "Create Product / Service"} open={open} onClose={() => {
@@ -6240,6 +6463,7 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
               return [row, ...current];
             });
             setFeedback({ type: "success", message: editingProduct ? "Product updated successfully." : "Product created successfully." });
+            startRefresh(() => router.refresh());
           }}
           onDone={() => {
             setOpen(false);
@@ -6274,6 +6498,7 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
                     setProducts((current) => current.filter((item) => item.id !== result.id));
                     setFeedback({ type: "success", message: "Product deleted successfully." });
                     setDeleteProductId(null);
+                    startRefresh(() => router.refresh());
                   } catch (error) {
                     setDeleteMessage(error instanceof Error ? error.message : "Product delete failed.");
                   } finally {
