@@ -48,7 +48,7 @@ export function FormModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.18 }}
-          className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:items-center sm:p-6"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-3 sm:p-6"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) onClose();
           }}
@@ -61,7 +61,7 @@ export function FormModal({
             role="dialog"
             aria-modal="true"
             aria-label={title}
-            className={cn("my-auto flex max-h-[calc(100vh-2rem)] w-[95vw] max-w-[600px] min-h-0 flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100vh-3rem)]", panelClassName)}
+            className={cn("flex max-h-[calc(100vh-1.5rem)] w-[95vw] max-w-[600px] min-h-0 flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100vh-3rem)]", panelClassName)}
           >
             <div className="flex shrink-0 items-center justify-between border-b border-slate-100 p-5">
               <h2 className="text-lg font-black text-slate-950">{title}</h2>
