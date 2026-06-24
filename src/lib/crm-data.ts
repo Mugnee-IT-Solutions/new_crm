@@ -2230,6 +2230,149 @@ async function getScopedUserIds(role: Role, user: ShellUser) {
   return [user.id, ...team.map((member) => member.id)];
 }
 
+function normalizeActivitySearchText(value?: string | null) {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeActivitySearchQuery(query: string) {
+  return normalizeActivitySearchText(query)
+    .replace(/\bfollow up\b/g, "followup")
+    .replace(/\bfollow ups\b/g, "followup")
+    .replace(/\bfollowup\b/g, "followup")
+    .replace(/\bfollowed up\b/g, "followup")
+    .replace(/\bphone call\b/g, "call")
+    .replace(/\bquatation\b/g, "quotation")
+    .replace(/\bquote\b/g, "quotation")
+    .replace(/\bquoted\b/g, "quotation")
+    .replace(/\bdemo send\b/g, "demo")
+    .replace(/\bproduct demo\b/g, "demo")
+    .replace(/\bdemo session\b/g, "demo")
+    .replace(/\bsales won\b/g, "won")
+    .replace(/\bsale won\b/g, "won")
+    .replace(/\bclosed won\b/g, "won")
+    .replace(/\blead converted\b/g, "won")
+    .replace(/\bconverted to sale\b/g, "won")
+    .replace(/\bsale completed\b/g, "won")
+    .replace(/\bsales failed\b/g, "lost")
+    .replace(/\bsale failed\b/g, "lost")
+    .replace(/\bclosed lost\b/g, "lost")
+    .replace(/\blead lost\b/g, "lost")
+    .replace(/\bdeal lost\b/g, "lost");
+}
+
+function normalizeActivitySearchToken(token: string) {
+  const normalized = normalizeActivitySearchText(token);
+  if (!normalized) return "";
+  if (normalized === "phone" || normalized === "dial" || normalized === "calling") return "call";
+  if (normalized === "followup" || normalized === "follow") return "followup";
+  if (normalized === "quatation" || normalized === "quote" || normalized === "quoted") return "quotation";
+  if (normalized === "win" || normalized === "won" || normalized === "converted") return "won";
+  if (normalized === "lose" || normalized === "lost" || normalized === "failed" || normalized === "rejected") return "lost";
+  return normalized;
+}
+
+function activitySearchKeywords(activity: ActivityRow) {
+  const base = normalizeActivitySearchText([
+    activity.title,
+    activity.detail,
+    activity.badgeLabel,
+    activity.customerName,
+    activity.employeeName,
+    activity.entity,
+    activity.rawAction,
+    activity.discussionSummary,
+    activity.notes,
+    activity.contactMethod,
+    activity.quotationReference,
+    activity.createdBy,
+  ].filter(Boolean).join(" "));
+
+  const keywords = new Set<string>();
+
+  if (activity.category === "CALL" || /\b(call|phone|dial)\b/.test(base)) keywords.add("call");
+  if (activity.category === "FOLLOW_UP" || /\bfollow up\b|\bfollowup\b/.test(base)) keywords.add("followup");
+  if (/\bdemo\b/.test(base)) keywords.add("demo");
+  if (activity.category === "QUOTATION" || /\b(quotation|quote|quatation)\b/.test(base)) keywords.add("quotation");
+  if (/\b(won|win|converted)\b/.test(base) || base.includes("sale completed") || base.includes("closed won")) keywords.add("won");
+  if (/\b(lost|failed|rejected)\b/.test(base) || base.includes("deal lost") || base.includes("closed lost")) keywords.add("lost");
+
+  return `${base} ${Array.from(keywords).join(" ")}`.trim();
+}
+
+function matchesActivitySearch(activity: ActivityRow, query: string) {
+  const normalizedQuery = normalizeActivitySearchQuery(query);
+  if (!normalizedQuery) return true;
+
+  const haystack = activitySearchKeywords(activity);
+  const tokens = normalizedQuery
+    .split(" ")
+    .map(normalizeActivitySearchToken)
+    .filter(Boolean);
+
+  if (!tokens.length) return true;
+
+  return tokens.every((token) => haystack.includes(token));
+}
+
+export async function searchCrmActivities({
+  role,
+  user,
+  query,
+  limit = 8,
+}: {
+  role: Role;
+  user: ShellUser;
+  query: string;
+  limit?: number;
+}) {
+  const normalizedQuery = normalizeActivitySearchQuery(query);
+  if (!normalizedQuery) return [] satisfies ActivityRow[];
+
+  const prisma = getPrisma();
+  await ensureCrmFoundation();
+
+  const scopedUserIds = await getScopedUserIds(role, user);
+  const cappedLimit = Math.max(1, Math.min(limit, 24));
+
+  const [timeline, activities] = await Promise.all([
+    prisma.activityTimeline.findMany({
+      where: scopedUserIds ? { userId: { in: scopedUserIds } } : undefined,
+      include: activityTimelineInclude,
+      orderBy: { createdAt: "desc" },
+      take: 280,
+    }),
+    prisma.activityLog.findMany({
+      where: scopedUserIds ? { userId: { in: scopedUserIds } } : undefined,
+      include: activityLogInclude,
+      orderBy: { createdAt: "desc" },
+      take: 180,
+    }),
+  ]);
+
+  const timelineEntityKeys = new Set(
+    timeline
+      .map((item) => normalizeActivityEntityKey(item.entity, item.entityId))
+      .filter(Boolean),
+  );
+
+  return [
+    ...timeline.map(buildActivityRowFromTimeline),
+    ...activities
+      .filter((item) => {
+        const key = normalizeActivityEntityKey(item.entity, item.entityId);
+        return !key || !timelineEntityKeys.has(key);
+      })
+      .map(buildActivityRowFromLog),
+  ]
+    .sort((left, right) => new Date(right.createdAtValue ?? 0).getTime() - new Date(left.createdAtValue ?? 0).getTime())
+    .filter((activity) => matchesActivitySearch(activity, normalizedQuery))
+    .slice(0, cappedLimit);
+}
+
 export async function getCrmWorkspace(role: Role, user: ShellUser, options?: TeamPerformanceOptions): Promise<CrmWorkspace> {
   const prisma = getPrisma();
   await ensureCrmFoundation();
@@ -2239,7 +2382,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
   const teamPerformanceWindow = role === "SUPERVISOR"
     ? getCrmPeriodWindow(new Date(), options)
     : role === "ADMIN"
-      ? getCrmPeriodWindow(new Date(), { period: "month" })
+      ? getCrmPeriodWindow(new Date(), options ?? { period: "today" })
       : undefined;
 
   const leadWhere = scopedLeadUserIds

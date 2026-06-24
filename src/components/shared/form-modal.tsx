@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,12 @@ export function FormModal({
   panelClassName?: string;
   contentClassName?: string;
 }) {
+  const [mounted, setMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+
   React.useEffect(() => {
     if (!open) return;
 
@@ -39,7 +46,9 @@ export function FormModal({
     };
   }, [open, onClose]);
 
-  return (
+  if (!mounted) return null;
+
+  return createPortal((
     <AnimatePresence>
       {open && (
         <motion.div
@@ -74,5 +83,5 @@ export function FormModal({
         </motion.div>
       )}
     </AnimatePresence>
-  );
+  ), document.body);
 }

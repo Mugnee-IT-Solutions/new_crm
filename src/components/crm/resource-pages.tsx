@@ -90,7 +90,8 @@ import type {
   TaskRow,
 } from "@/lib/crm-data";
 import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
-import { DATE_PRESET_OPTIONS, REPORT_DEFINITIONS, type ReportFilterKey, type ReportFormat, type ReportTypeKey } from "@/lib/report-definitions";
+import { getCrmPeriodWindow } from "@/lib/crm-time";
+import { type ReportFormat } from "@/lib/report-definitions";
 import { cn, formatCurrency, initials, rolePath, type Role } from "@/lib/utils";
 
 type ActionResult = { ok?: boolean; message?: string; [key: string]: unknown } | unknown;
@@ -243,9 +244,11 @@ function SearchableEntitySelect({
   React.useEffect(() => {
     if (isControlled) {
       const baseLabel = sourceOptions.find((item) => item.value === selectedValue)?.label ?? defaultLabel ?? "";
-      if (selectedValue && baseLabel) {
+      if (selectedValue) {
         setQuery(baseLabel);
-      } else if (!selectedValue && !open) {
+      } else if (typeof defaultLabel === "string") {
+        setQuery(defaultLabel);
+      } else if (!open) {
         setQuery("");
       }
       return;
@@ -261,6 +264,20 @@ function SearchableEntitySelect({
     setInternalValue("");
     setQuery("");
   }, [defaultValue, defaultLabel, isControlled, open, selectedValue, sourceOptions]);
+
+  const companyCreateOption = React.useMemo(() => {
+    if (searchScope !== "companies") return null;
+    const trimmed = normalizedQuery.trim();
+    if (!trimmed) return null;
+    const exists = sourceOptions.some((option) => option.label.trim().toLowerCase() === trimmed.toLowerCase());
+    if (exists) return null;
+    return { value: "__create_company__", label: `Add "${trimmed}" as a new company` } satisfies SearchableOption;
+  }, [normalizedQuery, searchScope, sourceOptions]);
+
+  const renderedOptions = React.useMemo(() => {
+    if (!companyCreateOption) return filteredOptions;
+    return [companyCreateOption, ...filteredOptions];
+  }, [companyCreateOption, filteredOptions]);
 
   React.useEffect(() => {
     if (!searchScope) {
@@ -336,6 +353,17 @@ function SearchableEntitySelect({
   }, []);
 
   const selectOption = React.useCallback((option: SearchableOption) => {
+    if (option.value === "__create_company__" && searchScope === "companies") {
+      const valueLabel = normalizedQuery.trim();
+      if (isControlled) {
+        onValueChange?.("", valueLabel);
+      } else {
+        setInternalValue("");
+      }
+      setQuery(valueLabel);
+      setOpen(false);
+      return;
+    }
     if (isControlled) {
       onValueChange?.(option.value, option.label);
     } else {
@@ -343,7 +371,7 @@ function SearchableEntitySelect({
     }
     setQuery(option.label);
     setOpen(false);
-  }, [isControlled, onValueChange]);
+  }, [isControlled, normalizedQuery, onValueChange, searchScope]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const nextQuery = event.target.value;
@@ -360,12 +388,12 @@ function SearchableEntitySelect({
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!filteredOptions.length && event.key !== "Escape") return;
+    if (!renderedOptions.length && event.key !== "Escape") return;
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setOpen(true);
-      setActiveIndex((prev) => Math.min(filteredOptions.length - 1, prev + 1));
+      setActiveIndex((prev) => Math.min(renderedOptions.length - 1, prev + 1));
     }
 
     if (event.key === "ArrowUp") {
@@ -373,9 +401,9 @@ function SearchableEntitySelect({
       setActiveIndex((prev) => Math.max(0, prev - 1));
     }
 
-    if (event.key === "Enter" && open && filteredOptions.length) {
+    if (event.key === "Enter" && open && renderedOptions.length) {
       event.preventDefault();
-      selectOption(filteredOptions[activeIndex] ?? filteredOptions[0]!);
+      selectOption(renderedOptions[activeIndex] ?? renderedOptions[0]!);
     }
 
     if (event.key === "Escape") {
@@ -409,8 +437,8 @@ function SearchableEntitySelect({
           <div className="absolute z-20 mt-2 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
             {isLoading ? (
               <p className="px-3 py-2 text-sm font-semibold text-slate-500">Searching...</p>
-            ) : filteredOptions.length ? (
-              filteredOptions.map((option, index) => (
+            ) : renderedOptions.length ? (
+              renderedOptions.map((option, index) => (
                 <button
                   key={option.value}
                   type="button"
@@ -7148,15 +7176,23 @@ export function QuotationDetailsPage({ role, quotation }: { role: Role; quotatio
   );
 }
 
-export function CommunicationPage({ workspace }: { workspace: CrmWorkspace }) {
+export function CommunicationPage({
+  workspace,
+  initialCustomerQuery = "",
+  initialActivityQuery = "",
+}: {
+  workspace: CrmWorkspace;
+  initialCustomerQuery?: string;
+  initialActivityQuery?: string;
+}) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [refreshPending, startRefresh] = React.useTransition();
   const [dateRange, setDateRange] = React.useState<CommunicationDateRange>("thisMonth");
   const [activityType, setActivityType] = React.useState<CommunicationActivityFilter>("ALL");
   const [employeeFilter, setEmployeeFilter] = React.useState("ALL");
-  const [customerQuery, setCustomerQuery] = React.useState("");
-  const [activityQuery, setActivityQuery] = React.useState("");
+  const [customerQuery, setCustomerQuery] = React.useState(initialCustomerQuery);
+  const [activityQuery, setActivityQuery] = React.useState(initialActivityQuery);
   const [customStartDate, setCustomStartDate] = React.useState("");
   const [customEndDate, setCustomEndDate] = React.useState("");
   const [pageSize, setPageSize] = React.useState(25);
@@ -7897,82 +7933,17 @@ const REPORT_LEAD_STATUS_OPTIONS = [
   "ON_HOLD",
 ] as const;
 
-const REPORT_FOLLOW_UP_STATUS_OPTIONS = ["DUE", "TODAY", "UPCOMING", "OVERDUE", "COMPLETED"] as const;
-const REPORT_TASK_STATUS_OPTIONS = ["TODO", "IN_PROGRESS", "PENDING", "COMPLETED", "OVERDUE"] as const;
-const REPORT_COMMUNICATION_TYPE_OPTIONS = [
-  { value: "CALL", label: "Call" },
-  { value: "WHATSAPP", label: "WhatsApp" },
-  { value: "EMAIL", label: "Email" },
-  { value: "MEETING", label: "Meeting" },
-] as const;
-
-type ReportModalFilters = {
-  datePreset: (typeof DATE_PRESET_OPTIONS)[number]["value"];
-  from: string;
-  to: string;
-  userId: string;
-  customerId: string;
-  communicationType: string;
-  leadStatus: string;
-  followUpStatus: string;
-  taskStatus: string;
-  productId: string;
-};
-
-type ReportDialogState = {
-  reportType: ReportTypeKey;
-  format: ReportFormat;
-};
-
-const EMPTY_REPORT_MODAL_FILTERS: ReportModalFilters = {
-  datePreset: "month",
-  from: "",
-  to: "",
-  userId: "",
-  customerId: "",
-  communicationType: "",
-  leadStatus: "",
-  followUpStatus: "",
-  taskStatus: "",
-  productId: "",
-};
-
 function reportFormatLabel(format: ReportFormat) {
   return format === "xlsx" ? "XLSX" : format === "csv" ? "CSV" : format === "print" ? "PRINT" : "PDF";
-}
-
-function reportActionLabel(format: ReportFormat) {
-  return format === "print" ? "Open Print Preview" : `Generate ${reportFormatLabel(format)}`;
-}
-
-function reportFilterLabel(filter: ReportFilterKey) {
-  switch (filter) {
-    case "dateRange":
-      return "Date Range";
-    case "employee":
-      return "Employee";
-    case "customer":
-      return "Customer";
-    case "communicationType":
-      return "Communication Type";
-    case "followUpStatus":
-      return "Follow-up Status";
-    case "taskStatus":
-      return "Task Status";
-    case "leadStatus":
-      return "Lead Status";
-    case "product":
-      return "Product";
-    default:
-      return "Filter";
-  }
 }
 
 export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
   const [feedback, setFeedback] = React.useState<UserFeedback>(null);
   const [activeExport, setActiveExport] = React.useState<string | null>(null);
-  const [dialogState, setDialogState] = React.useState<ReportDialogState | null>(null);
-  const [dialogFilters, setDialogFilters] = React.useState<ReportModalFilters>(EMPTY_REPORT_MODAL_FILTERS);
+  const [period, setPeriod] = React.useState<"today" | "week">("today");
+  const [userId, setUserId] = React.useState("");
+  const [customerId, setCustomerId] = React.useState("");
+  const [customerLabel, setCustomerLabel] = React.useState("");
 
   React.useEffect(() => {
     if (!feedback) return undefined;
@@ -7980,26 +7951,45 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
     return () => window.clearTimeout(timer);
   }, [feedback]);
 
-  const reportHistory = React.useMemo(() => {
-    const reportExports = workspace.importExportLogs
-      .filter((row) => row.module === "Reports")
-      .map((row) => ({
-        ...row,
-        module: row.fileName !== "-" ? row.fileName : row.module,
-      }));
-
-    return [...reportExports, ...workspace.reportLogs];
-  }, [workspace.importExportLogs, workspace.reportLogs]);
-
-  const selectedReportDefinition = React.useMemo(
-    () => (dialogState ? REPORT_DEFINITIONS.find((item) => item.type === dialogState.reportType) ?? null : null),
-    [dialogState],
+  const marketerRows = React.useMemo(
+    () => workspace.employees.filter((employee) => employee.roleKey === "MARKETER" && employee.statusKey === "ACTIVE"),
+    [workspace.employees],
   );
-
-  const visibleReportFilters = React.useMemo<ReportFilterKey[]>(
-    () => (selectedReportDefinition ? [...selectedReportDefinition.filters] : []),
-    [selectedReportDefinition],
+  const companyOptions = React.useMemo(
+    () => workspace.companies.map((company) => ({ value: company.id, label: company.name })),
+    [workspace.companies],
   );
+  const previewWindow = React.useMemo(() => getCrmPeriodWindow(new Date(), { period }), [period]);
+  const communicationCategories = React.useMemo(() => new Set(["CALL", "WHATSAPP", "EMAIL", "MEETING"]), []);
+  const selectedCustomerHref = customerId ? `/customers/${customerId}` : "";
+  const selectedMarketer = React.useMemo(
+    () => marketerRows.find((employee) => employee.id === userId) ?? null,
+    [marketerRows, userId],
+  );
+  const selectedCompany = React.useMemo(
+    () => workspace.companies.find((company) => company.id === customerId) ?? null,
+    [customerId, workspace.companies],
+  );
+  const filteredRows = React.useMemo(() => {
+    return workspace.activities
+      .filter((item) => item.category && communicationCategories.has(item.category))
+      .filter((item) => {
+        if (!item.createdAtValue) return false;
+        const createdAt = new Date(item.createdAtValue);
+        return createdAt >= previewWindow.from && createdAt < previewWindow.to;
+      })
+      .filter((item) => (userId ? item.employeeId === userId : true))
+      .filter((item) => (selectedCustomerHref ? item.customerHref === selectedCustomerHref || item.relatedCustomerHref === selectedCustomerHref : true))
+      .sort((left, right) => (right.createdAtValue ?? "").localeCompare(left.createdAtValue ?? ""));
+  }, [communicationCategories, previewWindow.from, previewWindow.to, selectedCustomerHref, userId, workspace.activities]);
+  const previewRows = React.useMemo(() => filteredRows.slice(0, 14), [filteredRows]);
+  const summary = React.useMemo(() => ({
+    total: filteredRows.length,
+    calls: filteredRows.filter((item) => item.category === "CALL").length,
+    whatsapp: filteredRows.filter((item) => item.category === "WHATSAPP").length,
+    email: filteredRows.filter((item) => item.category === "EMAIL").length,
+    meetings: filteredRows.filter((item) => item.category === "MEETING").length,
+  }), [filteredRows]);
 
   const parseFileName = React.useCallback((response: Response, fallback: string) => {
     const disposition = response.headers.get("content-disposition");
@@ -8007,101 +7997,31 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
     return match?.[1] ?? fallback;
   }, []);
 
-  const updateDialogFilter = React.useCallback((key: keyof ReportModalFilters, value: string) => {
-    setDialogFilters((current) => ({ ...current, [key]: value }));
-  }, []);
-
-  const openReportDialog = React.useCallback((reportType: ReportTypeKey, format: ReportFormat) => {
-    setDialogState({ reportType, format });
-    setDialogFilters(EMPTY_REPORT_MODAL_FILTERS);
-    setFeedback(null);
-  }, []);
-
-  const closeReportDialog = React.useCallback(() => {
-    if (activeExport) return;
-    setDialogState(null);
-    setDialogFilters(EMPTY_REPORT_MODAL_FILTERS);
-  }, [activeExport]);
-
-  const reportUsesFilter = React.useCallback((filter: ReportFilterKey) => visibleReportFilters.includes(filter), [visibleReportFilters]);
-
-  const buildParams = React.useCallback((reportType: ReportTypeKey, format: ReportFormat, filters: ReportModalFilters, filterKeys: ReportFilterKey[]) => {
+  const buildParams = React.useCallback((format: ReportFormat) => {
     const params = new URLSearchParams();
-    const filterSet = new Set(filterKeys);
-
-    params.set("reportType", reportType);
+    params.set("reportType", "CUSTOMER_COMMUNICATION");
     params.set("format", format);
-
-    if (filterSet.has("dateRange")) {
-      params.set("datePreset", filters.datePreset);
-      if (filters.datePreset === "custom") {
-        if (filters.from) params.set("from", filters.from);
-        if (filters.to) params.set("to", filters.to);
-      }
-    }
-
-    if (filterSet.has("employee") && filters.userId) params.set("userId", filters.userId);
-    if (filterSet.has("customer") && filters.customerId) params.set("customerId", filters.customerId);
-    if (filterSet.has("communicationType") && filters.communicationType) params.set("communicationType", filters.communicationType);
-    if (filterSet.has("leadStatus") && filters.leadStatus) params.set("leadStatus", filters.leadStatus);
-    if (filterSet.has("followUpStatus") && filters.followUpStatus) params.set("followUpStatus", filters.followUpStatus);
-    if (filterSet.has("taskStatus") && filters.taskStatus) params.set("taskStatus", filters.taskStatus);
-    if (filterSet.has("product") && filters.productId) params.set("productId", filters.productId);
-
+    params.set("datePreset", period);
+    if (userId) params.set("userId", userId);
+    if (customerId) params.set("customerId", customerId);
     return params;
-  }, []);
+  }, [customerId, period, userId]);
 
-  const describeFilterValue = React.useCallback((filter: ReportFilterKey) => {
-    if (filter === "dateRange") {
-      if (dialogFilters.datePreset === "custom") {
-        if (dialogFilters.from || dialogFilters.to) {
-          return `${dialogFilters.from || "Start not set"} - ${dialogFilters.to || "End not set"}`;
-        }
-        return "Custom range";
-      }
-      return DATE_PRESET_OPTIONS.find((item) => item.value === dialogFilters.datePreset)?.label ?? "This Month";
+  const handleExport = React.useCallback(async (format: ReportFormat) => {
+    if (customerLabel.trim() && !customerId) {
+      setFeedback({
+        type: "error",
+        message: "Company wise report nite hole list theke company select korte hobe.",
+      });
+      return;
     }
 
-    if (filter === "employee") {
-      return workspace.employees.find((employee) => employee.id === dialogFilters.userId)?.name ?? "All Employees";
-    }
-
-    if (filter === "customer") {
-      return workspace.companies.find((company) => company.id === dialogFilters.customerId)?.name ?? "All Customers";
-    }
-
-    if (filter === "communicationType") {
-      return REPORT_COMMUNICATION_TYPE_OPTIONS.find((option) => option.value === dialogFilters.communicationType)?.label ?? "All Communication Types";
-    }
-
-    if (filter === "leadStatus") {
-      return dialogFilters.leadStatus ? dialogFilters.leadStatus.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase()) : "All Lead Status";
-    }
-
-    if (filter === "followUpStatus") {
-      return dialogFilters.followUpStatus ? dialogFilters.followUpStatus.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase()) : "All Follow-up Status";
-    }
-
-    if (filter === "taskStatus") {
-      return dialogFilters.taskStatus ? dialogFilters.taskStatus.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase()) : "All Task Status";
-    }
-
-    if (filter === "product") {
-      return workspace.products.find((product) => product.id === dialogFilters.productId)?.name ?? "All Products";
-    }
-
-    return "All";
-  }, [dialogFilters, workspace.companies, workspace.employees, workspace.products]);
-
-  const handleExport = React.useCallback(async () => {
-    if (!dialogState || !selectedReportDefinition) return;
-
-    const exportKey = `${dialogState.reportType}-${dialogState.format}`;
+    const exportKey = `customer-communication-${format}`;
     setActiveExport(exportKey);
     setFeedback(null);
 
     try {
-      const response = await fetch(`/api/reports/export?${buildParams(dialogState.reportType, dialogState.format, dialogFilters, visibleReportFilters).toString()}`, {
+      const response = await fetch(`/api/reports/export?${buildParams(format).toString()}`, {
         method: "GET",
         cache: "no-store",
       });
@@ -8111,12 +8031,12 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
         throw new Error(payload?.message ?? "Report export failed.");
       }
 
-      const fallbackName = `${selectedReportDefinition.title}.${dialogState.format === "print" ? "html" : dialogState.format}`;
+      const fallbackName = `marketer-communication-report.${format === "print" ? "html" : format}`;
       const fileName = parseFileName(response, fallbackName);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
 
-      if (dialogState.format === "print") {
+      if (format === "print") {
         const popup = window.open(url, "_blank", "noopener,noreferrer");
         if (!popup) {
           window.location.href = url;
@@ -8134,10 +8054,8 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
 
       setFeedback({
         type: "success",
-        message: dialogState.format === "print" ? "Printable report opened successfully." : `${selectedReportDefinition.title} exported successfully.`,
+        message: format === "print" ? "Printable report khule geche." : "Report download ready.",
       });
-      setDialogState(null);
-      setDialogFilters(EMPTY_REPORT_MODAL_FILTERS);
     } catch (error) {
       setFeedback({
         type: "error",
@@ -8146,318 +8064,197 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
     } finally {
       setActiveExport(null);
     }
-  }, [buildParams, dialogFilters, dialogState, parseFileName, selectedReportDefinition, visibleReportFilters]);
+  }, [buildParams, customerId, customerLabel, parseFileName]);
 
   return (
     <>
       <FloatingFeedback feedback={feedback} />
-      <PageHeader title="Reports Center" description="Generate CRM reports and export filtered data in PDF, Excel, CSV, or print-ready format." />
+      <PageHeader title="Easy Reports" description="Ajker ba weekly marketer communication report ekhanei simple vabe filter kore export korun." />
 
       <Card className="rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-2xl">
             <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-blue-700">
               <FileText className="h-3.5 w-3.5" />
-              Contextual Report Filters
+              Simple Communication Report
             </div>
-            <h2 className="mt-3 text-xl font-black text-slate-950">Choose format first, then apply only relevant filters</h2>
-            <p className="mt-1 text-sm text-slate-500">Each report card now opens its own preview and filter modal, so unrelated filters no longer affect exports.</p>
+            <h2 className="mt-3 text-xl font-black text-slate-950">Marketer ke, kake, kivabe kotha bolse seta sohoje export korun</h2>
+            <p className="mt-1 text-sm text-slate-500">Extra report card, modal, ar onek filter bad deya hoyeche. Ekhon just period, marketer, ar company select kore PDF, XLSX, CSV ba print nite parben.</p>
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            <p className="font-semibold text-slate-800">Available actions</p>
-            <p className="mt-1">PDF, XLSX, CSV, and PRINT open a report-specific setup modal before export.</p>
+          <div className="grid w-full gap-3 sm:grid-cols-2 xl:max-w-[420px]">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Selected Period</p>
+              <p className="mt-2 text-lg font-black text-slate-950">{period === "today" ? "Today" : "Weekly"}</p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Preview Rows</p>
+              <p className="mt-2 text-lg font-black text-slate-950">{summary.total}</p>
+            </div>
           </div>
         </div>
       </Card>
 
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        {REPORT_DEFINITIONS.map(({ title, description, type, filters }) => (
-          <Card key={title} className="rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.06)]">
-            <div className="flex items-start gap-4">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
-                <FileText className="h-6 w-6" />
+      <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+        <Card className="rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.06)]">
+          <div className="flex flex-wrap items-center gap-2">
+            {([
+              { value: "today", label: "Today" },
+              { value: "week", label: "Weekly" },
+            ] as const).map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setPeriod(option.value)}
+                className={cn(
+                  "inline-flex h-10 items-center rounded-full px-4 text-sm font-bold transition",
+                  period === option.value
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "border border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:text-blue-700",
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <label className="space-y-1.5">
+              <span className="text-xs font-bold uppercase text-slate-500">Marketer</span>
+              <select
+                value={userId}
+                onChange={(event) => setUserId(event.target.value)}
+                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+              >
+                <option value="">All Marketers</option>
+                {marketerRows.map((employee) => (
+                  <option key={employee.id} value={employee.id}>
+                    {employee.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <SearchableEntitySelect
+              label="Company Search"
+              options={companyOptions}
+              value={customerId}
+              defaultLabel={customerLabel}
+              onValueChange={(value, label) => {
+                setCustomerId(value);
+                setCustomerLabel(label);
+              }}
+              placeholder="Search company name"
+            />
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {(["pdf", "xlsx", "csv", "print"] as const).map((format) => (
+              <Button
+                key={format}
+                type="button"
+                variant={format === "pdf" ? "default" : "outline"}
+                className="w-full"
+                disabled={Boolean(activeExport)}
+                onClick={() => void handleExport(format)}
+              >
+                {format === "print" ? <Printer className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+                {activeExport === `customer-communication-${format}` ? "Preparing..." : reportFormatLabel(format)}
+              </Button>
+            ))}
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-sm text-slate-600">
+            <p className="font-bold text-slate-900">Current selection</p>
+            <p className="mt-2">
+              <span className="font-semibold text-slate-700">Period:</span> {period === "today" ? "Today" : "Weekly"}
+            </p>
+            <p className="mt-1">
+              <span className="font-semibold text-slate-700">Marketer:</span> {selectedMarketer?.name ?? "All Marketers"}
+            </p>
+            <p className="mt-1">
+              <span className="font-semibold text-slate-700">Company:</span> {selectedCompany?.name ?? "All Companies"}
+            </p>
+          </div>
+        </Card>
+
+        <Card className="rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.06)]">
+          <h3 className="text-base font-black text-slate-950">Quick Summary</h3>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {[
+              { label: "Total Talks", value: summary.total },
+              { label: "Calls", value: summary.calls },
+              { label: "WhatsApp", value: summary.whatsapp },
+              { label: "Email/Meeting", value: summary.email + summary.meetings },
+            ].map((item) => (
+              <div key={item.label} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{item.label}</p>
+                <p className="mt-2 text-2xl font-black text-slate-950">{item.value}</p>
               </div>
-              <div className="min-w-0">
-                <h3 className="font-black text-slate-950">{title}</h3>
-                <p className="mt-1 text-sm text-slate-500">{description}</p>
-              </div>
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {filters.map((filter) => (
-                <span key={filter} className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-                  {reportFilterLabel(filter)}
-                </span>
-              ))}
-            </div>
-            <div className="mt-5 grid grid-cols-2 gap-2">
-              {(["pdf", "xlsx", "csv", "print"] as const).map((format) => (
-                <Button
-                  key={format}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="w-full"
-                  disabled={Boolean(activeExport)}
-                  onClick={() => openReportDialog(type, format)}
-                >
-                  {format === "print" ? <Printer className="h-4 w-4" /> : <Download className="h-4 w-4" />}
-                  {reportFormatLabel(format)}
-                </Button>
-              ))}
-            </div>
-          </Card>
-        ))}
+            ))}
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-bold text-slate-900">Ei report e ki thakbe?</p>
+            <ul className="mt-3 space-y-2 text-sm text-slate-600">
+              <li>Marketer kar sathe kotha bolse</li>
+              <li>Kivabe kotha bolse: call, WhatsApp, email, meeting</li>
+              <li>Ki niye kotha hoise / note</li>
+              <li>Selected marketer ba selected company wise filtered export</li>
+            </ul>
+          </div>
+        </Card>
       </div>
 
-      <DashboardCard title="Report Data Preview">
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <h3 className="text-sm font-black text-slate-900">Recent Leads</h3>
-            <div className="mt-3 space-y-2">
-              {workspace.leads.slice(0, 5).map((lead) => (
-                <div key={lead.id} className="flex items-center justify-between gap-3 text-sm">
-                  <EntityLink href={`/leads/${lead.id}`} className="truncate font-bold">{lead.title}</EntityLink>
-                  <StatusBadge value={lead.status} />
+      <DashboardCard title="Report Preview">
+        <div className="space-y-3">
+          {previewRows.length ? previewRows.map((row) => (
+            <div key={row.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="neutral">{row.badgeLabel ?? row.category ?? "Communication"}</Badge>
+                    <span className="text-xs font-semibold text-slate-500">{row.time}</span>
+                  </div>
+                  <p className="mt-3 text-base font-black text-slate-950">
+                    <EntityLink href={row.customerHref} className="font-black">{row.customerName ?? "Unknown company"}</EntityLink>
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-600">
+                    {row.employeeName ?? row.createdBy ?? "Unknown marketer"}
+                  </p>
+                  <p className="mt-3 text-sm leading-6 text-slate-700">
+                    {row.discussionSummary ?? row.notes ?? row.detail}
+                  </p>
                 </div>
-              ))}
-              {!workspace.leads.length ? <p className="text-sm font-semibold text-slate-500">No saved leads yet.</p> : null}
-            </div>
-          </div>
-          <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <h3 className="text-sm font-black text-slate-900">Recent Customers</h3>
-            <div className="mt-3 space-y-2">
-              {workspace.companies.slice(0, 5).map((company) => (
-                <div key={company.id} className="flex items-center justify-between gap-3 text-sm">
-                  <EntityLink href={`/customers/${company.id}`} className="truncate font-bold">{company.name}</EntityLink>
-                  <span className="shrink-0 text-xs font-semibold text-slate-500">{company.industry}</span>
+                <div className="flex shrink-0 items-center gap-2">
+                  {row.contactMethod ? <Badge variant="neutral">{row.contactMethod}</Badge> : null}
                 </div>
-              ))}
-              {!workspace.companies.length ? <p className="text-sm font-semibold text-slate-500">No saved customers yet.</p> : null}
+              </div>
             </div>
-          </div>
+          )) : (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center">
+              <p className="text-base font-black text-slate-900">No communication found</p>
+              <p className="mt-2 text-sm text-slate-500">Selected filter e kono marketer communication paoya jai nai.</p>
+            </div>
+          )}
         </div>
       </DashboardCard>
 
-      <DataTable data={reportHistory} columns={React.useMemo<ColumnDef<(typeof reportHistory)[number]>[]>(() => [
-        {
-          accessorKey: "module",
-          header: "Report",
-          cell: ({ row }) => <span className="font-bold text-slate-900">{row.original.fileName !== "-" ? row.original.fileName : row.original.module}</span>,
-        },
-        { accessorKey: "format", header: "Format" },
-        { accessorKey: "status", header: "Status", cell: ({ row }) => <StatusBadge value={row.original.status} /> },
-        { accessorKey: "createdAt", header: "Created" },
-      ], [reportHistory])} searchPlaceholder="Search report logs..." />
-
-      <FormModal
-        open={Boolean(dialogState && selectedReportDefinition)}
-        title={`${selectedReportDefinition?.title ?? "Report"} · ${dialogState ? reportFormatLabel(dialogState.format) : ""}`}
-        onClose={closeReportDialog}
-        panelClassName="max-w-4xl"
-      >
-        {dialogState && selectedReportDefinition ? (
-          <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-            <div>
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">Report Setup</p>
-                <h3 className="mt-2 text-lg font-black text-slate-950">{selectedReportDefinition.title}</h3>
-                <p className="mt-1 text-sm text-slate-500">{selectedReportDefinition.description}</p>
-                <p className="mt-3 text-sm font-medium text-slate-600">Only filters relevant to this report are shown below before export.</p>
-              </div>
-
-              <div className="mt-5 grid gap-4 md:grid-cols-2">
-                {reportUsesFilter("dateRange") ? (
-                  <label className="space-y-1.5 md:col-span-2">
-                    <span className="text-xs font-bold uppercase text-slate-500">Date Range</span>
-                    <select
-                      value={dialogFilters.datePreset}
-                      onChange={(event) => updateDialogFilter("datePreset", event.target.value)}
-                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-                    >
-                      {DATE_PRESET_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-
-                {reportUsesFilter("dateRange") && dialogFilters.datePreset === "custom" ? (
-                  <>
-                    <label className="space-y-1.5">
-                      <span className="text-xs font-bold uppercase text-slate-500">From</span>
-                      <Input type="date" value={dialogFilters.from} onChange={(event) => updateDialogFilter("from", event.target.value)} />
-                    </label>
-                    <label className="space-y-1.5">
-                      <span className="text-xs font-bold uppercase text-slate-500">To</span>
-                      <Input type="date" value={dialogFilters.to} onChange={(event) => updateDialogFilter("to", event.target.value)} />
-                    </label>
-                  </>
-                ) : null}
-
-                {reportUsesFilter("employee") ? (
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-bold uppercase text-slate-500">Employee</span>
-                    <select
-                      value={dialogFilters.userId}
-                      onChange={(event) => updateDialogFilter("userId", event.target.value)}
-                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-                    >
-                      <option value="">All Employees</option>
-                      {workspace.employees.map((employee) => (
-                        <option key={employee.id} value={employee.id}>
-                          {employee.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-
-                {reportUsesFilter("customer") ? (
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-bold uppercase text-slate-500">Customer</span>
-                    <select
-                      value={dialogFilters.customerId}
-                      onChange={(event) => updateDialogFilter("customerId", event.target.value)}
-                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-                    >
-                      <option value="">All Customers</option>
-                      {workspace.companies.map((company) => (
-                        <option key={company.id} value={company.id}>
-                          {company.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-
-                {reportUsesFilter("communicationType") ? (
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-bold uppercase text-slate-500">Communication Type</span>
-                    <select
-                      value={dialogFilters.communicationType}
-                      onChange={(event) => updateDialogFilter("communicationType", event.target.value)}
-                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-                    >
-                      <option value="">All Communication Types</option>
-                      {REPORT_COMMUNICATION_TYPE_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-
-                {reportUsesFilter("followUpStatus") ? (
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-bold uppercase text-slate-500">Follow-up Status</span>
-                    <select
-                      value={dialogFilters.followUpStatus}
-                      onChange={(event) => updateDialogFilter("followUpStatus", event.target.value)}
-                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-                    >
-                      <option value="">All Follow-up Status</option>
-                      {REPORT_FOLLOW_UP_STATUS_OPTIONS.map((status) => (
-                        <option key={status} value={status}>
-                          {status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-
-                {reportUsesFilter("taskStatus") ? (
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-bold uppercase text-slate-500">Task Status</span>
-                    <select
-                      value={dialogFilters.taskStatus}
-                      onChange={(event) => updateDialogFilter("taskStatus", event.target.value)}
-                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-                    >
-                      <option value="">All Task Status</option>
-                      {REPORT_TASK_STATUS_OPTIONS.map((status) => (
-                        <option key={status} value={status}>
-                          {status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-
-                {reportUsesFilter("leadStatus") ? (
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-bold uppercase text-slate-500">Lead Status</span>
-                    <select
-                      value={dialogFilters.leadStatus}
-                      onChange={(event) => updateDialogFilter("leadStatus", event.target.value)}
-                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-                    >
-                      <option value="">All Lead Status</option>
-                      {REPORT_LEAD_STATUS_OPTIONS.map((status) => (
-                        <option key={status} value={status}>
-                          {status.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-
-                {reportUsesFilter("product") ? (
-                  <label className="space-y-1.5">
-                    <span className="text-xs font-bold uppercase text-slate-500">Product</span>
-                    <select
-                      value={dialogFilters.productId}
-                      onChange={(event) => updateDialogFilter("productId", event.target.value)}
-                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-                    >
-                      <option value="">All Products</option>
-                      {workspace.products.map((product) => (
-                        <option key={product.id} value={product.id}>
-                          {product.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-slate-50 p-5">
-              <div className="flex items-center justify-between gap-3">
+      {workspace.reportLogs.length ? (
+        <Card className="rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.06)]">
+          <h3 className="text-base font-black text-slate-950">Recent Report Downloads</h3>
+          <div className="mt-4 space-y-2">
+            {workspace.reportLogs.slice(0, 6).map((log) => (
+              <div key={log.id} className="flex flex-col gap-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">Preview</p>
-                  <h3 className="mt-1 text-lg font-black text-slate-950">{reportFormatLabel(dialogState.format)} export</h3>
+                  <p className="font-bold text-slate-900">{log.fileName !== "-" ? log.fileName : log.module}</p>
+                  <p className="text-xs font-semibold text-slate-500">{log.createdAt}</p>
                 </div>
-                <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-bold text-blue-700 shadow-sm">
-                  {reportFormatLabel(dialogState.format)}
-                </span>
+                <StatusBadge value={log.status} />
               </div>
-              <p className="mt-3 text-sm leading-6 text-slate-600">Review the report scope below, then {dialogState.format === "print" ? "open the printable preview" : "generate the export"}.</p>
-
-              <div className="mt-5 space-y-3">
-                {visibleReportFilters.map((filter) => (
-                  <div key={filter} className="rounded-2xl border border-white/80 bg-white px-4 py-3 shadow-sm">
-                    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{reportFilterLabel(filter)}</p>
-                    <p className="mt-2 text-sm font-semibold text-slate-800">{describeFilterValue(filter)}</p>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-auto flex flex-col gap-2 pt-5 sm:flex-row">
-                <Button type="button" variant="outline" className="w-full" onClick={closeReportDialog} disabled={Boolean(activeExport)}>
-                  Cancel
-                </Button>
-                <Button type="button" className="w-full" onClick={() => void handleExport()} disabled={Boolean(activeExport)}>
-                  {dialogState.format === "print" ? <Printer className="h-4 w-4" /> : <Download className="h-4 w-4" />}
-                  {activeExport === `${dialogState.reportType}-${dialogState.format}` ? "Preparing..." : reportActionLabel(dialogState.format)}
-                </Button>
-              </div>
-            </div>
+            ))}
           </div>
-        ) : null}
-      </FormModal>
+        </Card>
+      ) : null}
     </>
   );
 }

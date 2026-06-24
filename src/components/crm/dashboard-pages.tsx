@@ -16,7 +16,6 @@ import {
   ClipboardCheck,
   Clock3,
   Eye,
-  FileBarChart,
   Mail,
   MessageCircleMore,
   MessageSquarePlus,
@@ -33,13 +32,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { LeadStatusDonut, ProductBarChart, SalesLineChart } from "@/components/charts/crm-charts";
+import { ProductBarChart, SalesLineChart } from "@/components/charts/crm-charts";
 import { AnimatedPanel } from "@/components/shared/animated-panel";
 import { DashboardCard } from "@/components/shared/dashboard-card";
 import { PageHeader } from "@/components/shared/page-header";
 import { DashboardMetricCard, StatCard } from "@/components/shared/stat-card";
 import { useTaskCounterContext } from "@/components/app/app-shell";
 import type { CrmWorkspace } from "@/lib/crm-data";
+import { getCrmPeriodWindow } from "@/lib/crm-time";
 import { cn, initials, rolePath, type Role } from "@/lib/utils";
 import { CompletedWorkList, type TodayTaskApiRow, TaskCreateModal, TaskFollowUpModal, TodayWorkQueueList, todayWorkCounts, matchesTodayWorkFilter, sortTodayWorkQueue, WorkCompletionModal, type TodayWorkFilter } from "@/components/crm/resource-pages";
 import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
@@ -158,61 +158,6 @@ function chartData(workspace: CrmWorkspace) {
     .map((item, index) => ({ name: item.label, value: Math.max(16, Math.round((item.value / max) * 100)), color: chartColors[index % chartColors.length] }));
 
   return { leadStatus, sales, products, funnel };
-}
-
-function PipelineBar({ workspace, role }: { workspace: CrmWorkspace; role: Role }) {
-  const total = Math.max(1, workspace.pipeline.reduce((sum, item) => sum + item.value, 0));
-
-  return (
-    <DashboardCard title="Lead Pipeline">
-      <div className="flex h-3 overflow-hidden rounded-full bg-slate-100">
-        {workspace.pipeline.map((item) => (
-          <div key={item.label} className={item.color} style={{ width: `${(item.value / total) * 100}%` }} />
-        ))}
-      </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-5">
-        {workspace.pipeline.map((item) => (
-          <Link key={item.label} href={rolePath(role, "leads")} className="group rounded-xl border border-slate-100 bg-slate-50 p-3 transition hover:border-blue-200 hover:bg-blue-50/60">
-            <div className="flex items-center justify-between gap-2">
-              <p className="truncate text-xs font-bold text-blue-700 underline-offset-2 group-hover:underline">{item.label}</p>
-              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${item.color}`} />
-            </div>
-            <p className="mt-2 text-2xl font-black text-slate-950">{item.value}</p>
-          </Link>
-        ))}
-      </div>
-    </DashboardCard>
-  );
-}
-
-const quickActions = [
-  ["Add Lead", "leads", Target],
-  ["Add Customer", "customers", BriefcaseBusiness],
-  ["Add Follow-up", "follow-ups", PhoneForwarded],
-  ["Log Communication", "communication", MessageSquarePlus],
-] as const;
-
-function QuickActions({ role }: { role: Role }) {
-  return (
-    <DashboardCard title="Quick Actions">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {quickActions.map(([label, path, Icon], index) => (
-          <AnimatedPanel key={label} delay={index * 0.02}>
-            <Link
-              href={rolePath(role, path)}
-              className={cn(
-                "inline-flex h-12 w-full items-center justify-start gap-2 rounded-xl border px-4 text-sm font-semibold transition hover:-translate-y-0.5",
-                index === 0 ? "border-blue-600 bg-blue-600 text-white shadow-sm shadow-blue-200" : "border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700",
-              )}
-            >
-              <Icon className="h-4 w-4" />
-              {label}
-            </Link>
-          </AnimatedPanel>
-        ))}
-      </div>
-    </DashboardCard>
-  );
 }
 
 function PendingFromPreviousDay({ workspace }: { workspace: CrmWorkspace }) {
@@ -593,14 +538,16 @@ type TeamPerformanceDrilldownRow = {
   status: string;
   note: string;
 };
-type TeamPerformancePeriod = "today" | "week" | "month" | "year" | "custom";
+type TeamPerformancePeriod = "today" | "week" | "month";
 type TeamPerformanceSource = "table" | "mobile";
+const teamPerformancePeriods = ["today", "week", "month"] as const;
+const isTeamPerformancePeriod = (value?: string | null): value is TeamPerformancePeriod => (
+  value === "today" || value === "week" || value === "month"
+);
 const performancePeriodLabels: Record<TeamPerformancePeriod, string> = {
   today: "Today",
-  week: "This Week",
+  week: "Weekly",
   month: "This Month",
-  year: "This Year",
-  custom: "Custom",
 };
 
 const teamPerformanceMetricLabels: Record<TeamPerformanceMetricKey, string> = {
@@ -1022,31 +969,6 @@ function SupervisorTeamPerformancePanel({ rows }: { rows: SupervisorPerformanceR
           title="No marketer performance data available"
           description="Assign marketers to leads and team activities to view performance analytics here."
           className="min-h-[360px]"
-        />
-      )}
-    </SupervisorSurfaceCard>
-  );
-}
-
-function SupervisorLeadStatusPanel({ totalLeads, data }: { totalLeads: number; data: Array<{ name: string; value: number; color: string }> }) {
-  return (
-    <SupervisorSurfaceCard
-      title="Lead Status Distribution"
-      subtitle="A grouped pipeline view across your supervised team."
-      action={<Badge variant="neutral">{totalLeads} Total Leads</Badge>}
-      className="h-full"
-      contentClassName="h-full min-h-[420px] p-5"
-    >
-      {data.length ? (
-        <div className="h-full">
-          <LeadStatusDonut total={totalLeads} data={data} />
-        </div>
-      ) : (
-        <SupervisorEmptyState
-          icon={Target}
-          title="No lead distribution available"
-          description="Add and progress leads through the pipeline to unlock distribution analytics."
-          className="min-h-[340px]"
         />
       )}
     </SupervisorSurfaceCard>
@@ -1488,29 +1410,6 @@ function SupervisorTeamPerformancePanelV2({
           title="No marketer performance data available"
           description="Assign marketers to leads and team activities to view performance analytics here."
           className="min-h-[360px]"
-        />
-      )}
-    </SupervisorSurfaceCard>
-  );
-}
-
-function SupervisorLeadStatusPanelV2({ totalLeads, data }: { totalLeads: number; data: Array<{ name: string; value: number; color: string }> }) {
-  return (
-    <SupervisorSurfaceCard
-      title="Lead Status Distribution"
-      className="h-full"
-      contentClassName="h-full min-h-[420px] p-5"
-    >
-      {data.length ? (
-        <div className="h-full">
-          <LeadStatusDonut total={totalLeads} data={data} detailedLegend />
-        </div>
-      ) : (
-        <SupervisorEmptyState
-          icon={Target}
-          title="No lead distribution available"
-          description="Add and progress leads through the pipeline to unlock distribution analytics."
-          className="min-h-[340px]"
         />
       )}
     </SupervisorSurfaceCard>
@@ -2126,14 +2025,11 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
   const router = useRouter();
   const searchParams = useSearchParams();
   const charts = chartData(workspace);
-  const periodOptions: TeamPerformancePeriod[] = ["today", "week", "month", "year", "custom"];
+  const periodOptions: TeamPerformancePeriod[] = ["today", "week", "month"];
   const teamPerformanceRows = workspace.teamPerformance?.rows;
-  const initialPeriod = workspace.teamPerformance?.period ?? "month";
-  const workspacePeriodFrom = teamPerformanceRows ? workspace.teamPerformance?.from ?? "" : "";
-  const workspacePeriodTo = teamPerformanceRows ? workspace.teamPerformance?.to ?? "" : "";
+  const workspacePeriod = workspace.teamPerformance?.period ?? null;
+  const initialPeriod: TeamPerformancePeriod = isTeamPerformancePeriod(workspacePeriod) ? workspacePeriod : "today";
   const [performancePeriod, setPerformancePeriod] = React.useState<TeamPerformancePeriod>(initialPeriod);
-  const [customFrom, setCustomFrom] = React.useState(workspacePeriodFrom);
-  const [customTo, setCustomTo] = React.useState(workspacePeriodTo);
   const supervisorStats = React.useMemo(() => {
     const requestedTitles = [
       "Total Marketers",
@@ -2166,47 +2062,27 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
   React.useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       setPerformancePeriod(initialPeriod);
-      setCustomFrom(workspacePeriodFrom);
-      setCustomTo(workspacePeriodTo);
     });
 
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [initialPeriod, workspacePeriodFrom, workspacePeriodTo]);
+  }, [initialPeriod]);
 
-  const updatePerformancePeriod = React.useCallback((period: TeamPerformancePeriod, from?: string, to?: string) => {
+  const updatePerformancePeriod = React.useCallback((period: TeamPerformancePeriod) => {
     if (!pathname) return;
     const params = new URLSearchParams(searchParams.toString());
     params.set("performancePeriod", period);
-
-    if (period === "custom") {
-      if (from) params.set("from", from);
-      else params.delete("from");
-      if (to) params.set("to", to);
-      else params.delete("to");
-    } else {
-      params.delete("from");
-      params.delete("to");
-    }
 
     const nextQuery = params.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
   }, [pathname, router, searchParams]);
 
-  const applyCustomPeriod = React.useCallback(() => {
-    if (performancePeriod !== "custom" || !customFrom || !customTo) return;
-    updatePerformancePeriod("custom", customFrom, customTo);
-  }, [customFrom, customTo, performancePeriod, updatePerformancePeriod]);
-
   const handlePeriodChange = React.useCallback((period: TeamPerformancePeriod) => {
     setPerformancePeriod(period);
-    if (period !== "custom") {
-      updatePerformancePeriod(period);
-    }
+    updatePerformancePeriod(period);
   }, [updatePerformancePeriod]);
 
-  const canApplyCustom = performancePeriod === "custom" && Boolean(customFrom && customTo && customFrom <= customTo);
   const performanceFilterToolbar = (
     <div className="flex flex-wrap items-center justify-end gap-2">
       <div className="inline-flex rounded-full border border-slate-200 bg-white p-1">
@@ -2226,31 +2102,6 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
           </button>
         ))}
       </div>
-      {performancePeriod === "custom" ? (
-        <div className="flex items-center gap-2">
-          <input
-            type="date"
-            value={customFrom}
-            onChange={(event) => setCustomFrom(event.target.value)}
-            className="h-9 rounded-full border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none ring-0 transition focus:border-blue-500"
-          />
-          <input
-            type="date"
-            value={customTo}
-            onChange={(event) => setCustomTo(event.target.value)}
-            className="h-9 rounded-full border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none ring-0 transition focus:border-blue-500"
-          />
-          <Button
-            type="button"
-            size="sm"
-            className="h-9 rounded-full"
-            onClick={applyCustomPeriod}
-            disabled={!canApplyCustom}
-          >
-            Apply
-          </Button>
-        </div>
-      ) : null}
     </div>
   );
 
@@ -2275,13 +2126,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
   const [drilldownLoading, setDrilldownLoading] = React.useState(false);
   const [drilldownError, setDrilldownError] = React.useState("");
 
-  const metricPeriodLabel = React.useCallback((period: TeamPerformancePeriod, from?: string, to?: string) => {
-    if (period === "custom") {
-      return from && to ? `Custom (${from} - ${to})` : "Custom";
-    }
-
-    return performancePeriodLabels[period];
-  }, []);
+  const metricPeriodLabel = React.useCallback((period: TeamPerformancePeriod) => performancePeriodLabels[period], []);
 
   const handlePerformanceMetricClick = React.useCallback(async (payload: TeamPerformanceDrilldownPayload) => {
     setDrilldownPayload(payload);
@@ -2298,13 +2143,6 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
         period: performancePeriod,
       });
 
-      if (performancePeriod === "custom" && customFrom) {
-        params.set("from", customFrom);
-      }
-      if (performancePeriod === "custom" && customTo) {
-        params.set("to", customTo);
-      }
-
       const response = await fetch(`/api/supervisor/team-performance/drilldown?${params.toString()}`);
       const json = await response.json();
 
@@ -2319,7 +2157,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
     } finally {
       setDrilldownLoading(false);
     }
-  }, [customFrom, customTo, performancePeriod]);
+  }, [performancePeriod]);
 
   const closeDrilldown = React.useCallback(() => {
     setDrilldownOpen(false);
@@ -2363,7 +2201,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
               className="h-9 rounded-full bg-blue-600 px-4 text-white hover:bg-blue-700"
               refreshOnCreate
             />
-            <SupervisorHeaderAction>{performancePeriod === "month" ? "Current Month" : performancePeriodLabels[performancePeriod]}</SupervisorHeaderAction>
+            <SupervisorHeaderAction>{performancePeriodLabels[performancePeriod]}</SupervisorHeaderAction>
           </>
         }
       />
@@ -2371,17 +2209,15 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
       <SupervisorKpiGrid items={supervisorStats} />
 
       <div data-supervisor-section>
-        <SupervisorTeamPerformancePanelV2
-          rows={performanceRows}
-          toolbar={
-            performanceFilterToolbar
-          }
-          onMetricClick={handlePerformanceMetricClick}
-        />
+        <AdminCallTrackingPanel workspace={workspace} />
       </div>
 
       <div data-supervisor-section>
-        <AdminCallTrackingPanel workspace={workspace} />
+        <SupervisorTeamPerformancePanelV2
+          rows={performanceRows}
+          toolbar={performanceFilterToolbar}
+          onMetricClick={handlePerformanceMetricClick}
+        />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.45fr_0.88fr_1fr]" data-supervisor-section>
@@ -2399,11 +2235,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
       <FormModal
         open={drilldownOpen}
         title={drilldownPayload
-          ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} - ${metricPeriodLabel(
-            performancePeriod,
-            performancePeriod === "custom" ? customFrom : undefined,
-            performancePeriod === "custom" ? customTo : undefined,
-          )}`
+          ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} - ${metricPeriodLabel(performancePeriod)}`
           : "Team performance drill-down"}
         onClose={closeDrilldown}
         panelClassName="w-[96vw] max-w-[1180px]"
@@ -2478,13 +2310,6 @@ const adminKpiConfig = {
     helper: "Distributed reward points",
   },
 } as const;
-
-const adminQuickActions = [
-  { label: "Add Lead", href: "/admin/leads", icon: Target, accent: "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100" },
-  { label: "Add Customer", href: "/admin/customers", icon: BriefcaseBusiness, accent: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100" },
-  { label: "Add Follow-up", href: "/admin/follow-ups", icon: PhoneForwarded, accent: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100" },
-  { label: "Generate Report", href: "/admin/reports", icon: FileBarChart, accent: "border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100" },
-] as const;
 
 function adminActivityVisual(category?: CrmWorkspace["activities"][number]["category"]) {
   switch (category) {
@@ -2565,20 +2390,82 @@ function AdminSalesPanel({ data }: { data: Array<{ month: string; sales: number 
 }
 
 function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
+  const periodOptions: TeamPerformancePeriod[] = ["today", "week", "month"];
+  const [callPeriod, setCallPeriod] = React.useState<TeamPerformancePeriod>("today");
+  const [detailOpen, setDetailOpen] = React.useState(false);
+  const [detailCustomerHref, setDetailCustomerHref] = React.useState<string | null>(null);
+  const [detailCustomerName, setDetailCustomerName] = React.useState<string>("");
+  const detailCustomerId = React.useMemo(() => {
+    const match = detailCustomerHref?.match(/^\/customers\/([^/?#]+)/);
+    return match?.[1] ?? "";
+  }, [detailCustomerHref]);
+
+  const periodWindow = React.useMemo(() => getCrmPeriodWindow(new Date(), { period: callPeriod }), [callPeriod]);
   const rows = React.useMemo(() => {
     const filtered = workspace.activities
       .filter((item) => item.category === "CALL")
+      .filter((item) => {
+        if (!item.createdAtValue) return false;
+        const createdAt = new Date(item.createdAtValue);
+        return createdAt >= periodWindow.from && createdAt < periodWindow.to;
+      })
       .sort((left, right) => (right.createdAtValue ?? "").localeCompare(left.createdAtValue ?? ""));
     return filtered.slice(0, 12);
-  }, [workspace.activities]);
+  }, [periodWindow.from, periodWindow.to, workspace.activities]);
 
-  const todayCalls = workspace.communicationCenterSummary?.todayCalls ?? 0;
+  const totalCallsInPeriod = React.useMemo(() => {
+    return workspace.activities
+      .filter((item) => item.category === "CALL")
+      .filter((item) => {
+        if (!item.createdAtValue) return false;
+        const createdAt = new Date(item.createdAtValue);
+        return createdAt >= periodWindow.from && createdAt < periodWindow.to;
+      }).length;
+  }, [periodWindow.from, periodWindow.to, workspace.activities]);
+
+  const company = React.useMemo(() => {
+    if (!detailCustomerId) return null;
+    return workspace.companies.find((item) => item.id === detailCustomerId) ?? null;
+  }, [detailCustomerId, workspace.companies]);
+
+  const companyCalls = React.useMemo(() => {
+    if (!detailCustomerHref) return [];
+    return workspace.activities
+      .filter((item) => item.category === "CALL" && item.customerHref === detailCustomerHref)
+      .sort((left, right) => (right.createdAtValue ?? "").localeCompare(left.createdAtValue ?? ""))
+      .slice(0, 24);
+  }, [detailCustomerHref, workspace.activities]);
+
+  const callPeriodToolbar = (
+    <div className="inline-flex rounded-full border border-slate-200 bg-white p-1">
+      {periodOptions.map((option) => (
+        <button
+          key={option}
+          type="button"
+          onClick={() => setCallPeriod(option)}
+          className={cn(
+            "rounded-full px-3 py-1.5 text-xs font-bold",
+            callPeriod === option
+              ? "bg-blue-600 text-white shadow-sm"
+              : "text-slate-600 hover:bg-slate-50",
+          )}
+        >
+          {performancePeriodLabels[option]}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <SupervisorSurfaceCard
-      title="Call Tracking"
-      subtitle="Marketer call activity with customer name and discussion notes."
-      action={<Badge variant="neutral">{todayCalls} Today Calls</Badge>}
+      title="Call Activity Center"
+      subtitle="Recent call logs with who called, when, and what was discussed."
+      action={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {callPeriodToolbar}
+          <Badge variant="neutral">{totalCallsInPeriod} Calls</Badge>
+        </div>
+      }
       className="h-full"
       contentClassName="p-5"
     >
@@ -2597,13 +2484,21 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
               {rows.map((item) => (
                 <tr key={item.id} className="transition hover:bg-slate-50/70">
                   <td className="px-3 py-3 font-semibold text-slate-900">
-                    {item.customerHref ? (
-                      <Link href={item.customerHref} className="text-blue-700 hover:underline">
-                        {item.customerName ?? "-"}
-                      </Link>
-                    ) : (
-                      item.customerName ?? "-"
-                    )}
+                    <button
+                      type="button"
+                      className={cn(
+                        "text-left font-semibold",
+                        item.customerHref ? "text-blue-700 hover:underline" : "text-slate-900",
+                      )}
+                      onClick={() => {
+                        setDetailCustomerHref(item.customerHref ?? null);
+                        setDetailCustomerName(item.customerName ?? "-");
+                        setDetailOpen(true);
+                      }}
+                      disabled={!item.customerHref}
+                    >
+                      {item.customerName ?? "-"}
+                    </button>
                   </td>
                   <td className="px-3 py-3 text-slate-700">{item.employeeName ?? item.createdBy ?? "-"}</td>
                   <td className="max-w-[420px] truncate px-3 py-3 text-slate-700" title={item.discussionSummary ?? item.notes ?? ""}>
@@ -2623,37 +2518,92 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
           className="min-h-[300px]"
         />
       )}
-    </SupervisorSurfaceCard>
-  );
-}
 
-function AdminLeadStatusPanel({ totalLeads, data }: { totalLeads: number; data: Array<{ name: string; value: number; color: string }> }) {
-  const hasData = data.some((item) => item.value > 0);
+      <FormModal
+        open={detailOpen}
+        title={detailCustomerName ? `${detailCustomerName} - Call Details` : "Call Details"}
+        onClose={() => setDetailOpen(false)}
+        panelClassName="w-[96vw] max-w-[920px]"
+        contentClassName="min-h-0 p-4 sm:p-5"
+      >
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-base font-black text-slate-950">{company?.name ?? detailCustomerName}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {[company?.industry, company?.cityOrZilla].filter((value) => value && value !== "-").join(" • ") || "Company details"}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {company?.status && company.status !== "-" ? <Badge variant="neutral">{company.status}</Badge> : null}
+                {detailCustomerHref ? (
+                  <Link href={detailCustomerHref} className="inline-flex h-9 items-center rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700">
+                    Open Customer
+                    <ArrowRight className="ml-2 h-3.5 w-3.5" />
+                  </Link>
+                ) : null}
+              </div>
+            </div>
 
-  return (
-    <SupervisorSurfaceCard
-      title="Lead Status Distribution"
-      subtitle="A clean snapshot of current pipeline movement across all lead stages."
-      className="h-full"
-      contentClassName="min-h-[360px] p-5"
-    >
-      {hasData ? (
-        <div className="h-full">
-          <LeadStatusDonut total={totalLeads} data={data} detailedLegend />
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Contact</p>
+                <p className="mt-2 text-sm font-semibold text-slate-800">{company?.contactPerson || "-"}</p>
+                <p className="mt-1 text-xs text-slate-600">{company?.phone || "-"}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Assigned</p>
+                <p className="mt-2 text-sm font-semibold text-slate-800">{company?.assignedTo || "-"}</p>
+                <p className="mt-1 text-xs text-slate-600">{company?.lastCommunication || "-"}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-sm font-black text-slate-950">Company Notes</p>
+              {company?.notes && company.notes !== "-" ? (
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{company.notes}</p>
+              ) : (
+                <p className="mt-2 rounded-xl bg-slate-50 p-3 text-sm font-semibold text-slate-500">No notes saved yet.</p>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-sm font-black text-slate-950">Recent Call Notes</p>
+              {companyCalls.length ? (
+                <div className="mt-3 space-y-2">
+                  {companyCalls.map((call) => (
+                    <div key={call.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-bold text-slate-600">{call.employeeName ?? call.createdBy ?? "-"}</p>
+                        <p className="text-xs font-semibold text-slate-500">{call.time}</p>
+                      </div>
+                      <p className="mt-2 text-sm text-slate-700">{call.discussionSummary ?? call.notes ?? "-"}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 rounded-xl bg-slate-50 p-3 text-sm font-semibold text-slate-500">No call notes found for this company.</p>
+              )}
+            </div>
+          </div>
         </div>
-      ) : (
-        <SupervisorEmptyState
-          icon={Target}
-          title="No lead status data available"
-          description="Create and update leads to visualize their pipeline distribution here."
-          className="min-h-[300px]"
-        />
-      )}
+      </FormModal>
     </SupervisorSurfaceCard>
   );
 }
 
-function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
+function AdminTeamPerformancePanel({
+  rows,
+  period,
+  toolbar,
+}: {
+  rows: AdminPerformanceRow[];
+  period: TeamPerformancePeriod;
+  toolbar?: React.ReactNode;
+}) {
   const [drilldownOpen, setDrilldownOpen] = React.useState(false);
   const [drilldownPayload, setDrilldownPayload] = React.useState<TeamPerformanceDrilldownPayload | null>(null);
   const [drilldownRows, setDrilldownRows] = React.useState<TeamPerformanceDrilldownRow[]>([]);
@@ -2688,7 +2638,7 @@ function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
       const params = new URLSearchParams({
         marketerId: employee.id,
         metricType: metric,
-        period: "month",
+        period,
       });
       const response = await fetch(`/api/supervisor/team-performance/drilldown?${params.toString()}`);
       const json = await response.json();
@@ -2704,13 +2654,20 @@ function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
     } finally {
       setDrilldownLoading(false);
     }
-  }, []);
+  }, [period]);
 
   return (
     <SupervisorSurfaceCard
       title="Team Performance"
       subtitle="Monitor execution quality across roles without forcing extra scrolling."
-      action={<Badge variant="neutral">{rows.length} Team Members</Badge>}
+      action={toolbar ? (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {toolbar}
+          <Badge variant="neutral">{rows.length} Team Members</Badge>
+        </div>
+      ) : (
+        <Badge variant="neutral">{rows.length} Team Members</Badge>
+      )}
       className="h-full"
     >
       <div className="overflow-x-auto">
@@ -2804,7 +2761,7 @@ function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
 
       <FormModal
         open={drilldownOpen}
-        title={drilldownPayload ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} (This Month)` : "Team performance drill-down"}
+        title={drilldownPayload ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} - ${performancePeriodLabels[period]}` : "Team performance drill-down"}
         onClose={closeDrilldown}
         panelClassName="w-[96vw] max-w-[1180px]"
         contentClassName="min-h-0 p-4 sm:p-5"
@@ -2831,58 +2788,6 @@ function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
           </div>
         )}
       </FormModal>
-    </SupervisorSurfaceCard>
-  );
-}
-
-function AdminQuickActionsPanel() {
-  return (
-    <SupervisorSurfaceCard title="Quick Actions" className="h-full">
-      <div className="grid gap-3 sm:grid-cols-2">
-        {adminQuickActions.map((item) => {
-          const Icon = item.icon;
-          return (
-            <Link key={item.label} href={item.href} className={cn("flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-bold transition", item.accent)}>
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white shadow-sm">
-                <Icon className="h-5 w-5" />
-              </span>
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
-      </div>
-    </SupervisorSurfaceCard>
-  );
-}
-
-function AdminSystemSummaryPanel({
-  users,
-  customers,
-  leads,
-  rewards,
-}: {
-  users: string;
-  customers: string;
-  leads: string;
-  rewards: string;
-}) {
-  const items = [
-    { label: "Users", value: users },
-    { label: "Customers", value: customers },
-    { label: "Leads", value: leads },
-    { label: "Rewards", value: rewards },
-  ];
-
-  return (
-    <SupervisorSurfaceCard title="System Monitoring Summary" className="h-full">
-      <div className="grid gap-3 sm:grid-cols-2">
-        {items.map((item) => (
-          <div key={item.label} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-400">{item.label}</p>
-            <p className="mt-3 text-2xl font-black text-slate-950">{item.value}</p>
-          </div>
-        ))}
-      </div>
     </SupervisorSurfaceCard>
   );
 }
@@ -3001,7 +2906,13 @@ function AdminRecentActivitiesPanel({ rows }: { rows: CrmWorkspace["activities"]
 
 export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
   const dashboardRef = React.useRef<HTMLDivElement | null>(null);
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const charts = chartData(workspace);
+  const workspacePeriod = workspace.teamPerformance?.period ?? null;
+  const initialPeriod: TeamPerformancePeriod = isTeamPerformancePeriod(workspacePeriod) ? workspacePeriod : "today";
+  const [performancePeriod, setPerformancePeriod] = React.useState<TeamPerformancePeriod>(initialPeriod);
   const adminStats = React.useMemo(() => {
     const statMap = new Map(workspace.stats.map((item) => [item.title, item]));
     const rewardTotal = statMap.get("Reward Points")?.value ?? String(workspace.employees.reduce((sum, row) => sum + row.rewardPoints, 0));
@@ -3028,6 +2939,49 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
       }))
       .sort((left, right) => right.performanceScoreRaw - left.performanceScoreRaw || right.sales - left.sales || right.leads - left.leads);
   }, [workspace.teamPerformance?.rows]);
+
+  React.useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setPerformancePeriod(initialPeriod);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [initialPeriod]);
+
+  const updatePerformancePeriod = React.useCallback((period: TeamPerformancePeriod) => {
+    if (!pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("performancePeriod", period);
+    const nextQuery = params.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
+  }, [pathname, router, searchParams]);
+
+  const handlePeriodChange = React.useCallback((period: TeamPerformancePeriod) => {
+    setPerformancePeriod(period);
+    updatePerformancePeriod(period);
+  }, [updatePerformancePeriod]);
+
+  const performanceFilterToolbar = (
+    <div className="inline-flex rounded-full border border-slate-200 bg-white p-1">
+      {teamPerformancePeriods.map((option) => (
+        <button
+          key={option}
+          type="button"
+          onClick={() => handlePeriodChange(option)}
+          className={cn(
+            "rounded-full px-3 py-1.5 text-xs font-bold",
+            performancePeriod === option
+              ? "bg-blue-600 text-white shadow-sm"
+              : "text-slate-600 hover:bg-slate-50",
+          )}
+        >
+          {performancePeriodLabels[option]}
+        </button>
+      ))}
+    </div>
+  );
 
   React.useEffect(() => {
     if (!dashboardRef.current) return;
@@ -3063,7 +3017,7 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
               className="h-9 rounded-full bg-blue-600 px-4 text-white hover:bg-blue-700"
               refreshOnCreate
             />
-            <SupervisorHeaderAction>Current Month</SupervisorHeaderAction>
+            <SupervisorHeaderAction>{performancePeriodLabels[performancePeriod]}</SupervisorHeaderAction>
           </>
         }
       />
@@ -3071,22 +3025,11 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
       <AdminKpiGrid items={adminStats} />
 
       <div data-admin-section>
-        <AdminTeamPerformancePanel rows={adminTeamRows} />
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]" data-admin-section>
         <AdminCallTrackingPanel workspace={workspace} />
-        <AdminLeadStatusPanel totalLeads={workspace.leads.length} data={charts.leadStatus} />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]" data-admin-section>
-        <AdminQuickActionsPanel />
-        <AdminSystemSummaryPanel
-          users={adminStats[0]?.value ?? "0"}
-          customers={adminStats[1]?.value ?? "0"}
-          leads={adminStats[2]?.value ?? "0"}
-          rewards={adminStats[6]?.value ?? "0"}
-        />
+      <div data-admin-section>
+        <AdminTeamPerformancePanel rows={adminTeamRows} period={performancePeriod} toolbar={performanceFilterToolbar} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.45fr_1fr]" data-admin-section>

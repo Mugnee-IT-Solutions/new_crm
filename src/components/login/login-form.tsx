@@ -254,6 +254,29 @@ export function LoginForm() {
     })();
   }
 
+  function handleFormSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (submitting) return;
+
+    if (isAdminLogin) {
+      handleAdminLogin();
+      return;
+    }
+
+    if (teamFlow === "verify-otp") {
+      handleOtpVerify();
+      return;
+    }
+
+    if (teamFlow === "set-password") {
+      handlePasswordSetup();
+      return;
+    }
+
+    handleTeamPasswordLogin();
+  }
+
   const feedbackClassName =
     feedback.tone === "success"
       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -343,7 +366,7 @@ export function LoginForm() {
             </p>
           </div>
 
-          <form className="mt-8 space-y-5" onSubmit={(event) => event.preventDefault()}>
+          <form className="mt-8 space-y-5" onSubmit={handleFormSubmit}>
             <div>
               <label className="text-sm font-semibold text-slate-700" htmlFor="login">
                 Email or Mobile Number
@@ -520,19 +543,10 @@ export function LoginForm() {
             </div>
 
             <Button
-              type="button"
+              type="submit"
               className="w-full"
               size="lg"
               disabled={submitting}
-              onClick={
-                isAdminLogin
-                  ? handleAdminLogin
-                  : teamFlow === "verify-otp"
-                    ? handleOtpVerify
-                    : teamFlow === "set-password"
-                      ? handlePasswordSetup
-                      : handleTeamPasswordLogin
-              }
             >
               {actionButtonLabel}
             </Button>
