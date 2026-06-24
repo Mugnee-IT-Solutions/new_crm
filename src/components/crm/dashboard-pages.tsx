@@ -743,32 +743,32 @@ function TeamPerformanceDrilldownTable({ rows }: { rows: TeamPerformanceDrilldow
 const supervisorKpiConfig = {
   "Total Marketers": {
     icon: Users,
-    tone: "bg-blue-600",
+    tone: "#2563eb",
     helper: "Active marketers under your supervision",
   },
   "Total Leads": {
     icon: Target,
-    tone: "bg-indigo-600",
+    tone: "#4f46e5",
     helper: "Total team pipeline opportunities",
   },
   "Follow-up Due": {
     icon: CalendarClock,
-    tone: "bg-amber-500",
+    tone: "#f59e0b",
     helper: "Due today across your active team",
   },
   "Overdue Follow-ups": {
     icon: AlertTriangle,
-    tone: "bg-red-600",
+    tone: "#dc2626",
     helper: "Urgent items needing escalation",
   },
   "Sales This Month": {
     icon: WalletCards,
-    tone: "bg-emerald-600",
+    tone: "#059669",
     helper: "Closed quotation value this month",
   },
   "Conversion Rate": {
     icon: Award,
-    tone: "bg-violet-600",
+    tone: "#7c3aed",
     helper: "Won deals versus total team leads",
   },
 } as const;
@@ -1731,12 +1731,12 @@ function SupervisorProductIntelligencePanelV2({ workspace }: { workspace: CrmWor
 type MarketerTaskFilter = TodayWorkFilter;
 
 const marketerKpiConfig = {
-  "Today's Tasks": { icon: ClipboardCheck, tone: "bg-blue-600", helper: "Unified work queue" },
-  "Pending Tasks": { icon: AlertTriangle, tone: "bg-amber-500", helper: "Need your action" },
-  "Follow-ups Due": { icon: PhoneForwarded, tone: "bg-indigo-600", helper: "Overdue & today" },
-  "New Leads": { icon: Target, tone: "bg-emerald-600", helper: "Assigned leads" },
-  "Meetings Today": { icon: CalendarClock, tone: "bg-cyan-600", helper: "Scheduled meeting" },
-  "Reward Points": { icon: Award, tone: "bg-rose-600", helper: "This month" },
+  "Today's Tasks": { icon: ClipboardCheck, tone: "#2563eb", helper: "Unified work queue" },
+  "Pending Tasks": { icon: AlertTriangle, tone: "#f59e0b", helper: "Need your action" },
+  "Follow-ups Due": { icon: PhoneForwarded, tone: "#4f46e5", helper: "Overdue & today" },
+  "New Leads": { icon: Target, tone: "#059669", helper: "Assigned leads" },
+  "Meetings Today": { icon: CalendarClock, tone: "#0891b2", helper: "Scheduled meeting" },
+  "Reward Points": { icon: Award, tone: "#e11d48", helper: "This month" },
 } as const;
 
 function marketerActivityIcon(title: string, detail: string) {
@@ -2443,37 +2443,37 @@ type AdminPerformanceRow = CrmWorkspace["employees"][number] & {
 const adminKpiConfig = {
   "Total Users": {
     icon: Users,
-    tone: "bg-blue-600",
+    tone: "#2563eb",
     helper: "System users",
   },
   "Total Customers": {
     icon: BriefcaseBusiness,
-    tone: "bg-emerald-600",
+    tone: "#059669",
     helper: "Active customer companies",
   },
   "Total Leads": {
     icon: Target,
-    tone: "bg-indigo-600",
+    tone: "#4f46e5",
     helper: "Live pipeline opportunities",
   },
   "Total Products": {
     icon: BriefcaseBusiness,
-    tone: "bg-cyan-600",
+    tone: "#0891b2",
     helper: "Products in CRM catalog",
   },
   "Follow-ups Due": {
     icon: CalendarClock,
-    tone: "bg-amber-500",
+    tone: "#f59e0b",
     helper: "Overdue and due today",
   },
   "Lead Conversion Rate": {
     icon: Award,
-    tone: "bg-violet-600",
+    tone: "#7c3aed",
     helper: "Won vs total leads",
   },
   "Total Rewards": {
     icon: Trophy,
-    tone: "bg-rose-600",
+    tone: "#e11d48",
     helper: "Distributed reward points",
   },
 } as const;
