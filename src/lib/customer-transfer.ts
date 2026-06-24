@@ -127,6 +127,7 @@ export type CustomerDistributionSummary = {
 
 export type CustomerDistributedImportResult = CustomerImportResult & {
   distribution: CustomerDistributionSummary[];
+  heldForLaterCount?: number;
 };
 
 export type CustomerExportFormat = "xlsx" | "csv";
@@ -1444,8 +1445,8 @@ export async function importCustomersWithAssignments(
       .filter((assignment): assignment is { assignedToId: string; count: number } => Boolean(assignment.assignedToId) && assignment.count > 0);
 
   const assignedTotal = normalizedAssignments.reduce((sum, item) => sum + item.count, 0);
-  if (assignedTotal !== parsed.rows.length) {
-    throw new Error(`Assign all ${parsed.rows.length} rows before importing. Currently assigned: ${assignedTotal}.`);
+  if (assignedTotal > parsed.rows.length) {
+    throw new Error(`Assigned quantity exceeds available rows. Total rows: ${parsed.rows.length}, assigned: ${assignedTotal}.`);
   }
 
   const distribution: CustomerDistributionSummary[] = [];
@@ -1453,6 +1454,7 @@ export async function importCustomersWithAssignments(
   let inserted = 0;
   let updated = 0;
   let offset = 0;
+  const heldForLaterCount = actor.role !== "MARKETER" ? Math.max(parsed.rows.length - assignedTotal, 0) : 0;
 
   for (const assignment of normalizedAssignments) {
     const ownerId = await resolveCustomerOwnerId(
@@ -1479,6 +1481,14 @@ export async function importCustomersWithAssignments(
     offset += assignment.count;
   }
 
+  if (heldForLaterCount > 0) {
+    const holdChunk = parsed.rows.slice(offset);
+    const holdResult = await applyCustomerImportRows(prisma, holdChunk, actor, actor.id, []);
+    inserted += holdResult.inserted;
+    updated += holdResult.updated;
+    combinedFailed.push(...holdResult.failed);
+  }
+
   await prisma.importExportLog.create({
     data: buildCustomerImportLogData({
       actorId: actor.id,
@@ -1496,6 +1506,7 @@ export async function importCustomersWithAssignments(
     updated,
     failed: combinedFailed,
     distribution,
+    heldForLaterCount,
   };
 }
 

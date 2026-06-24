@@ -3503,6 +3503,7 @@ type CustomerImportApiResult = {
   updated: number;
   failed: Array<{ row: number; reason: string }>;
   distribution?: Array<{ assignedToId: string; requestedCount: number; inserted: number; updated: number; failed: number }>;
+  heldForLaterCount?: number;
 };
 
 type CustomerPdfAssignmentDraft = {
@@ -3547,6 +3548,7 @@ function CustomerSpreadsheetImportModal({
   const [previewing, startPreview] = React.useTransition();
   const [importing, startImport] = React.useTransition();
   const assignedTotal = assignments.reduce((sum, assignment) => sum + Math.max(0, Number(assignment.count) || 0), 0);
+  const overflowRows = preview ? Math.max(assignedTotal - preview.totalRows, 0) : 0;
   const remainingRows = preview ? Math.max(preview.totalRows - assignedTotal, 0) : 0;
 
   const loadPreviewForFile = React.useCallback((sourceFile: File | null) => {
@@ -3762,9 +3764,13 @@ function CustomerSpreadsheetImportModal({
 
                 <div className={cn(
                   "mt-3 rounded-2xl px-4 py-3 text-sm font-semibold",
-                  remainingRows === 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800",
+                  overflowRows > 0 ? "bg-red-50 text-red-800" : remainingRows === 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800",
                 )}>
-                  Assigned {assignedTotal} of {preview.totalRows} rows. Remaining: {remainingRows}.
+                  {overflowRows > 0
+                    ? `Assigned ${assignedTotal} rows, but only ${preview.totalRows} rows are available. Reduce ${overflowRows} rows.`
+                    : remainingRows > 0
+                      ? `Assigned ${assignedTotal} of ${preview.totalRows} rows. Remaining ${remainingRows} rows will stay in your list so you can assign them later.`
+                      : `Assigned all ${preview.totalRows} rows.`}
                 </div>
               </div>
             ) : (
@@ -3795,16 +3801,18 @@ function CustomerSpreadsheetImportModal({
               }
 
               if (role !== "MARKETER" && !assignLater) {
-                if (!assignments.length) {
+                const validAssignments = assignments.filter((assignment) => assignment.assignedToId.trim() && Number(assignment.count) > 0);
+                const partialAssignments = assignments.filter((assignment) => assignment.assignedToId.trim() || Number(assignment.count) > 0);
+                if (!validAssignments.length) {
                   setMessage("Add at least one marketer split before importing.");
                   return;
                 }
-                if (remainingRows !== 0) {
-                  setMessage(`Assign all ${preview.totalRows} rows before importing the spreadsheet.`);
+                if (overflowRows > 0) {
+                  setMessage(`Assigned quantity is ${overflowRows} rows more than the spreadsheet allows.`);
                   return;
                 }
-                if (assignments.some((assignment) => !assignment.assignedToId.trim() || Number(assignment.count) <= 0)) {
-                  setMessage("Each marketer split needs a marketer and a positive row count.");
+                if (partialAssignments.some((assignment) => !assignment.assignedToId.trim() || Number(assignment.count) <= 0)) {
+                  setMessage("Each used marketer split needs both a marketer and a positive row count.");
                   return;
                 }
               }
@@ -3821,7 +3829,9 @@ function CustomerSpreadsheetImportModal({
                   if (role === "MARKETER" && currentUserId) {
                     formData.append("assignedToId", currentUserId);
                   } else if (!assignLater) {
-                    formData.append("assignmentsJson", JSON.stringify(assignments.map((assignment) => ({
+                    formData.append("assignmentsJson", JSON.stringify(assignments
+                      .filter((assignment) => assignment.assignedToId.trim() && Number(assignment.count) > 0)
+                      .map((assignment) => ({
                       assignedToId: assignment.assignedToId.trim(),
                       count: Number(assignment.count) || 0,
                     }))));
@@ -3887,6 +3897,7 @@ function CustomerPdfImportModal({
   const [importing, startImport] = React.useTransition();
 
   const assignedTotal = assignments.reduce((sum, assignment) => sum + Math.max(0, Number(assignment.count) || 0), 0);
+  const overflowRows = preview ? Math.max(assignedTotal - preview.totalRows, 0) : 0;
   const remainingRows = preview ? Math.max(preview.totalRows - assignedTotal, 0) : 0;
 
   const loadPreviewForFile = React.useCallback((sourceFile: File | null) => {
@@ -4063,9 +4074,13 @@ function CustomerPdfImportModal({
 
                 <div className={cn(
                   "mt-3 rounded-2xl px-4 py-3 text-sm font-semibold",
-                  remainingRows === 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800",
+                  overflowRows > 0 ? "bg-red-50 text-red-800" : remainingRows === 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800",
                 )}>
-                  Assigned {assignedTotal} of {preview.totalRows} rows. Remaining: {remainingRows}.
+                  {overflowRows > 0
+                    ? `Assigned ${assignedTotal} rows, but only ${preview.totalRows} rows are available. Reduce ${overflowRows} rows.`
+                    : remainingRows > 0
+                      ? `Assigned ${assignedTotal} of ${preview.totalRows} rows. Remaining ${remainingRows} rows will stay in your list so you can assign them later.`
+                      : `Assigned all ${preview.totalRows} rows.`}
                 </div>
               </div>
             ) : (
@@ -4096,16 +4111,18 @@ function CustomerPdfImportModal({
               }
 
               if (role !== "MARKETER" && !assignLater) {
-                if (!assignments.length) {
+                const validAssignments = assignments.filter((assignment) => assignment.assignedToId.trim() && Number(assignment.count) > 0);
+                const partialAssignments = assignments.filter((assignment) => assignment.assignedToId.trim() || Number(assignment.count) > 0);
+                if (!validAssignments.length) {
                   setMessage("Add at least one marketer split before importing.");
                   return;
                 }
-                if (remainingRows !== 0) {
-                  setMessage(`Assign all ${preview.totalRows} rows before importing the PDF.`);
+                if (overflowRows > 0) {
+                  setMessage(`Assigned quantity is ${overflowRows} rows more than the PDF allows.`);
                   return;
                 }
-                if (assignments.some((assignment) => !assignment.assignedToId.trim() || Number(assignment.count) <= 0)) {
-                  setMessage("Each marketer split needs a marketer and a positive row count.");
+                if (partialAssignments.some((assignment) => !assignment.assignedToId.trim() || Number(assignment.count) <= 0)) {
+                  setMessage("Each used marketer split needs both a marketer and a positive row count.");
                   return;
                 }
               }
@@ -4122,7 +4139,9 @@ function CustomerPdfImportModal({
                   if (role === "MARKETER" && currentUserId) {
                     formData.append("assignedToId", currentUserId);
                   } else if (!assignLater) {
-                    formData.append("assignmentsJson", JSON.stringify(assignments.map((assignment) => ({
+                    formData.append("assignmentsJson", JSON.stringify(assignments
+                      .filter((assignment) => assignment.assignedToId.trim() && Number(assignment.count) > 0)
+                      .map((assignment) => ({
                       assignedToId: assignment.assignedToId.trim(),
                       count: Number(assignment.count) || 0,
                     }))));
@@ -4413,13 +4432,16 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
     const distributionNote = Array.isArray(result.distribution) && result.distribution.length
       ? ` Assigned across ${result.distribution.length} marketer${result.distribution.length > 1 ? "s" : ""}.`
       : "";
+    const holdNote = typeof result.heldForLaterCount === "number" && result.heldForLaterCount > 0
+      ? ` ${result.heldForLaterCount} row${result.heldForLaterCount === 1 ? "" : "s"} stayed in your list for later assignment.`
+      : "";
     const assignmentModeNote = !distributionNote && role !== "MARKETER"
       ? " Imported rows are now under your list until you assign them."
       : "";
     setFeedback({
       type: "success",
       title: "Import complete",
-      message: `${result.inserted} inserted, ${result.updated} updated, ${result.failed.length} failed.${distributionNote}${assignmentModeNote}${result.failed.length ? ` First issue: row ${result.failed[0].row} - ${result.failed[0].reason}` : ""}`,
+      message: `${result.inserted} inserted, ${result.updated} updated, ${result.failed.length} failed.${distributionNote}${holdNote}${assignmentModeNote}${result.failed.length ? ` First issue: row ${result.failed[0].row} - ${result.failed[0].reason}` : ""}`,
     });
     await refreshCustomers();
     router.refresh();
