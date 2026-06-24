@@ -40,7 +40,7 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireRequestUser(["ADMIN", "SUPERVISOR", "MARKETER"]);
+    const auth = await requireRequestUser(["ADMIN", "SUPERVISOR"]);
     if (!auth.ok) {
       return NextResponse.json({ success: false, message: auth.message }, { status: auth.status });
     }
@@ -79,7 +79,7 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
 
 export async function DELETE(_: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireRequestUser(["ADMIN", "SUPERVISOR", "MARKETER"]);
+    const auth = await requireRequestUser(["ADMIN", "SUPERVISOR"]);
     if (!auth.ok) {
       return NextResponse.json({ success: false, message: auth.message }, { status: auth.status });
     }

@@ -35,7 +35,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const auth = await requireRequestUser(["ADMIN", "SUPERVISOR", "MARKETER"]);
+    const auth = await requireRequestUser(["ADMIN", "SUPERVISOR"]);
     if (!auth.ok) {
       return NextResponse.json({ success: false, message: auth.message }, { status: auth.status });
     }

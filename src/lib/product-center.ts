@@ -58,9 +58,9 @@ function normalizeText(value: string) {
   return value.trim().replace(/\s+/g, " ");
 }
 
-function ensureProductAccess(actor: ProductActor) {
-  if (!["ADMIN", "SUPERVISOR", "MARKETER"].includes(actor.role)) {
-    throw new ProductInputError("You are not allowed to manage products.", 403);
+function ensureProductManageAccess(actor: ProductActor) {
+  if (!["ADMIN", "SUPERVISOR"].includes(actor.role)) {
+    throw new ProductInputError("Only admin and supervisor can manage products.", 403);
   }
 }
 
@@ -156,7 +156,7 @@ export async function getProductById(id: string) {
 }
 
 export async function createProductEntry(actor: ProductActor, input: ProductInput) {
-  ensureProductAccess(actor);
+  ensureProductManageAccess(actor);
   const prisma = getPrisma();
   const data = validateProductInput(input);
 
@@ -182,7 +182,7 @@ export async function createProductEntry(actor: ProductActor, input: ProductInpu
 }
 
 export async function updateProductEntry(actor: ProductActor, id: string, input: ProductInput) {
-  ensureProductAccess(actor);
+  ensureProductManageAccess(actor);
   const prisma = getPrisma();
   const data = validateProductInput(input);
 
@@ -218,7 +218,7 @@ export async function updateProductEntry(actor: ProductActor, id: string, input:
 }
 
 export async function deleteProductEntry(actor: ProductActor, id: string) {
-  ensureProductAccess(actor);
+  ensureProductManageAccess(actor);
   const prisma = getPrisma();
 
   const existing = await prisma.productService.findUnique({

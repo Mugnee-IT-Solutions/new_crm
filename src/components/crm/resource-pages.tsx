@@ -6298,6 +6298,7 @@ function ProductVisual({ product }: { product: ProductRow }) {
 export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
   const router = useRouter();
   const [, startRefresh] = React.useTransition();
+  const canManageProducts = role !== "MARKETER";
   const [open, setOpen] = React.useState(false);
   const [products, setProducts] = React.useState(workspace.products);
   const [editingProductId, setEditingProductId] = React.useState<string | null>(null);
@@ -6343,10 +6344,19 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
 
   return (
     <>
-      <PageHeader title="Product / Services" description="Products and opportunity analytics by interested customers, follow-ups, sales, and conversion." actions={pageActions([{ label: "Add Product", icon: Plus, variant: "default", onClick: () => {
-        setEditingProductId(null);
-        setOpen(true);
-      } }])} />
+      <PageHeader
+        title="Product / Services"
+        description="Products and opportunity analytics by interested customers, follow-ups, sales, and conversion."
+        actions={canManageProducts ? pageActions([{
+          label: "Add Product",
+          icon: Plus,
+          variant: "default",
+          onClick: () => {
+            setEditingProductId(null);
+            setOpen(true);
+          },
+        }]) : undefined}
+      />
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard
           title="Target Companies"
@@ -6424,32 +6434,36 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
                   <Link href={`/products/${product.id}`} className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-blue-50 hover:text-blue-700" aria-label="View product">
                     <Eye className="h-4 w-4" />
                   </Link>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Edit product"
-                    onClick={() => {
-                      setFeedback(null);
-                      setEditingProductId(product.id);
-                      setOpen(true);
-                    }}
-                  >
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Delete product"
-                    className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                    onClick={() => {
-                      setFeedback(null);
-                      setDeleteProductId(product.id);
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  {canManageProducts ? (
+                    <>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Edit product"
+                        onClick={() => {
+                          setFeedback(null);
+                          setEditingProductId(product.id);
+                          setOpen(true);
+                        }}
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Delete product"
+                        className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                        onClick={() => {
+                          setFeedback(null);
+                          setDeleteProductId(product.id);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </>
+                  ) : null}
                 </div>
               </div>
 
@@ -6514,87 +6528,91 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
         })}
       </div>
       {!products.length ? <EmptyState title="No products yet" description="Create your real product or service catalog to start tracking opportunities." /> : null}
-      <FormModal title={editingProduct ? "Update Product / Service" : "Create Product / Service"} open={open} onClose={() => {
-        setOpen(false);
-        setEditingProductId(null);
-      }}>
-        <ProductForm
-          product={editingProduct}
-          onSuccess={(row) => {
-            setProducts((current) => {
-              if (editingProduct) {
-                return current.map((item) => (
-                  item.id === row.id
-                    ? {
-                        ...item,
-                        name: row.name,
-                        category: row.category,
-                        brand: row.brand,
-                        price: row.price,
-                        imageUrl: row.imageUrl,
-                        description: row.description,
-                        specification: row.specification,
-                        status: row.status,
-                      }
-                    : item
-                ));
-              }
-
-              return [row, ...current];
-            });
-            setFeedback({ type: "success", message: editingProduct ? "Product updated successfully." : "Product created successfully." });
-            startRefresh(() => router.refresh());
-          }}
-          onDone={() => {
+      {canManageProducts ? (
+        <>
+          <FormModal title={editingProduct ? "Update Product / Service" : "Create Product / Service"} open={open} onClose={() => {
             setOpen(false);
             setEditingProductId(null);
-          }}
-        />
-      </FormModal>
-      <FormModal title="Delete Product" open={Boolean(deletingProduct)} onClose={() => setDeleteProductId(null)} panelClassName="max-w-md">
-        {deletingProduct ? (
-          <div className="space-y-4">
-            <p className="text-sm text-slate-700">
-              Are you sure you want to delete <span className="font-black">{deletingProduct.name}</span>?
-            </p>
-            {deleteMessage ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{deleteMessage}</p> : null}
-            <div className="flex flex-col gap-2">
-              <Button
-                type="button"
-                variant="destructive"
-                className="w-full"
-                disabled={deletePending}
-                onClick={async () => {
-                  setDeletePending(true);
-                  setDeleteMessage("");
-                  try {
-                    const response = await fetch(`/api/products/${deletingProduct.id}`, { method: "DELETE" });
-                    const result = await response.json();
-                    if (!response.ok || !result.success || typeof result.id !== "string") {
-                      setDeleteMessage(result.message ?? "Product delete failed.");
-                      return;
-                    }
-
-                    setProducts((current) => current.filter((item) => item.id !== result.id));
-                    setFeedback({ type: "success", message: "Product deleted successfully." });
-                    setDeleteProductId(null);
-                    startRefresh(() => router.refresh());
-                  } catch (error) {
-                    setDeleteMessage(error instanceof Error ? error.message : "Product delete failed.");
-                  } finally {
-                    setDeletePending(false);
+          }}>
+            <ProductForm
+              product={editingProduct}
+              onSuccess={(row) => {
+                setProducts((current) => {
+                  if (editingProduct) {
+                    return current.map((item) => (
+                      item.id === row.id
+                        ? {
+                            ...item,
+                            name: row.name,
+                            category: row.category,
+                            brand: row.brand,
+                            price: row.price,
+                            imageUrl: row.imageUrl,
+                            description: row.description,
+                            specification: row.specification,
+                            status: row.status,
+                          }
+                        : item
+                    ));
                   }
-                }}
-              >
-                {deletePending ? "Deleting..." : "Delete Product"}
-              </Button>
-              <Button type="button" variant="outline" className="w-full" onClick={() => setDeleteProductId(null)} disabled={deletePending}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        ) : null}
-      </FormModal>
+
+                  return [row, ...current];
+                });
+                setFeedback({ type: "success", message: editingProduct ? "Product updated successfully." : "Product created successfully." });
+                startRefresh(() => router.refresh());
+              }}
+              onDone={() => {
+                setOpen(false);
+                setEditingProductId(null);
+              }}
+            />
+          </FormModal>
+          <FormModal title="Delete Product" open={Boolean(deletingProduct)} onClose={() => setDeleteProductId(null)} panelClassName="max-w-md">
+            {deletingProduct ? (
+              <div className="space-y-4">
+                <p className="text-sm text-slate-700">
+                  Are you sure you want to delete <span className="font-black">{deletingProduct.name}</span>?
+                </p>
+                {deleteMessage ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{deleteMessage}</p> : null}
+                <div className="flex flex-col gap-2">
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    className="w-full"
+                    disabled={deletePending}
+                    onClick={async () => {
+                      setDeletePending(true);
+                      setDeleteMessage("");
+                      try {
+                        const response = await fetch(`/api/products/${deletingProduct.id}`, { method: "DELETE" });
+                        const result = await response.json();
+                        if (!response.ok || !result.success || typeof result.id !== "string") {
+                          setDeleteMessage(result.message ?? "Product delete failed.");
+                          return;
+                        }
+
+                        setProducts((current) => current.filter((item) => item.id !== result.id));
+                        setFeedback({ type: "success", message: "Product deleted successfully." });
+                        setDeleteProductId(null);
+                        startRefresh(() => router.refresh());
+                      } catch (error) {
+                        setDeleteMessage(error instanceof Error ? error.message : "Product delete failed.");
+                      } finally {
+                        setDeletePending(false);
+                      }
+                    }}
+                  >
+                    {deletePending ? "Deleting..." : "Delete Product"}
+                  </Button>
+                  <Button type="button" variant="outline" className="w-full" onClick={() => setDeleteProductId(null)} disabled={deletePending}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </FormModal>
+        </>
+      ) : null}
     </>
   );
 }
@@ -6715,6 +6733,17 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
       followUpCount: entry.followUpCount,
     }))
     .sort((left, right) => right.communicationCount - left.communicationCount || right.customerCount - left.customerCount);
+  const productCommandTitle =
+    role === "MARKETER"
+      ? "Your product activity workspace"
+      : role === "SUPERVISOR"
+        ? "Easy product overview for supervisor"
+        : "Easy product overview for admin";
+  const productCommandDescription =
+    role === "MARKETER"
+      ? "Only your scoped customers, calls, follow-ups, quotations, and product activity are shown here."
+      : "Interested customers, assigned owners, call count, pipeline stage, and CRM rating are all shown here from saved leads, communications, quotations, and follow-ups.";
+  const assignmentCardTitle = role === "MARKETER" ? "Your visible ownership" : "Who is handling this product";
 
   return (
     <div className="space-y-5">
@@ -6760,7 +6789,7 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Assigned Team</p>
-                <h2 className="mt-1 text-lg font-black text-slate-950">Who is handling this product</h2>
+                <h2 className="mt-1 text-lg font-black text-slate-950">{assignmentCardTitle}</h2>
               </div>
               <Badge variant="neutral">{assignedTeam.length} owners</Badge>
             </div>
@@ -6788,10 +6817,8 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div>
                 <p className="text-[11px] font-black uppercase tracking-[0.22em] text-blue-600">Product Command Center</p>
-                <h2 className="mt-1 text-2xl font-black text-slate-950">Easy product overview for admin and supervisor</h2>
-                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                  Interested customers, assigned owners, call count, pipeline stage, and CRM rating are all shown here from saved leads, communications, quotations, and follow-ups.
-                </p>
+                <h2 className="mt-1 text-2xl font-black text-slate-950">{productCommandTitle}</h2>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">{productCommandDescription}</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Badge variant="neutral">{active.category || "Product"}</Badge>
