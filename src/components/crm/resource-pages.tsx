@@ -3549,13 +3549,13 @@ function CustomerSpreadsheetImportModal({
   const assignedTotal = assignments.reduce((sum, assignment) => sum + Math.max(0, Number(assignment.count) || 0), 0);
   const remainingRows = preview ? Math.max(preview.totalRows - assignedTotal, 0) : 0;
 
-  const loadPreview = React.useCallback(() => {
-    if (!file) {
+  const loadPreviewForFile = React.useCallback((sourceFile: File | null) => {
+    if (!sourceFile) {
       setMessage("Choose an Excel or CSV file first.");
       return;
     }
 
-    const lowerName = file.name.toLowerCase();
+    const lowerName = sourceFile.name.toLowerCase();
     if (!(lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".csv"))) {
       setMessage("Only .xlsx, .xls, and .csv files are supported here.");
       return;
@@ -3566,7 +3566,7 @@ function CustomerSpreadsheetImportModal({
       setPreview(null);
       try {
         const formData = new FormData();
-        formData.append("file", file);
+        formData.append("file", sourceFile);
         formData.append("mode", "preview");
 
         const response = await fetch("/api/customers/import", {
@@ -3596,13 +3596,11 @@ function CustomerSpreadsheetImportModal({
         setMessage(error instanceof Error ? error.message : "Spreadsheet preview failed.");
       }
     });
-  }, [currentUserId, defaultAssignedToId, file, ownerOptions, role]);
+  }, [currentUserId, defaultAssignedToId, ownerOptions, role]);
 
-  React.useEffect(() => {
-    if (open && file) {
-      loadPreview();
-    }
-  }, [file, loadPreview, open]);
+  const loadPreview = React.useCallback(() => {
+    loadPreviewForFile(file);
+  }, [file, loadPreviewForFile]);
 
   return (
     <FormModal open={open} title="Import Excel / CSV Customers" onClose={onClose} panelClassName="max-w-3xl">
@@ -3611,26 +3609,36 @@ function CustomerSpreadsheetImportModal({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-black text-slate-950">Excel / CSV File</p>
-              <p className="mt-1 text-xs font-semibold text-slate-500">Preview the file, then assign rows to marketers before importing.</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">File choose korlei marketer select ar row count section niche automatically chole ashbe.</p>
             </div>
             <Button type="button" variant="outline" onClick={loadPreview} disabled={previewing || importing}>
               <FileText className="h-4 w-4" />
-              {previewing ? "Reading File..." : "Preview File"}
+              {previewing ? "Reading File..." : "Refresh Preview"}
             </Button>
           </div>
           <input
             type="file"
             accept=".xlsx,.xls,.csv"
             onChange={(event) => {
-              setFile(event.target.files?.[0] ?? null);
+              const nextFile = event.target.files?.[0] ?? null;
+              setFile(nextFile);
               setPreview(null);
               setAssignments([]);
               setMessage("");
+              if (nextFile) {
+                loadPreviewForFile(nextFile);
+              }
             }}
             className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700"
           />
           {file ? <p className="text-xs font-semibold text-slate-600">Selected: {file.name}</p> : null}
         </div>
+
+        {file && previewing ? (
+          <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">
+            File pora hocche. Tarpor marketer ar quantity section automatically show korbe.
+          </div>
+        ) : null}
 
         {role !== "MARKETER" ? (
           <label className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
@@ -3641,8 +3649,8 @@ function CustomerSpreadsheetImportModal({
               className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
             />
             <span>
-              <span className="block text-sm font-semibold text-slate-900">Import first, assign later</span>
-              <span className="mt-1 block text-xs font-semibold text-slate-500">Rows will stay under your admin/supervisor list first. Then you can use checkboxes to assign exact customers to marketers.</span>
+              <span className="block text-sm font-semibold text-slate-900">Optional: import first, assign later</span>
+              <span className="mt-1 block text-xs font-semibold text-slate-500">Eta tick korle direct marketer assignment off hoye jabe, ar data age apnar list-e ashbe.</span>
             </span>
           </label>
         ) : null}
@@ -3697,8 +3705,8 @@ function CustomerSpreadsheetImportModal({
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-sm font-black text-slate-950">Assign Rows To Marketers</p>
-                    <p className="mt-1 text-xs font-semibold text-slate-500">Quantity diye bolo ke koto row pabe. Import-er shomoy ei split tai apply hobe.</p>
+                    <p className="text-sm font-black text-slate-950">Direct Marketer Assignment</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Ekhanei marketer select korun ar ke koto company/data pabe seta number diye din. Import dile oi marketer-er customer list-e direct chole jabe.</p>
                   </div>
                   <Button
                     type="button"
@@ -3837,7 +3845,7 @@ function CustomerSpreadsheetImportModal({
             }}
           >
             <Upload className="h-4 w-4" />
-            {importing ? "Importing..." : "Import Excel / CSV"}
+            {importing ? "Importing..." : role !== "MARKETER" && !assignLater ? "Import Excel / CSV + Assign" : "Import Excel / CSV"}
           </Button>
           <Button type="button" variant="outline" disabled={importing || previewing} onClick={onClose}>
             Cancel
@@ -3881,13 +3889,13 @@ function CustomerPdfImportModal({
   const assignedTotal = assignments.reduce((sum, assignment) => sum + Math.max(0, Number(assignment.count) || 0), 0);
   const remainingRows = preview ? Math.max(preview.totalRows - assignedTotal, 0) : 0;
 
-  const loadPreview = React.useCallback(() => {
-    if (!file) {
+  const loadPreviewForFile = React.useCallback((sourceFile: File | null) => {
+    if (!sourceFile) {
       setMessage("Choose a PDF file first.");
       return;
     }
 
-    if (!file.name.toLowerCase().endsWith(".pdf")) {
+    if (!sourceFile.name.toLowerCase().endsWith(".pdf")) {
       setMessage("Only .pdf files are supported in PDF import.");
       return;
     }
@@ -3897,7 +3905,7 @@ function CustomerPdfImportModal({
       setPreview(null);
       try {
         const formData = new FormData();
-        formData.append("file", file);
+        formData.append("file", sourceFile);
         formData.append("mode", "pdf-preview");
 
         const response = await fetch("/api/customers/import", {
@@ -3928,13 +3936,11 @@ function CustomerPdfImportModal({
         setMessage(error instanceof Error ? error.message : "PDF preview failed.");
       }
     });
-  }, [currentUserId, defaultAssignedToId, file, ownerOptions, role]);
+  }, [currentUserId, defaultAssignedToId, ownerOptions, role]);
 
-  React.useEffect(() => {
-    if (open && file) {
-      loadPreview();
-    }
-  }, [file, loadPreview, open]);
+  const loadPreview = React.useCallback(() => {
+    loadPreviewForFile(file);
+  }, [file, loadPreviewForFile]);
 
   return (
     <FormModal open={open} title="Import PDF Customers" onClose={onClose} panelClassName="max-w-3xl">
@@ -3943,26 +3949,36 @@ function CustomerPdfImportModal({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-black text-slate-950">PDF Source File</p>
-              <p className="mt-1 text-xs font-semibold text-slate-500">This supports the madrasha list PDF format and imports rows in file order.</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">PDF choose korlei marketer select ar quantity section niche automatically chole ashbe.</p>
             </div>
             <Button type="button" variant="outline" onClick={loadPreview} disabled={previewing || importing}>
               <FileText className="h-4 w-4" />
-              {previewing ? "Reading PDF..." : "Preview PDF"}
+              {previewing ? "Reading PDF..." : "Refresh Preview"}
             </Button>
           </div>
           <input
             type="file"
             accept=".pdf"
             onChange={(event) => {
-              setFile(event.target.files?.[0] ?? null);
+              const nextFile = event.target.files?.[0] ?? null;
+              setFile(nextFile);
               setPreview(null);
               setAssignments([]);
               setMessage("");
+              if (nextFile) {
+                loadPreviewForFile(nextFile);
+              }
             }}
             className="mt-3 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700"
           />
           {file ? <p className="mt-2 text-xs font-semibold text-slate-600">Selected: {file.name}</p> : null}
         </div>
+
+        {file && previewing ? (
+          <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">
+            PDF pora hocche. Tarpor marketer ar quantity section automatically show korbe.
+          </div>
+        ) : null}
 
         {role !== "MARKETER" ? (
           <label className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
@@ -3973,8 +3989,8 @@ function CustomerPdfImportModal({
               className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
             />
             <span>
-              <span className="block text-sm font-semibold text-slate-900">Import first, assign later</span>
-              <span className="mt-1 block text-xs font-semibold text-slate-500">PDF rows will stay under your admin/supervisor list first. Then you can select exact rows from the customer table and assign them to marketers.</span>
+              <span className="block text-sm font-semibold text-slate-900">Optional: import first, assign later</span>
+              <span className="mt-1 block text-xs font-semibold text-slate-500">Eta tick korle direct marketer assignment off hoye jabe, ar data age apnar list-e ashbe.</span>
             </span>
           </label>
         ) : null}
@@ -4033,8 +4049,8 @@ function CustomerPdfImportModal({
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-sm font-black text-slate-950">Assign Rows To Marketers</p>
-                    <p className="mt-1 text-xs font-semibold text-slate-500">Rows are assigned from top to bottom based on these counts.</p>
+                    <p className="text-sm font-black text-slate-950">Direct Marketer Assignment</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Ekhanei marketer select korun ar ke koto company/data pabe seta number diye din. Import dile oi marketer-er customer list-e direct chole jabe.</p>
                   </div>
                   <Button
                     type="button"
@@ -4173,7 +4189,7 @@ function CustomerPdfImportModal({
             }}
           >
             <Upload className="h-4 w-4" />
-            {importing ? "Importing PDF..." : "Import PDF Data"}
+            {importing ? "Importing PDF..." : role !== "MARKETER" && !assignLater ? "Import PDF + Assign" : "Import PDF Data"}
           </Button>
           <Button type="button" variant="outline" disabled={importing || previewing} onClick={onClose}>
             Cancel
