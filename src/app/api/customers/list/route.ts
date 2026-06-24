@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { buildCustomerScopeWhere } from "@/lib/customer-ownership";
 import { getPrisma } from "@/lib/prisma";
@@ -5,6 +6,17 @@ import { requireRequestUser } from "@/lib/request-user";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const customerListSelect = {
+  id: true,
+  name: true,
+  contactPerson: true,
+  phone: true,
+} satisfies Prisma.CustomerCompanySelect;
+
+type CustomerListRow = Prisma.CustomerCompanyGetPayload<{
+  select: typeof customerListSelect;
+}>;
 
 function parseLimit(value: string | null) {
   const parsed = Number.parseInt(value ?? "", 10);
@@ -32,19 +44,14 @@ export async function GET(request: Request) {
 
     const rows = await prisma.customerCompany.findMany({
       where,
-      select: {
-        id: true,
-        name: true,
-        contactPerson: true,
-        phone: true,
-      },
+      select: customerListSelect,
       orderBy: { name: "asc" },
       take: limit,
     });
 
     return NextResponse.json({
       success: true,
-      rows: rows.map((row) => ({
+      rows: rows.map((row: CustomerListRow) => ({
         id: row.id,
         companyName: row.name,
         contactPerson: row.contactPerson,
