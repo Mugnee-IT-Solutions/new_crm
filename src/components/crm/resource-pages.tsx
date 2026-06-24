@@ -11,6 +11,10 @@ import {
   CalendarClock,
   ChevronDown,
   Check,
+  CheckCircle2,
+  CircleDashed,
+  CircleDot,
+  XCircle,
   Download,
   Edit,
   Eye,
@@ -75,6 +79,7 @@ import type {
   CompanyRow,
   CrmWorkspace,
   CustomerHistory,
+  CustomerJourneySummary,
   CommunicationHistoryRow,
   FollowUpPageData,
   FollowUpRow,
@@ -927,18 +932,90 @@ function CustomerOverviewItem({
   title,
   meta,
   note,
+  badge,
 }: {
   title: string;
   meta: string;
   note: string;
+  badge?: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm font-black text-slate-900">{title}</p>
+        <div className="flex min-w-0 items-center gap-2">
+          <p className="truncate text-sm font-black text-slate-900">{title}</p>
+          {badge}
+        </div>
         <p className="text-xs font-bold text-slate-500">{meta}</p>
       </div>
       <p className="mt-2 text-sm leading-6 text-slate-600">{note}</p>
+    </div>
+  );
+}
+
+function CustomerOverviewEmpty({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 px-4 py-5 text-center">
+      <p className="text-sm font-black text-slate-900">{title}</p>
+      <p className="mt-1 text-sm text-slate-500">{description}</p>
+    </div>
+  );
+}
+
+function customerJourneyStepTone(step: CustomerJourneySummary["steps"][number]) {
+  if (step.state === "success") return "border-emerald-200 bg-emerald-50 text-emerald-700 shadow-[0_12px_30px_rgba(16,185,129,0.12)]";
+  if (step.state === "failed") return "border-red-200 bg-red-50 text-red-700 shadow-[0_12px_30px_rgba(239,68,68,0.10)]";
+  if (step.state === "current") return "border-blue-200 bg-blue-50 text-blue-700 shadow-[0_12px_30px_rgba(59,130,246,0.12)]";
+  if (step.state === "completed") return "border-cyan-200 bg-cyan-50 text-cyan-700";
+  return "border-slate-200 bg-white text-slate-500";
+}
+
+function customerJourneyStepBadgeVariant(step: CustomerJourneySummary["steps"][number]) {
+  if (step.state === "success") return "success" as const;
+  if (step.state === "failed") return "danger" as const;
+  if (step.state === "current") return "default" as const;
+  if (step.state === "completed") return "violet" as const;
+  return "neutral" as const;
+}
+
+function customerJourneyStatusVariant(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized.includes("won") || normalized.includes("completed")) return "success" as const;
+  if (normalized.includes("failed") || normalized.includes("lost") || normalized.includes("overdue")) return "danger" as const;
+  if (normalized.includes("follow-up") || normalized.includes("due") || normalized.includes("upcoming")) return "warning" as const;
+  if (normalized.includes("no activity")) return "neutral" as const;
+  return "default" as const;
+}
+
+function CustomerJourneyStepIcon({ stageKey }: { stageKey: CustomerJourneySummary["steps"][number]["key"] }) {
+  if (stageKey === "task_created") return <CheckCircle2 className="h-4 w-4" />;
+  if (stageKey === "contacted") return <PhoneCall className="h-4 w-4" />;
+  if (stageKey === "follow_up") return <RefreshCw className="h-4 w-4" />;
+  if (stageKey === "demo") return <Eye className="h-4 w-4" />;
+  if (stageKey === "quotation") return <FileText className="h-4 w-4" />;
+  if (stageKey === "sales_won") return <Award className="h-4 w-4" />;
+  return <XCircle className="h-4 w-4" />;
+}
+
+function CustomerOverviewSummaryRow({
+  label,
+  value,
+  muted = false,
+}: {
+  label: string;
+  value: React.ReactNode;
+  muted?: boolean;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+      <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">{label}</p>
+      <div className={cn("mt-1 text-sm font-semibold text-slate-900", muted && "text-slate-500")}>{value}</div>
     </div>
   );
 }
@@ -3731,11 +3808,13 @@ export function CustomerProfilePage({
   workspace,
   customer,
   history,
+  journey,
 }: {
   role: Role;
   workspace: CrmWorkspace;
   customer?: CompanyRow;
   history: CustomerHistory;
+  journey: CustomerJourneySummary;
 }) {
   const active = customer;
   const [historyState, setHistoryState] = React.useState(history);
@@ -3771,6 +3850,7 @@ export function CustomerProfilePage({
   const latestCommunications = historyState.communications.slice(0, 6);
   const latestFollowUps = historyState.followUps.slice(0, 6);
   const primaryAssignedTo = active.assignedTo || latestFollowUps.find((item) => item.assignedTo && item.assignedTo !== "-")?.assignedTo || "-";
+  const overviewAssignedTo = journey.assignedMarketer !== "-" ? journey.assignedMarketer : primaryAssignedTo;
 
   const appendCommunicationHistory = React.useCallback((result: Awaited<ReturnType<typeof logCustomerCommunicationShortcutAction>>) => {
     if (!result?.ok || !result.communication || !result.activity) return;
@@ -3961,42 +4041,142 @@ export function CustomerProfilePage({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-black text-slate-900">Overview</h2>
-            <p className="text-sm text-slate-500">Ke call dise, note ki, kobe follow-up, ar k assign ache shudhu oi update gulo ekhane dekhabe.</p>
+            <p className="text-sm text-slate-500">Admin ar supervisor jeno ek nojore customer journey, recent touchpoint, ar next step bujhte pare, oi jonno real CRM activity diye overview-ta sajano hoyeche.</p>
           </div>
-          <Badge variant="neutral" className="rounded-full px-3 py-1 text-xs font-bold">{primaryAssignedTo}</Badge>
+          <Badge variant="neutral" className="rounded-full px-3 py-1 text-xs font-bold">{overviewAssignedTo}</Badge>
         </div>
-        <div className="mt-5 grid gap-5 xl:grid-cols-2">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-black uppercase tracking-wide text-slate-700">Recent Calls / Communication</h3>
-              <span className="text-xs font-bold text-slate-400">{historyState.communications.length} total</span>
+        <div className="mt-5 space-y-5">
+          <div className="rounded-[28px] border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-blue-50/80 p-5 shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.22em] text-blue-600">Customer Journey</p>
+                <h3 className="mt-1 text-lg font-black text-slate-950">Pipeline Progress</h3>
+                <p className="mt-1 max-w-2xl text-sm text-slate-500">Task, communication, follow-up, demo, quotation, ar sales outcome theke current stage auto-detect hocche. Kono fake timeline use kora hocche na.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant={customerJourneyStatusVariant(journey.status)} className="rounded-full px-3 py-1 text-xs font-bold">{journey.currentStage}</Badge>
+                <Badge variant="neutral" className="rounded-full px-3 py-1 text-xs font-bold">{historyState.communications.length} Communications</Badge>
+                <Badge variant="neutral" className="rounded-full px-3 py-1 text-xs font-bold">{historyState.followUps.length} Follow-ups</Badge>
+              </div>
             </div>
-            {latestCommunications.length ? latestCommunications.map((item) => (
-              <CustomerOverviewItem
-                key={item.id}
-                title={`${item.method} by ${item.createdBy || "-"}`}
-                meta={item.time || "-"}
-                note={[item.summary, item.notes !== "-" ? `Note: ${item.notes}` : "", item.nextFollowUpDate !== "-" ? `Next Follow-up: ${item.nextFollowUpDate}` : ""].filter(Boolean).join(" | ")}
-              />
-            )) : (
-              <EmptyState title="No communication yet" description="Ei company-r jonno ekhono kono call ba communication log kora hoyni." />
-            )}
+            <div className="mt-5 overflow-x-auto pb-1">
+              <div className="flex min-w-max items-stretch gap-3">
+                {journey.steps.map((step, index) => (
+                  <React.Fragment key={step.key}>
+                    <div className={cn("flex min-h-[164px] w-[220px] shrink-0 flex-col rounded-[24px] border p-4 transition", customerJourneyStepTone(step))}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={cn("inline-flex h-9 w-9 items-center justify-center rounded-2xl border", step.state === "pending" ? "border-slate-200 bg-slate-50 text-slate-400" : "border-white/60 bg-white/80")}>
+                          {step.state === "pending" ? <CircleDashed className="h-4 w-4" /> : step.current ? <CircleDot className="h-4 w-4" /> : <CustomerJourneyStepIcon stageKey={step.key} />}
+                        </span>
+                        <Badge variant={customerJourneyStepBadgeVariant(step)} className="rounded-full px-2.5 py-1 text-[11px] font-black">
+                          {step.current ? "Current" : step.reached ? "Done" : "Pending"}
+                        </Badge>
+                      </div>
+                      <p className="mt-4 text-[11px] font-black uppercase tracking-[0.18em]">{step.label}</p>
+                      <p className="mt-2 text-sm font-semibold leading-6">{step.helper}</p>
+                      <p className={cn("mt-auto pt-4 text-xs font-bold", step.date === "-" ? "text-slate-400" : "text-current/80")}>
+                        {step.date === "-" ? "No timestamp yet" : step.date}
+                      </p>
+                    </div>
+                    {index < journey.steps.length - 1 ? (
+                      <div className={cn("mt-20 h-1 w-10 shrink-0 rounded-full", step.reached ? "bg-blue-200" : "bg-slate-200")} />
+                    ) : null}
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
           </div>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-black uppercase tracking-wide text-slate-700">Follow-up Status</h3>
-              <span className="text-xs font-bold text-slate-400">{historyState.followUps.length} total</span>
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_320px]">
+            <div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-wide text-slate-700">Recent Calls / Communication</h3>
+                  <p className="mt-1 text-sm text-slate-500">Newest customer communication first.</p>
+                </div>
+                <span className="text-xs font-bold text-slate-400">{historyState.communications.length} total</span>
+              </div>
+              <div className="mt-4 space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                {latestCommunications.length ? latestCommunications.map((item) => (
+                  <CustomerOverviewItem
+                    key={item.id}
+                    title={`${item.method} by ${item.createdBy || "-"}`}
+                    meta={item.time || "-"}
+                    badge={<StatusBadge value={item.method} />}
+                    note={[item.summary, item.notes !== "-" ? `Note: ${item.notes}` : "", item.nextFollowUpDate !== "-" ? `Next Follow-up: ${item.nextFollowUpDate}` : ""].filter(Boolean).join(" | ")}
+                  />
+                )) : (
+                  <CustomerOverviewEmpty title="No communication yet" description="Ei customer-er jonno ekhono kono call, WhatsApp, ba email activity save hoyni." />
+                )}
+              </div>
             </div>
-            {latestFollowUps.length ? latestFollowUps.map((item) => (
-              <CustomerOverviewItem
-                key={item.id}
-                title={`${item.method} • Assigned to ${item.assignedTo || "-"}`}
-                meta={item.followUpDate || "-"}
-                note={[item.note, item.nextDiscussionPlan !== "-" ? `Next: ${item.nextDiscussionPlan}` : "", `Status: ${item.status}`].filter(Boolean).join(" | ")}
-              />
-            )) : (
-              <EmptyState title="No follow-up yet" description="Ei company-r jonno ekhono kono follow-up scheduled kora hoyni." />
-            )}
+            <div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-wide text-slate-700">Follow-up Status</h3>
+                  <p className="mt-1 text-sm text-slate-500">Upcoming, due, completed, ar assigned owner ekhane thakbe.</p>
+                </div>
+                <span className="text-xs font-bold text-slate-400">{historyState.followUps.length} total</span>
+              </div>
+              <div className="mt-4 space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                {latestFollowUps.length ? latestFollowUps.map((item) => (
+                  <CustomerOverviewItem
+                    key={item.id}
+                    title={`${item.method} • Assigned to ${item.assignedTo || "-"}`}
+                    meta={item.followUpDate || "-"}
+                    badge={<StatusBadge value={item.status} />}
+                    note={[item.note, item.nextDiscussionPlan !== "-" ? `Next: ${item.nextDiscussionPlan}` : "", `Status: ${item.status}`].filter(Boolean).join(" | ")}
+                  />
+                )) : (
+                  <CustomerOverviewEmpty title="No follow-up yet" description="Ei customer-er jonno ekhono kono follow-up schedule hoyni." />
+                )}
+              </div>
+            </div>
+            <div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-wide text-slate-700">Next Action Summary</h3>
+                  <p className="mt-1 text-sm text-slate-500">Current stage ar next follow-up snapshot.</p>
+                </div>
+                <Target className="h-5 w-5 text-blue-500" />
+              </div>
+              <div className="mt-4 rounded-[22px] border border-blue-100 bg-blue-50/70 p-4">
+                <p className="text-[11px] font-black uppercase tracking-[0.2em] text-blue-600">Current Stage</p>
+                <p className="mt-2 text-lg font-black text-slate-950">{journey.currentStage}</p>
+                <p className="mt-1 text-sm leading-6 text-slate-600">{journey.stageSummary}</p>
+              </div>
+              <div className="mt-4 space-y-3">
+                <CustomerOverviewSummaryRow
+                  label="Last Activity"
+                  muted={journey.lastActivity === "No activity yet"}
+                  value={
+                    <>
+                      <div>{journey.lastActivity}</div>
+                      <div className="mt-1 text-xs font-bold text-slate-500">{journey.lastActivityTime !== "-" ? journey.lastActivityTime : "No activity yet"}</div>
+                    </>
+                  }
+                />
+                <CustomerOverviewSummaryRow
+                  label="Next Follow-up"
+                  muted={journey.nextFollowUp === "No upcoming follow-up"}
+                  value={
+                    <>
+                      <div>{journey.nextFollowUp}</div>
+                      <div className="mt-1 text-xs font-bold text-slate-500">{journey.nextFollowUpStatus}</div>
+                    </>
+                  }
+                />
+                <CustomerOverviewSummaryRow label="Assigned Marketer" muted={overviewAssignedTo === "-"} value={overviewAssignedTo} />
+                <CustomerOverviewSummaryRow
+                  label="Priority / Status"
+                  value={
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant={journey.priority === "-" ? "neutral" : "warning"}>{journey.priority === "-" ? "No priority" : `${journey.priority} Priority`}</Badge>
+                      <Badge variant={customerJourneyStatusVariant(journey.status)}>{journey.status}</Badge>
+                    </div>
+                  }
+                />
+              </div>
+            </div>
           </div>
         </div>
       </Card>

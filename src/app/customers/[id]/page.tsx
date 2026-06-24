@@ -9,6 +9,6 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const { user, workspace } = await getWorkspaceContext(role);
   const detail = await getCustomerDetail(id, role, user);
 
-  return <AppShell role={role} user={user} unreadCount={workspace.unreadCount} followUpCount={workspace.followUpSummary.actionable} sidebarCounts={workspace.sidebarCounts}><CustomerProfilePage role={role} workspace={detail.workspace} customer={detail.customer} history={detail.history} /></AppShell>;
+  return <AppShell role={role} user={user} unreadCount={workspace.unreadCount} followUpCount={workspace.followUpSummary.actionable} sidebarCounts={workspace.sidebarCounts}><CustomerProfilePage role={role} workspace={detail.workspace} customer={detail.customer} history={detail.history} journey={detail.journey} /></AppShell>;
 }
 

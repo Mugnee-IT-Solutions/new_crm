@@ -321,6 +321,106 @@ export type CustomerHistory = {
   communications: CommunicationHistoryRow[];
 };
 
+export type CustomerJourneyStageKey =
+  | "task_created"
+  | "contacted"
+  | "follow_up"
+  | "demo"
+  | "quotation"
+  | "sales_won"
+  | "sales_failed";
+
+export type CustomerJourneyStepState = "completed" | "current" | "pending" | "success" | "failed";
+
+export type CustomerJourneyStep = {
+  key: CustomerJourneyStageKey;
+  label: string;
+  helper: string;
+  reached: boolean;
+  current: boolean;
+  state: CustomerJourneyStepState;
+  date: string;
+};
+
+export type CustomerJourneySignals = {
+  customer?: {
+    assignedTo?: string | null;
+  };
+  tasks: Array<{
+    title?: string | null;
+    description?: string | null;
+    notes?: string | null;
+    priority?: string | null;
+    status?: string | null;
+    assignedTo?: string | null;
+    createdAt?: Date | null;
+    updatedAt?: Date | null;
+    taskDate?: Date | null;
+  }>;
+  followUps: Array<{
+    method?: string | null;
+    note?: string | null;
+    nextDiscussionPlan?: string | null;
+    status?: string | null;
+    priority?: string | null;
+    assignedTo?: string | null;
+    createdAt?: Date | null;
+    updatedAt?: Date | null;
+    completedAt?: Date | null;
+    followUpDate?: Date | null;
+  }>;
+  communications: Array<{
+    method?: string | null;
+    note?: string | null;
+    discussionTopic?: string | null;
+    productDiscussed?: string | null;
+    outcome?: string | null;
+    followUpNote?: string | null;
+    createdBy?: string | null;
+    createdAt?: Date | null;
+    communicationAt?: Date | null;
+    nextFollowUpDate?: Date | null;
+  }>;
+  activities: Array<{
+    title?: string | null;
+    description?: string | null;
+    entity?: string | null;
+    createdAt?: Date | null;
+  }>;
+  leads: Array<{
+    title?: string | null;
+    notes?: string | null;
+    status?: string | null;
+    priority?: string | null;
+    assignedTo?: string | null;
+    createdAt?: Date | null;
+    updatedAt?: Date | null;
+    followUpDate?: Date | null;
+  }>;
+  quotations: Array<{
+    quoteNumber?: string | null;
+    notes?: string | null;
+    status?: string | null;
+    createdBy?: string | null;
+    createdAt?: Date | null;
+    updatedAt?: Date | null;
+  }>;
+};
+
+export type CustomerJourneySummary = {
+  steps: CustomerJourneyStep[];
+  currentStageKey: CustomerJourneyStageKey | null;
+  currentStage: string;
+  stageSummary: string;
+  lastActivity: string;
+  lastActivityTime: string;
+  nextFollowUp: string;
+  nextFollowUpStatus: string;
+  assignedMarketer: string;
+  priority: string;
+  status: string;
+};
+
 export type NotificationRow = {
   id: string;
   href?: string;
@@ -496,6 +596,330 @@ function progressFromLead(status: string) {
   const order = ["NEW_LEAD", "CONTACTED", "INTERESTED", "FOLLOW_UP_REQUIRED", "QUOTATION_SENT", "NEGOTIATION", "WON_SALE"];
   const index = order.indexOf(status);
   return `${Math.max(12, Math.round(((index + 1) / order.length) * 100))}%`;
+}
+
+const customerJourneyLabels: Record<CustomerJourneyStageKey, string> = {
+  task_created: "Task Created",
+  contacted: "Contacted / Call",
+  follow_up: "Follow-up",
+  demo: "Demo",
+  quotation: "Quotation",
+  sales_won: "Sales Won",
+  sales_failed: "Sales Failed",
+};
+
+const CUSTOMER_JOURNEY_STAGE_ORDER: CustomerJourneyStageKey[] = [
+  "task_created",
+  "contacted",
+  "follow_up",
+  "demo",
+  "quotation",
+  "sales_won",
+  "sales_failed",
+];
+
+const demoStageMatchers = [
+  /\bdemo\b/i,
+  /\bdemo send\b/i,
+  /\bdemo session\b/i,
+  /\bproduct demo\b/i,
+  /\bpresentation\b/i,
+];
+
+const quotationStageMatchers = [
+  /\bquotation\b/i,
+  /\bquote\b/i,
+  /\bquatation\b/i,
+  /\bproposal\b/i,
+];
+
+const wonStageMatchers = [
+  /\bwon sale\b/i,
+  /\bsale won\b/i,
+  /\bdeal won\b/i,
+  /\bclosed won\b/i,
+  /\bconverted to sale\b/i,
+];
+
+const failedStageMatchers = [
+  /\blost sale\b/i,
+  /\bsales failed\b/i,
+  /\bdeal lost\b/i,
+  /\bfailed\b/i,
+  /\brejected\b/i,
+  /\blost\b/i,
+];
+
+function latestJourneyDate(...dates: Array<Date | null | undefined>) {
+  const validDates = dates.filter((date): date is Date => Boolean(date));
+  if (!validDates.length) return undefined;
+  return new Date(Math.max(...validDates.map((date) => date.getTime())));
+}
+
+function maxJourneyDate(dates: Array<Date | null | undefined>) {
+  return latestJourneyDate(...dates);
+}
+
+function textMatchesJourneyKeyword(
+  values: Array<string | null | undefined>,
+  matchers: RegExp[],
+) {
+  return values.some((value) => typeof value === "string" && value.trim() && matchers.some((matcher) => matcher.test(value)));
+}
+
+function followUpBucketFromRecord(followUp: {
+  status?: string | null;
+  followUpDate?: Date | null;
+}) {
+  if (!followUp.followUpDate) return "-";
+  return followUpBucket(followUp.status ?? "UPCOMING", followUp.followUpDate);
+}
+
+function customerJourneyStageSummary(stageKey: CustomerJourneyStageKey | null) {
+  if (stageKey === "sales_won") return "Customer successfully reached the final sales-won stage.";
+  if (stageKey === "sales_failed") return "Customer has been closed as failed/lost in real CRM activity.";
+  if (stageKey === "quotation") return "Quotation activity is already recorded for this customer.";
+  if (stageKey === "demo") return "Demo-related activity was found in the customer journey.";
+  if (stageKey === "follow_up") return "Follow-up exists and is currently driving the next action.";
+  if (stageKey === "contacted") return "Communication was logged, but no later pipeline step is confirmed yet.";
+  if (stageKey === "task_created") return "Task exists, but the journey has not moved beyond task creation yet.";
+  return "No real activity has been recorded for this customer yet.";
+}
+
+function customerJourneyStepHelper(
+  key: CustomerJourneyStageKey,
+  reached: boolean,
+  signals: {
+    communications: number;
+    followUps: number;
+    quotations: number;
+    leadsWon: number;
+    leadsLost: number;
+  },
+) {
+  if (!reached) {
+    if (key === "sales_failed") return "Shows only when the customer is lost/failed.";
+    if (key === "sales_won") return "Shows only after the deal is won.";
+    return "Waiting for real CRM activity.";
+  }
+
+  if (key === "task_created") return "Task record found in the CRM database.";
+  if (key === "contacted") return `${signals.communications} communication log${signals.communications === 1 ? "" : "s"} recorded.`;
+  if (key === "follow_up") return `${signals.followUps} follow-up item${signals.followUps === 1 ? "" : "s"} found.`;
+  if (key === "demo") return "Demo keyword/activity matched from task, note, follow-up, or communication.";
+  if (key === "quotation") return signals.quotations > 0 ? `${signals.quotations} quotation record${signals.quotations === 1 ? "" : "s"} found.` : "Quotation intent detected from CRM activity.";
+  if (key === "sales_won") return signals.leadsWon > 0 ? `${signals.leadsWon} won lead status found.` : "Sales win activity detected from quotation conversion.";
+  if (key === "sales_failed") return signals.leadsLost > 0 ? `${signals.leadsLost} lost lead status found.` : "Customer has a failed/lost sales outcome.";
+  return "Stage detected from CRM data.";
+}
+
+export function getCustomerPipelineStage(journey: CustomerJourneySummary) {
+  return journey.currentStageKey;
+}
+
+export function buildCustomerJourneyTimeline(signals: CustomerJourneySignals): CustomerJourneySummary {
+  const taskCreatedAt = maxJourneyDate(signals.tasks.map((task) => latestJourneyDate(task.updatedAt, task.taskDate, task.createdAt)));
+  const contactedAt = maxJourneyDate(signals.communications.map((communication) => latestJourneyDate(communication.communicationAt, communication.createdAt)));
+  const followUpAt = maxJourneyDate(
+    signals.followUps.map((followUp) => latestJourneyDate(followUp.completedAt, followUp.followUpDate, followUp.updatedAt, followUp.createdAt)),
+  );
+
+  const demoAt = maxJourneyDate([
+    ...signals.tasks
+      .filter((task) => textMatchesJourneyKeyword([task.title, task.description, task.notes], demoStageMatchers))
+      .map((task) => latestJourneyDate(task.updatedAt, task.taskDate, task.createdAt)),
+    ...signals.followUps
+      .filter((followUp) => textMatchesJourneyKeyword([followUp.method, followUp.note, followUp.nextDiscussionPlan], demoStageMatchers))
+      .map((followUp) => latestJourneyDate(followUp.completedAt, followUp.followUpDate, followUp.updatedAt, followUp.createdAt)),
+    ...signals.communications
+      .filter((communication) => textMatchesJourneyKeyword([communication.method, communication.note, communication.discussionTopic, communication.outcome, communication.followUpNote], demoStageMatchers))
+      .map((communication) => latestJourneyDate(communication.communicationAt, communication.createdAt)),
+    ...signals.activities
+      .filter((activity) => textMatchesJourneyKeyword([activity.title, activity.description, activity.entity], demoStageMatchers))
+      .map((activity) => activity.createdAt),
+  ]);
+
+  const quotationAt = maxJourneyDate([
+    ...signals.quotations.map((quotation) => latestJourneyDate(quotation.updatedAt, quotation.createdAt)),
+    ...signals.leads
+      .filter((lead) => lead.status === "QUOTATION_SENT" || lead.status === "NEGOTIATION")
+      .map((lead) => latestJourneyDate(lead.updatedAt, lead.followUpDate, lead.createdAt)),
+    ...signals.tasks
+      .filter((task) => textMatchesJourneyKeyword([task.title, task.description, task.notes], quotationStageMatchers))
+      .map((task) => latestJourneyDate(task.updatedAt, task.taskDate, task.createdAt)),
+    ...signals.followUps
+      .filter((followUp) => textMatchesJourneyKeyword([followUp.method, followUp.note, followUp.nextDiscussionPlan], quotationStageMatchers))
+      .map((followUp) => latestJourneyDate(followUp.completedAt, followUp.followUpDate, followUp.updatedAt, followUp.createdAt)),
+    ...signals.communications
+      .filter((communication) => textMatchesJourneyKeyword([communication.method, communication.note, communication.discussionTopic, communication.outcome, communication.followUpNote], quotationStageMatchers))
+      .map((communication) => latestJourneyDate(communication.communicationAt, communication.createdAt)),
+    ...signals.activities
+      .filter((activity) => textMatchesJourneyKeyword([activity.title, activity.description, activity.entity], quotationStageMatchers))
+      .map((activity) => activity.createdAt),
+  ]);
+
+  const salesWonAt = maxJourneyDate([
+    ...signals.leads
+      .filter((lead) => lead.status === "WON_SALE")
+      .map((lead) => latestJourneyDate(lead.updatedAt, lead.followUpDate, lead.createdAt)),
+    ...signals.quotations
+      .filter((quotation) => quotation.status === "CONVERTED_TO_SALE")
+      .map((quotation) => latestJourneyDate(quotation.updatedAt, quotation.createdAt)),
+    ...signals.communications
+      .filter((communication) => textMatchesJourneyKeyword([communication.note, communication.outcome, communication.followUpNote], wonStageMatchers))
+      .map((communication) => latestJourneyDate(communication.communicationAt, communication.createdAt)),
+    ...signals.activities
+      .filter((activity) => textMatchesJourneyKeyword([activity.title, activity.description], wonStageMatchers))
+      .map((activity) => activity.createdAt),
+  ]);
+
+  const salesFailedAt = maxJourneyDate([
+    ...signals.leads
+      .filter((lead) => lead.status === "LOST_SALE")
+      .map((lead) => latestJourneyDate(lead.updatedAt, lead.followUpDate, lead.createdAt)),
+    ...signals.quotations
+      .filter((quotation) => quotation.status === "REJECTED")
+      .map((quotation) => latestJourneyDate(quotation.updatedAt, quotation.createdAt)),
+    ...signals.communications
+      .filter((communication) => textMatchesJourneyKeyword([communication.note, communication.outcome, communication.followUpNote], failedStageMatchers))
+      .map((communication) => latestJourneyDate(communication.communicationAt, communication.createdAt)),
+    ...signals.activities
+      .filter((activity) => textMatchesJourneyKeyword([activity.title, activity.description], failedStageMatchers))
+      .map((activity) => activity.createdAt),
+  ]);
+
+  const stageDates: Partial<Record<CustomerJourneyStageKey, Date | undefined>> = {
+    task_created: taskCreatedAt,
+    contacted: contactedAt,
+    follow_up: followUpAt,
+    demo: demoAt,
+    quotation: quotationAt,
+    sales_won: salesWonAt,
+    sales_failed: salesFailedAt,
+  };
+
+  const finalCandidates = (["sales_won", "sales_failed"] as const)
+    .filter((key) => stageDates[key])
+    .sort((left, right) => {
+      const leftTime = stageDates[left]?.getTime() ?? 0;
+      const rightTime = stageDates[right]?.getTime() ?? 0;
+      return rightTime - leftTime;
+    });
+
+  const currentStageKey = finalCandidates[0]
+    ?? [...CUSTOMER_JOURNEY_STAGE_ORDER]
+      .filter((key) => !["sales_won", "sales_failed"].includes(key) && stageDates[key])
+      .pop()
+    ?? null;
+
+  const actionableFollowUps = signals.followUps
+    .filter((followUp) => followUp.followUpDate && followUp.status !== "COMPLETED")
+    .sort((left, right) => (left.followUpDate?.getTime() ?? Number.MAX_SAFE_INTEGER) - (right.followUpDate?.getTime() ?? Number.MAX_SAFE_INTEGER));
+
+  const nextFollowUpRecord = actionableFollowUps[0];
+  const lastPrioritySource = nextFollowUpRecord
+    ?? [...signals.tasks].sort((left, right) => (right.updatedAt?.getTime() ?? 0) - (left.updatedAt?.getTime() ?? 0))[0]
+    ?? [...signals.leads].sort((left, right) => (right.updatedAt?.getTime() ?? 0) - (left.updatedAt?.getTime() ?? 0))[0];
+
+  const events = [
+    ...signals.tasks.map((task) => ({
+      at: latestJourneyDate(task.updatedAt, task.taskDate, task.createdAt),
+      label: firstMeaningfulText(task.title, "Task Created") ?? "Task Created",
+      detail: firstMeaningfulText(task.description, task.notes),
+    })),
+    ...signals.followUps.map((followUp) => ({
+      at: latestJourneyDate(followUp.completedAt, followUp.followUpDate, followUp.updatedAt, followUp.createdAt),
+      label: `${labelize(followUp.method ?? "Follow-up")} Follow-up`,
+      detail: firstMeaningfulText(followUp.note, followUp.nextDiscussionPlan, followUp.assignedTo),
+    })),
+    ...signals.communications.map((communication) => ({
+      at: latestJourneyDate(communication.communicationAt, communication.createdAt),
+      label: `${labelize(communication.method ?? "Communication")} Communication`,
+      detail: firstMeaningfulText(communication.note, communication.discussionTopic, communication.outcome, communication.followUpNote),
+    })),
+    ...signals.activities.map((activity) => ({
+      at: activity.createdAt,
+      label: firstMeaningfulText(activity.title, "CRM Activity") ?? "CRM Activity",
+      detail: firstMeaningfulText(activity.description, activity.entity),
+    })),
+    ...signals.quotations.map((quotation) => ({
+      at: latestJourneyDate(quotation.updatedAt, quotation.createdAt),
+      label: firstMeaningfulText(quotation.quoteNumber ? `Quotation ${quotation.quoteNumber}` : undefined, "Quotation") ?? "Quotation",
+      detail: firstMeaningfulText(quotation.notes, labelize(quotation.status)),
+    })),
+    ...signals.leads
+      .filter((lead) => Boolean(lead.status))
+      .map((lead) => ({
+        at: latestJourneyDate(lead.updatedAt, lead.followUpDate, lead.createdAt),
+        label: `Lead ${leadStatusLabels[lead.status ?? ""] ?? labelize(lead.status)}`,
+        detail: firstMeaningfulText(lead.title, lead.notes),
+      })),
+  ]
+    .filter((event) => event.at)
+    .sort((left, right) => (right.at?.getTime() ?? 0) - (left.at?.getTime() ?? 0));
+
+  const lastActivity = events[0];
+  const leadsWonCount = signals.leads.filter((lead) => lead.status === "WON_SALE").length;
+  const leadsLostCount = signals.leads.filter((lead) => lead.status === "LOST_SALE").length;
+
+  return {
+    steps: CUSTOMER_JOURNEY_STAGE_ORDER.map((key) => {
+      const reached = Boolean(stageDates[key]);
+      const current = currentStageKey === key;
+      const state: CustomerJourneyStepState = key === "sales_failed" && current
+        ? "failed"
+        : key === "sales_won" && current
+          ? "success"
+          : current
+            ? "current"
+            : key === "sales_failed" && reached
+              ? "failed"
+              : key === "sales_won" && reached
+                ? "success"
+                : reached
+                  ? "completed"
+                  : "pending";
+
+      return {
+        key,
+        label: customerJourneyLabels[key],
+        helper: customerJourneyStepHelper(key, reached, {
+          communications: signals.communications.length,
+          followUps: signals.followUps.length,
+          quotations: signals.quotations.length,
+          leadsWon: leadsWonCount,
+          leadsLost: leadsLostCount,
+        }),
+        reached,
+        current,
+        state,
+        date: stageDates[key] ? dateLabel(stageDates[key], "dd/MM/yyyy hh:mm a") : "-",
+      };
+    }),
+    currentStageKey,
+    currentStage: currentStageKey ? customerJourneyLabels[currentStageKey] : "No activity yet",
+    stageSummary: customerJourneyStageSummary(currentStageKey),
+    lastActivity: lastActivity ? firstMeaningfulText(lastActivity.label, lastActivity.detail) ?? "No activity yet" : "No activity yet",
+    lastActivityTime: lastActivity?.at ? dateLabel(lastActivity.at, "dd/MM/yyyy hh:mm a") : "-",
+    nextFollowUp: nextFollowUpRecord?.followUpDate ? dateLabel(nextFollowUpRecord.followUpDate, "dd/MM/yyyy hh:mm a") : "No upcoming follow-up",
+    nextFollowUpStatus: nextFollowUpRecord ? followUpBucketFromRecord(nextFollowUpRecord) : "No upcoming follow-up",
+    assignedMarketer: firstMeaningfulText(
+      signals.customer?.assignedTo,
+      nextFollowUpRecord?.assignedTo,
+      signals.leads.find((lead) => lead.assignedTo)?.assignedTo,
+      signals.communications.find((communication) => communication.createdBy)?.createdBy,
+    ) ?? "-",
+    priority: firstMeaningfulText(labelize(lastPrioritySource?.priority), "-") ?? "-",
+    status: currentStageKey === "sales_won"
+      ? "Won Sale"
+      : currentStageKey === "sales_failed"
+        ? "Sales Failed"
+        : nextFollowUpRecord
+          ? followUpBucketFromRecord(nextFollowUpRecord)
+          : currentStageKey
+            ? customerJourneyLabels[currentStageKey]
+            : "No activity",
+  };
 }
 
 const taskInclude = {
@@ -744,6 +1168,47 @@ const workspaceCompanySelect = {
 } satisfies Prisma.Prisma.CustomerCompanySelect;
 
 type ExistingCustomerRecord = Prisma.Prisma.CustomerCompanyGetPayload<{ select: typeof workspaceCompanySelect }>;
+
+const customerJourneyLeadSelect = {
+  id: true,
+  title: true,
+  notes: true,
+  status: true,
+  priority: true,
+  followUpDate: true,
+  createdAt: true,
+  updatedAt: true,
+  assignedTo: {
+    select: {
+      name: true,
+    },
+  },
+} satisfies Prisma.Prisma.LeadSelect;
+
+type CustomerJourneyLeadRecord = Prisma.Prisma.LeadGetPayload<{ select: typeof customerJourneyLeadSelect }>;
+
+const customerJourneyQuotationSelect = {
+  id: true,
+  quoteNumber: true,
+  notes: true,
+  status: true,
+  createdAt: true,
+  updatedAt: true,
+  createdBy: {
+    select: {
+      name: true,
+    },
+  },
+  lead: {
+    select: {
+      assignedToId: true,
+      createdById: true,
+    },
+  },
+  createdById: true,
+} satisfies Prisma.Prisma.QuotationSelect;
+
+type CustomerJourneyQuotationRecord = Prisma.Prisma.QuotationGetPayload<{ select: typeof customerJourneyQuotationSelect }>;
 
 const productInclude = {
   interests: {
@@ -2813,10 +3278,19 @@ export async function getCustomerDetail(id: string, role: Role, user: ShellUser)
         activities: [],
         communications: [],
       } satisfies CustomerHistory,
+      journey: buildCustomerJourneyTimeline({
+        customer: undefined,
+        tasks: [],
+        followUps: [],
+        communications: [],
+        activities: [],
+        leads: [],
+        quotations: [],
+      }),
     };
   }
 
-  const [tasks, followUps, communications, timeline] = await Promise.all([
+  const [tasks, followUps, communications, timeline, leads, quotations] = await Promise.all([
     prisma.task.findMany({
       where: combineWhere(
         scopedUserIds
@@ -2858,26 +3332,129 @@ export async function getCustomerDetail(id: string, role: Role, user: ShellUser)
         scopedUserIds ? { userId: { in: scopedUserIds } } : undefined,
         { companyId: scopedCustomer.id },
       ),
-      include: { user: true },
+      include: activityTimelineInclude,
       orderBy: { createdAt: "desc" },
     }),
+    prisma.lead.findMany({
+      where: combineWhere(
+        scopedUserIds
+          ? {
+              OR: [
+                { assignedToId: { in: scopedUserIds } },
+                { createdById: { in: scopedUserIds } },
+              ],
+            }
+          : undefined,
+        {
+          OR: [
+            { companyId: scopedCustomer.id },
+            { customerName: { equals: scopedCustomer.name, mode: "insensitive" as const } },
+          ],
+        },
+      ),
+      select: customerJourneyLeadSelect,
+      orderBy: { updatedAt: "desc" },
+    }),
+    prisma.quotation.findMany({
+      where: combineWhere(
+        scopedUserIds
+          ? {
+              OR: [
+                { createdById: { in: scopedUserIds } },
+                { lead: { assignedToId: { in: scopedUserIds } } },
+                { lead: { createdById: { in: scopedUserIds } } },
+              ],
+            }
+          : undefined,
+        {
+          OR: [
+            { companyId: scopedCustomer.id },
+            { lead: { companyId: scopedCustomer.id } },
+          ],
+        },
+      ),
+      select: customerJourneyQuotationSelect,
+      orderBy: { updatedAt: "desc" },
+    }),
   ]);
+
+  const history = {
+    tasks: tasks.map(mapTaskRow),
+    followUps: followUps.map(mapFollowUpRow),
+    communications: communications.map(mapCommunicationHistoryRow),
+    activities: timeline.map(buildActivityRowFromTimeline),
+  } satisfies CustomerHistory;
+
+  const journey = buildCustomerJourneyTimeline({
+    customer: {
+      assignedTo: scopedCustomer.assignedTo,
+    },
+    tasks: tasks.map((task) => ({
+      title: task.title,
+      description: task.description,
+      notes: task.notes,
+      priority: task.priority,
+      status: task.status,
+      assignedTo: task.assignedTo?.name,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      taskDate: task.taskTime ?? task.dueDate ?? task.createdAt,
+    })),
+    followUps: followUps.map((followUp) => ({
+      method: followUp.method,
+      note: followUp.note,
+      nextDiscussionPlan: followUp.nextDiscussionPlan,
+      status: followUp.status,
+      priority: followUp.priority,
+      assignedTo: followUp.assignedTo?.name,
+      createdAt: followUp.createdAt,
+      updatedAt: followUp.updatedAt,
+      completedAt: followUp.completedAt,
+      followUpDate: followUp.followUpDate,
+    })),
+    communications: communications.map((communication) => ({
+      method: communication.method,
+      note: communication.note,
+      discussionTopic: communication.discussionTopic,
+      productDiscussed: communication.productDiscussed,
+      outcome: communication.outcome,
+      followUpNote: communication.followUpNote,
+      createdBy: communication.user?.name,
+      createdAt: communication.createdAt,
+      communicationAt: communication.communicationAt,
+      nextFollowUpDate: communication.nextFollowUpDate,
+    })),
+    activities: timeline.map((item) => ({
+      title: item.title,
+      description: item.description,
+      entity: item.entity,
+      createdAt: item.createdAt,
+    })),
+    leads: leads.map((lead: CustomerJourneyLeadRecord) => ({
+      title: lead.title,
+      notes: lead.notes,
+      status: lead.status,
+      priority: lead.priority,
+      assignedTo: lead.assignedTo?.name,
+      createdAt: lead.createdAt,
+      updatedAt: lead.updatedAt,
+      followUpDate: lead.followUpDate,
+    })),
+    quotations: quotations.map((quotation: CustomerJourneyQuotationRecord) => ({
+      quoteNumber: quotation.quoteNumber,
+      notes: quotation.notes,
+      status: quotation.status,
+      createdBy: quotation.createdBy?.name,
+      createdAt: quotation.createdAt,
+      updatedAt: quotation.updatedAt,
+    })),
+  });
 
   return {
     workspace,
     customer: scopedCustomer,
-    history: {
-      tasks: tasks.map(mapTaskRow),
-      followUps: followUps.map(mapFollowUpRow),
-      communications: communications.map(mapCommunicationHistoryRow),
-      activities: timeline.map((item) => ({
-        id: item.id,
-        href: linkedEntityHref({ entity: item.entity, entityId: item.entityId, leadId: item.leadId, companyId: item.companyId }),
-        title: item.title,
-        detail: item.description ?? `${item.entity} activity${item.user?.name ? ` by ${item.user.name}` : ""}`,
-        time: dateLabel(item.createdAt, "dd/MM/yyyy hh:mm a"),
-      })),
-    } satisfies CustomerHistory,
+    history,
+    journey,
   };
 }
 
