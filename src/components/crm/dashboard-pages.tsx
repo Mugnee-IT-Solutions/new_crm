@@ -1258,7 +1258,7 @@ function SupervisorTeamPerformancePanelV2({
                               metric: "overview",
                               metricLabel: teamPerformanceMetricLabels.overview,
                             })}
-                            className="min-w-0 text-left transition hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                            className="min-w-0 cursor-pointer text-left transition hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                           >
                             <p className="truncate font-black text-slate-950">{row.name}</p>
                             <p className="truncate text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.role}</p>
@@ -1286,7 +1286,7 @@ function SupervisorTeamPerformancePanelV2({
                                 metric,
                                 metricLabel: teamPerformanceMetricLabels[metric],
                               })}
-                              className="rounded-md text-left text-slate-700 transition hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                              className="cursor-pointer rounded-md text-left text-slate-700 transition hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                             >
                               {textValue}
                             </button>
@@ -1309,7 +1309,7 @@ function SupervisorTeamPerformancePanelV2({
                                 metric: "score",
                                 metricLabel: teamPerformanceMetricLabels.score,
                               })}
-                              className="rounded-md text-left transition hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                              className="cursor-pointer rounded-md text-left transition hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                             >
                               {row.performanceScore}%
                             </button>
@@ -1346,7 +1346,7 @@ function SupervisorTeamPerformancePanelV2({
                             metric: "overview",
                             metricLabel: teamPerformanceMetricLabels.overview,
                           })}
-                          className="min-w-0 text-left transition hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                          className="min-w-0 cursor-pointer text-left transition hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                         >
                           <p className="truncate text-sm font-black text-slate-950">{row.name}</p>
                           <p className="text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.role}</p>
@@ -1377,7 +1377,7 @@ function SupervisorTeamPerformancePanelV2({
                                   metric,
                                   metricLabel: teamPerformanceMetricLabels[metric],
                                 })}
-                                className="mt-1 inline-block text-base font-black leading-tight text-slate-900 underline decoration-transparent transition hover:decoration-slate-400"
+                                className="mt-1 inline-block cursor-pointer text-base font-black leading-tight text-slate-900 underline decoration-transparent transition hover:decoration-slate-400"
                               >
                                 {value}
                               </button>
@@ -2680,7 +2680,7 @@ function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
                     <button
                       type="button"
                       onClick={() => handleMetricClick(row, "overview")}
-                      className="min-w-0 text-left transition hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                      className="min-w-0 cursor-pointer text-left transition hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                     >
                       <p className="truncate font-black text-slate-950">{row.name}</p>
                       <p className="truncate text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.email}</p>
@@ -2691,33 +2691,33 @@ function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
                   <Badge variant={row.roleKey === "ADMIN" ? "danger" : row.roleKey === "SUPERVISOR" ? "violet" : "default"}>{row.role}</Badge>
                 </td>
                 <td className="px-3 py-4">
-                  <button type="button" className="font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "leads")}>
+                  <button type="button" className="cursor-pointer font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "leads")}>
                     {row.leads}
                   </button>
                 </td>
                 <td className="px-3 py-4">
-                  <button type="button" className="font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "calls")}>
+                  <button type="button" className="cursor-pointer font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "calls")}>
                     {row.calls}
                   </button>
                 </td>
                 <td className="px-3 py-4">
-                  <button type="button" className="font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "whatsapp")}>
+                  <button type="button" className="cursor-pointer font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "whatsapp")}>
                     {row.whatsapp}
                   </button>
                 </td>
                 <td className="px-3 py-4 font-semibold text-slate-700">{row.emails}</td>
                 <td className="px-3 py-4">
-                  <button type="button" className="font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "followUps")}>
+                  <button type="button" className="cursor-pointer font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "followUps")}>
                     {row.followUps}
                   </button>
                 </td>
                 <td className="px-3 py-4">
-                  <button type="button" className="font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "pendingTasks")}>
+                  <button type="button" className="cursor-pointer font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "pendingTasks")}>
                     {row.pendingTasks}
                   </button>
                 </td>
                 <td className="px-3 py-4">
-                  <button type="button" className="font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "overdueFollowUps")}>
+                  <button type="button" className="cursor-pointer font-black text-blue-700 hover:underline" onClick={() => handleMetricClick(row, "overdueFollowUps")}>
                     {row.overdueFollowUps}
                   </button>
                 </td>
