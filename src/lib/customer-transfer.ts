@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 import { buildCustomerScopeWhere, resolveCustomerOwnerId } from "@/lib/customer-ownership";
 import { getPrisma } from "@/lib/prisma";
 import type { Role } from "@/lib/utils";
+import { ImportExportFormat } from "@prisma/client";
 import type * as Prisma from "@prisma/client";
 
 export const CUSTOMER_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
@@ -74,6 +75,7 @@ export type CustomerTransferActor = {
   id: string;
   role: Role;
   assignedToId?: string;
+  importToSelf?: boolean;
 };
 
 export type CustomerImportFailure = {
@@ -88,8 +90,53 @@ export type CustomerImportResult = {
   failed: CustomerImportFailure[];
 };
 
+export type CustomerImportPreviewRow = {
+  companyName: string;
+  primaryPhone: string;
+  city?: string;
+  address?: string;
+  industry?: string;
+};
+
+export type CustomerImportPreviewResult = {
+  success: true;
+  format: "EXCEL" | "CSV" | "PDF";
+  totalRows: number;
+  failed: CustomerImportFailure[];
+  previewRows: CustomerImportPreviewRow[];
+  context?: {
+    division?: string;
+    district?: string;
+    thana?: string;
+    industry?: string;
+  };
+};
+
+export type CustomerPdfAssignmentInput = {
+  assignedToId?: string;
+  count: number;
+};
+
+export type CustomerDistributionSummary = {
+  assignedToId: string;
+  requestedCount: number;
+  inserted: number;
+  updated: number;
+  failed: number;
+};
+
+export type CustomerDistributedImportResult = CustomerImportResult & {
+  distribution: CustomerDistributionSummary[];
+};
+
 export type CustomerExportFormat = "xlsx" | "csv";
 type CustomerImportFormat = "EXCEL" | "CSV" | "PDF";
+
+type ParsedCustomerImportPayload = {
+  format: CustomerImportFormat;
+  rows: ParsedCustomerRow[];
+  failed: CustomerImportFailure[];
+};
 
 type ParsedCustomerRow = {
   row: number;
@@ -667,6 +714,121 @@ function parsePdfLabelValueRows(rawLines: string[]) {
   return finalizeParsedCustomerRows(rows);
 }
 
+function parsePdfMadrashaRows(rawLines: string[]) {
+  let division = "";
+  let district = "";
+  let thana = "";
+  let headerSeen = false;
+  let pendingLine = "";
+  const rawRows: Record<string, unknown>[] = [];
+
+  const tryParseRow = (line: string) => {
+    const normalized = line.trim();
+    if (!normalized) return null;
+
+    const match = normalized.match(/^(\d+)\s+(\d{4,})\s+(.+)$/);
+    if (!match) return null;
+
+    const [, sl, eiin, remainder] = match;
+    const segments = remainder.split(/\s{2,}/).map((item) => item.trim()).filter(Boolean);
+    if (segments.length < 3) return null;
+
+    const mobile = normalizePhone(segments[segments.length - 1]);
+    if (!/^\d{7,15}$/.test(mobile)) return null;
+
+    const village = segments[segments.length - 2] ?? "";
+    const companyName = segments.slice(0, -2).join(" ").trim();
+    if (!companyName || !village) return null;
+
+    const address = [village, thana, district, division].filter(Boolean).join(", ");
+    const note = [
+      `EIIN: ${eiin}`,
+      thana ? `Thana: ${thana}` : "",
+      district ? `District: ${district}` : "",
+      division ? `Division: ${division}` : "",
+    ].filter(Boolean).join(" | ");
+
+    return {
+      "SL": sl,
+      "Industry": "Madrasha",
+      "Company Name": companyName,
+      "City/Zilla": district || thana || division,
+      "Address": address,
+      "Primary Phone": mobile,
+      "Phone 2": "",
+      "Phone 3": "",
+      "Primary Email": "",
+      "Email 2": "",
+      "Website": "",
+      "Note": note,
+      "Contact Person 1 Name": "",
+      "Contact Person 1 Designation": "",
+      "Contact Person 1 Department": "",
+      "Contact Person 1 Phone 1": "",
+      "Contact Person 1 Phone 2": "",
+      "Contact Person 1 Email 1": "",
+      "Contact Person 1 Email 2": "",
+      "Contact Person 2 Name": "",
+      "Contact Person 2 Designation": "",
+      "Contact Person 2 Department": "",
+      "Contact Person 2 Phone 1": "",
+      "Contact Person 2 Phone 2": "",
+      "Contact Person 2 Email 1": "",
+      "Contact Person 2 Email 2": "",
+      "Lead Source": "PDF Import",
+      "EIIN": eiin,
+      "Village/Road": village,
+      "Division": division,
+      "District": district,
+      "Thana": thana,
+    } satisfies Record<string, unknown>;
+  };
+
+  for (let index = 0; index < rawLines.length; index += 1) {
+    const rawLine = rawLines[index] ?? "";
+    const line = rawLine.replace(/\r/g, "").trim();
+    if (!line) continue;
+    if (/^page\s+\d+$/i.test(line)) continue;
+
+    const divisionMatch = line.match(/^division\s+(.+)$/i);
+    if (divisionMatch?.[1]) {
+      division = divisionMatch[1].trim();
+      continue;
+    }
+
+    const districtMatch = line.match(/^district\s+(.+)$/i);
+    if (districtMatch?.[1]) {
+      district = districtMatch[1].trim();
+      continue;
+    }
+
+    const thanaMatch = line.match(/^thana\s+(.+)$/i);
+    if (thanaMatch?.[1]) {
+      thana = thanaMatch[1].trim();
+      continue;
+    }
+
+    if (!headerSeen) {
+      if (/^sl\s+/i.test(line) && /eiin/i.test(line) && /village\/road/i.test(line) && /mobile/i.test(line)) {
+        headerSeen = true;
+      }
+      continue;
+    }
+
+    pendingLine = pendingLine ? `${pendingLine} ${line}` : line;
+    const parsedRow = tryParseRow(pendingLine);
+    if (!parsedRow) continue;
+    rawRows.push(parsedRow);
+    pendingLine = "";
+  }
+
+  if (!rawRows.length) {
+    return { rows: [] as ParsedCustomerRow[], failed: [] as CustomerImportFailure[] };
+  }
+
+  return finalizeParsedCustomerRows(rawRows);
+}
+
 async function parsePdfRows(buffer: Buffer) {
   const expectedHeaders = CUSTOMER_TEMPLATE_COLUMNS.map(normalizeHeader);
 
@@ -723,6 +885,10 @@ async function parsePdfRows(buffer: Buffer) {
   }
 
   if (headerIndex < 0 || !delimiter) {
+    const madrashaParsed = parsePdfMadrashaRows(rawLines);
+    if (madrashaParsed.rows.length) {
+      return madrashaParsed;
+    }
     const labelValueParsed = parsePdfLabelValueRows(rawLines);
     if (labelValueParsed.rows.length) {
       return labelValueParsed;
@@ -848,37 +1014,40 @@ function readRawValue(raw: Record<string, unknown>, keys: string[]) {
   return "";
 }
 
-export async function importCustomersFromFile(buffer: Buffer, fileName: string, actor: CustomerTransferActor): Promise<CustomerImportResult> {
-  const prisma = getPrisma();
-  const fileLower = fileName.toLowerCase();
-  const format: CustomerImportFormat = fileLower.endsWith(".csv") ? "CSV" : fileLower.endsWith(".pdf") ? "PDF" : "EXCEL";
-  const ownerId = await resolveCustomerOwnerId(
-    prisma,
-    { id: actor.id, role: actor.role },
-    actor.assignedToId,
-    { requireSelectionForElevated: true },
-  );
-  const parsed = await parseImportRows(buffer, fileName);
-  const rows = parsed.rows;
-  const failed = [...parsed.failed];
+function buildCustomerImportLogData(input: {
+  actorId: string;
+  fileName: string;
+  format: CustomerImportFormat;
+  inserted: number;
+  updated: number;
+  failed: CustomerImportFailure[];
+}) {
+  const format: ImportExportFormat = input.format === "PDF" ? "PDF" : input.format === "CSV" ? "CSV" : "EXCEL";
 
+  return {
+    type: "IMPORT" as const,
+    module: "CUSTOMERS" as const,
+    format,
+    requestedById: input.actorId,
+    fileName: input.fileName,
+    status: input.failed.length ? ("FAILED" as const) : ("COMPLETED" as const),
+    processedRows: input.inserted + input.updated,
+    failedRows: input.failed.length,
+    errorMessage: input.failed.length ? input.failed.map((item) => `Row ${item.row}: ${item.reason}`).join("; ") : undefined,
+    completedAt: new Date(),
+  };
+}
+
+async function applyCustomerImportRows(
+  prisma: ReturnType<typeof getPrisma>,
+  rows: ParsedCustomerRow[],
+  actor: CustomerTransferActor,
+  ownerId: string,
+  initialFailures: CustomerImportFailure[] = [],
+) {
+  const failed = [...initialFailures];
   if (!rows.length) {
-    await prisma.importExportLog.create({
-      data: {
-        type: "IMPORT",
-        module: "CUSTOMERS",
-        format: format === "PDF" ? "PDF" : format === "CSV" ? "CSV" : "EXCEL",
-        requestedById: actor.id,
-        fileName,
-        status: "FAILED",
-        processedRows: 0,
-        failedRows: failed.length,
-        errorMessage: failed.map((item) => `Row ${item.row}: ${item.reason}`).join("; "),
-        completedAt: new Date(),
-      },
-    });
-
-    return { success: true, inserted: 0, updated: 0, failed };
+    return { inserted: 0, updated: 0, failed };
   }
 
   const companyNames = rows.map((row) => row.companyName);
@@ -996,26 +1165,172 @@ export async function importCustomersFromFile(buffer: Buffer, fileName: string, 
     await prisma.$transaction(operations);
   }
 
+  return { inserted, updated, failed };
+}
+
+export async function previewCustomerImportFile(buffer: Buffer, fileName: string): Promise<CustomerImportPreviewResult> {
+  const parsed = await parseImportRows(buffer, fileName);
+  const firstRow = parsed.rows[0];
+
+  return {
+    success: true,
+    format: parsed.format,
+    totalRows: parsed.rows.length,
+    failed: parsed.failed,
+    previewRows: parsed.rows.slice(0, 5).map((row) => ({
+      companyName: row.companyName,
+      primaryPhone: row.primaryPhone,
+      city: row.city,
+      address: row.address,
+      industry: row.industry,
+    })),
+    context: firstRow ? {
+      division: readRawValue(firstRow.rawData, ["Division"]),
+      district: readRawValue(firstRow.rawData, ["District"]),
+      thana: readRawValue(firstRow.rawData, ["Thana"]),
+      industry: firstRow.industry,
+    } : undefined,
+  };
+}
+
+export async function importCustomersFromFile(buffer: Buffer, fileName: string, actor: CustomerTransferActor): Promise<CustomerImportResult> {
+  const prisma = getPrisma();
+  const fileLower = fileName.toLowerCase();
+  const format: CustomerImportFormat = fileLower.endsWith(".csv") ? "CSV" : fileLower.endsWith(".pdf") ? "PDF" : "EXCEL";
+  const ownerId = actor.role !== "MARKETER" && actor.importToSelf
+    ? actor.id
+    : await resolveCustomerOwnerId(
+        prisma,
+        { id: actor.id, role: actor.role },
+        actor.assignedToId,
+        { requireSelectionForElevated: true },
+      );
+  if (!ownerId) {
+    throw new Error("A marketer is required for customer import.");
+  }
+  const parsed = await parseImportRows(buffer, fileName);
+  const result = await applyCustomerImportRows(prisma, parsed.rows, actor, ownerId, parsed.failed);
+
   await prisma.importExportLog.create({
-    data: {
-      type: "IMPORT",
-      module: "CUSTOMERS",
-      format: format === "PDF" ? "PDF" : format === "CSV" ? "CSV" : "EXCEL",
-      requestedById: actor.id,
+    data: buildCustomerImportLogData({
+      actorId: actor.id,
       fileName,
-      status: failed.length ? "FAILED" : "COMPLETED",
-      processedRows: inserted + updated,
-      failedRows: failed.length,
-      errorMessage: failed.length ? failed.map((item) => `Row ${item.row}: ${item.reason}`).join("; ") : undefined,
-      completedAt: new Date(),
-    },
+      format,
+      inserted: result.inserted,
+      updated: result.updated,
+      failed: result.failed,
+    }),
+  });
+
+  return {
+    success: true,
+    inserted: result.inserted,
+    updated: result.updated,
+    failed: result.failed,
+  };
+}
+
+export async function importCustomersFromPdfAssignments(
+  buffer: Buffer,
+  fileName: string,
+  actor: CustomerTransferActor,
+  assignments: CustomerPdfAssignmentInput[],
+): Promise<CustomerDistributedImportResult> {
+  return importCustomersWithAssignments(buffer, fileName, actor, assignments);
+}
+
+export async function importCustomersWithAssignments(
+  buffer: Buffer,
+  fileName: string,
+  actor: CustomerTransferActor,
+  assignments: CustomerPdfAssignmentInput[],
+): Promise<CustomerDistributedImportResult> {
+  const prisma = getPrisma();
+  const parsed = await parseImportRows(buffer, fileName);
+
+  if (!parsed.rows.length) {
+    await prisma.importExportLog.create({
+      data: buildCustomerImportLogData({
+        actorId: actor.id,
+        fileName,
+        format: parsed.format,
+        inserted: 0,
+        updated: 0,
+        failed: parsed.failed,
+      }),
+    });
+
+    return {
+      success: true,
+      inserted: 0,
+      updated: 0,
+      failed: parsed.failed,
+      distribution: [],
+    };
+  }
+
+  const normalizedAssignments = actor.role === "MARKETER"
+    ? [{ assignedToId: actor.id, count: parsed.rows.length }]
+    : assignments
+      .map((assignment) => ({
+        assignedToId: assignment.assignedToId?.trim() ?? "",
+        count: Math.max(0, Math.floor(assignment.count)),
+      }))
+      .filter((assignment): assignment is { assignedToId: string; count: number } => Boolean(assignment.assignedToId) && assignment.count > 0);
+
+  const assignedTotal = normalizedAssignments.reduce((sum, item) => sum + item.count, 0);
+  if (assignedTotal !== parsed.rows.length) {
+    throw new Error(`Assign all ${parsed.rows.length} rows before importing. Currently assigned: ${assignedTotal}.`);
+  }
+
+  const distribution: CustomerDistributionSummary[] = [];
+  const combinedFailed = [...parsed.failed];
+  let inserted = 0;
+  let updated = 0;
+  let offset = 0;
+
+  for (const assignment of normalizedAssignments) {
+    const ownerId = await resolveCustomerOwnerId(
+      prisma,
+      { id: actor.id, role: actor.role },
+      assignment.assignedToId,
+      { requireSelectionForElevated: true },
+    );
+    if (!ownerId) {
+      throw new Error("A marketer is required for each PDF assignment.");
+    }
+    const chunk = parsed.rows.slice(offset, offset + assignment.count);
+    const chunkResult = await applyCustomerImportRows(prisma, chunk, actor, ownerId, []);
+    inserted += chunkResult.inserted;
+    updated += chunkResult.updated;
+    combinedFailed.push(...chunkResult.failed);
+    distribution.push({
+      assignedToId: ownerId,
+      requestedCount: assignment.count,
+      inserted: chunkResult.inserted,
+      updated: chunkResult.updated,
+      failed: chunkResult.failed.length,
+    });
+    offset += assignment.count;
+  }
+
+  await prisma.importExportLog.create({
+    data: buildCustomerImportLogData({
+      actorId: actor.id,
+      fileName,
+      format: parsed.format,
+      inserted,
+      updated,
+      failed: combinedFailed,
+    }),
   });
 
   return {
     success: true,
     inserted,
     updated,
-    failed,
+    failed: combinedFailed,
+    distribution,
   };
 }
 

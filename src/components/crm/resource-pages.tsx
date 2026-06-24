@@ -90,6 +90,7 @@ import type {
   TaskRow,
 } from "@/lib/crm-data";
 import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
+import { TASK_REMINDER_OPTIONS, normalizeTaskReminderValue, taskReminderLabel, type TaskReminderValue } from "@/lib/task-reminders";
 import { getCrmPeriodWindow } from "@/lib/crm-time";
 import { type ReportFormat } from "@/lib/report-definitions";
 import { cn, formatCurrency, initials, rolePath, type Role } from "@/lib/utils";
@@ -1920,18 +1921,87 @@ const BANGLADESH_DISTRICTS = [
   "Thakurgaon",
 ] as const;
 
+const DEFAULT_CUSTOMER_INDUSTRIES = [
+  "Education",
+  "Madrasha",
+  "School",
+  "College",
+  "University",
+  "Software",
+  "IT Services",
+  "Retail",
+  "Wholesale",
+  "Manufacturing",
+  "Trading",
+  "Healthcare",
+  "Hospital",
+  "Pharmacy",
+  "Banking",
+  "NGO",
+  "Government",
+  "Real Estate",
+  "Construction",
+  "Logistics",
+  "Telecom",
+] as const;
+
+type CustomerContactDraft = {
+  name: string;
+  designation: string;
+  department: string;
+  phones: string[];
+  emails: string[];
+};
+
+function createEmptyCustomerContact(): CustomerContactDraft {
+  return {
+    name: "",
+    designation: "",
+    department: "",
+    phones: [""],
+    emails: [""],
+  };
+}
+
 function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: () => void }) {
   const ownerOptions = React.useMemo(() => getCustomerOwnerOptions(workspace, workspace.user.role), [workspace]);
+  const industryListId = React.useId();
+  const industryOptions = React.useMemo(() => {
+    const seen = new Set<string>();
+    const options: string[] = [];
+
+    for (const option of DEFAULT_CUSTOMER_INDUSTRIES) {
+      const normalized = cleanCustomerContactValue(option);
+      const key = normalized.toLowerCase();
+      if (!normalized || seen.has(key)) continue;
+      seen.add(key);
+      options.push(normalized);
+    }
+
+    const workspaceIndustries = workspace.companies
+      .map((company) => cleanCustomerContactValue(company.industry))
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right));
+
+    for (const option of workspaceIndustries) {
+      const key = option.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push(option);
+    }
+
+    return options;
+  }, [workspace.companies]);
   const [phones, setPhones] = React.useState<string[]>([""]);
   const [emails, setEmails] = React.useState<string[]>([""]);
-  const [contacts, setContacts] = React.useState<Array<{ name: string; designation: string; department: string; phones: string[]; emails: string[] }>>([
-    { name: "", designation: "", department: "", phones: [""], emails: [""] },
-  ]);
+  const [contacts, setContacts] = React.useState<CustomerContactDraft[]>([createEmptyCustomerContact()]);
+  const [showContacts, setShowContacts] = React.useState(false);
 
   const resetDynamic = React.useCallback(() => {
     setPhones([""]);
     setEmails([""]);
-    setContacts([{ name: "", designation: "", department: "", phones: [""], emails: [""] }]);
+    setContacts([createEmptyCustomerContact()]);
+    setShowContacts(false);
   }, []);
 
   const updateListValue = React.useCallback((list: string[], index: number, value: string) => {
@@ -1939,8 +2009,18 @@ function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
     next[index] = value;
     return next;
   }, []);
+  const hasContactDetails = React.useMemo(
+    () => contacts.some((contact) => (
+      Boolean(contact.name.trim())
+      || Boolean(contact.designation.trim())
+      || Boolean(contact.department.trim())
+      || contact.phones.some((phone) => Boolean(phone.trim()))
+      || contact.emails.some((email) => Boolean(email.trim()))
+    )),
+    [contacts],
+  );
 
-  const primaryContact = contacts[0] ?? { name: "", designation: "", department: "", phones: [""], emails: [""] };
+  const primaryContact = contacts[0] ?? createEmptyCustomerContact();
   const secondaryContact = contacts[1] ?? null;
 
   return (
@@ -1953,7 +2033,15 @@ function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
       submitLabel="Save Customer"
     >
       <div className="grid gap-3 sm:grid-cols-2">
-        <TextField label="Industry" name="industry" />
+        <label className="block space-y-1.5">
+          <span className="text-sm font-semibold text-slate-700">Industry</span>
+          <Input
+            name="industry"
+            list={industryListId}
+            placeholder="Type or choose industry"
+            className="h-10 px-3 text-[13px]"
+          />
+        </label>
         <TextField label="Company Name" name="companyName" required />
         <SelectBox label="City / Zilla" name="cityOrZilla">
           <option value="">Select district</option>
@@ -2032,163 +2120,186 @@ function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
         <TextField label="Website" name="website" />
         <TextAreaField label="Note" name="note" />
       </div>
+      <datalist id={industryListId}>
+        {industryOptions.map((option) => (
+          <option key={option} value={option} />
+        ))}
+      </datalist>
 
       <div className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-black text-slate-950">Contact Persons</p>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3">
+          <div>
+            <p className="text-sm font-black text-slate-950">Contact Person</p>
+            <p className="mt-1 text-xs font-semibold text-slate-500">Optional. Add contact details only when needed.</p>
+          </div>
           <Button
             type="button"
-            variant="outline"
+            variant={showContacts ? "outline" : "default"}
             size="sm"
-            onClick={() => setContacts((current) => [...current, { name: "", designation: "", department: "", phones: [""], emails: [""] }])}
+            onClick={() => setShowContacts((current) => !current)}
           >
-            <Plus className="h-4 w-4" />
-            Add contact
+            <UserPlus className="h-4 w-4" />
+            {showContacts ? "Hide Contact Persons" : hasContactDetails ? "Edit Contact Persons" : "Add Contact Person"}
           </Button>
         </div>
 
         <input type="hidden" name="contactsJson" value={JSON.stringify(contacts)} />
 
-        <div className="space-y-3">
-          {contacts.map((contact, index) => (
-            <div key={`contact-${index}`} className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <p className="text-sm font-black text-slate-950">{index === 0 ? "Primary Contact" : `Contact ${index + 1}`}</p>
-                </div>
-                {index > 0 ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setContacts((current) => current.filter((_, idx) => idx !== index))}
-                    className="text-slate-600 hover:bg-red-50 hover:text-red-700"
-                  >
-                    Remove
-                  </Button>
-                ) : null}
-              </div>
-
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <label className="block space-y-1.5">
-                  <span className="text-sm font-semibold text-slate-700">Name</span>
-                  <Input
-                    value={contact.name}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setContacts((current) => current.map((item, idx) => idx === index ? { ...item, name: value } : item));
-                    }}
-                    className="h-10 px-3 text-[13px]"
-                  />
-                </label>
-                <label className="block space-y-1.5">
-                  <span className="text-sm font-semibold text-slate-700">Designation</span>
-                  <Input
-                    value={contact.designation}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setContacts((current) => current.map((item, idx) => idx === index ? { ...item, designation: value } : item));
-                    }}
-                    className="h-10 px-3 text-[13px]"
-                  />
-                </label>
-                <label className="block space-y-1.5">
-                  <span className="text-sm font-semibold text-slate-700">Department</span>
-                  <Input
-                    value={contact.department}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setContacts((current) => current.map((item, idx) => idx === index ? { ...item, department: value } : item));
-                    }}
-                    className="h-10 px-3 text-[13px]"
-                  />
-                </label>
-              </div>
-
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <p className="text-sm font-semibold text-slate-700">Phones</p>
-                  <div className="space-y-2">
-                    {contact.phones.map((phone, phoneIndex) => (
-                      <div key={`contact-${index}-phone-${phoneIndex}`} className="flex items-center gap-2">
-                        <Input
-                          value={phone}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setContacts((current) => current.map((item, idx) => idx === index ? { ...item, phones: updateListValue(item.phones, phoneIndex, value) } : item));
-                          }}
-                          placeholder={phoneIndex === 0 ? "Primary phone" : `Phone ${phoneIndex + 1}`}
-                          className="h-10 px-3 text-[13px]"
-                        />
-                        {contact.phones.length > 1 ? (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => setContacts((current) => current.map((item, idx) => idx === index ? { ...item, phones: item.phones.filter((_, pIdx) => pIdx !== phoneIndex) } : item))}
-                            aria-label="Remove contact phone"
-                            className="h-10 w-10 text-slate-500 hover:bg-red-50 hover:text-red-700"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setContacts((current) => current.map((item, idx) => idx === index ? { ...item, phones: [...item.phones, ""] } : item))}
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add phone
-                  </Button>
-                </div>
-
-                <div className="space-y-2">
-                  <p className="text-sm font-semibold text-slate-700">Emails</p>
-                  <div className="space-y-2">
-                    {contact.emails.map((email, emailIndex) => (
-                      <div key={`contact-${index}-email-${emailIndex}`} className="flex items-center gap-2">
-                        <Input
-                          value={email}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setContacts((current) => current.map((item, idx) => idx === index ? { ...item, emails: updateListValue(item.emails, emailIndex, value) } : item));
-                          }}
-                          placeholder={emailIndex === 0 ? "Primary email" : `Email ${emailIndex + 1}`}
-                          className="h-10 px-3 text-[13px]"
-                        />
-                        {contact.emails.length > 1 ? (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => setContacts((current) => current.map((item, idx) => idx === index ? { ...item, emails: item.emails.filter((_, eIdx) => eIdx !== emailIndex) } : item))}
-                            aria-label="Remove contact email"
-                            className="h-10 w-10 text-slate-500 hover:bg-red-50 hover:text-red-700"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setContacts((current) => current.map((item, idx) => idx === index ? { ...item, emails: [...item.emails, ""] } : item))}
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add email
-                  </Button>
-                </div>
-              </div>
+        {showContacts ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-black text-slate-950">Contact Persons</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setContacts((current) => [...current, createEmptyCustomerContact()])}
+              >
+                <Plus className="h-4 w-4" />
+                Add contact
+              </Button>
             </div>
-          ))}
-        </div>
+
+            {contacts.map((contact, index) => (
+              <div key={`contact-${index}`} className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-black text-slate-950">{index === 0 ? "Primary Contact" : `Contact ${index + 1}`}</p>
+                  </div>
+                  {index > 0 ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setContacts((current) => current.filter((_, idx) => idx !== index))}
+                      className="text-slate-600 hover:bg-red-50 hover:text-red-700"
+                    >
+                      Remove
+                    </Button>
+                  ) : null}
+                </div>
+
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="block space-y-1.5">
+                    <span className="text-sm font-semibold text-slate-700">Name</span>
+                    <Input
+                      value={contact.name}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setContacts((current) => current.map((item, idx) => idx === index ? { ...item, name: value } : item));
+                      }}
+                      className="h-10 px-3 text-[13px]"
+                    />
+                  </label>
+                  <label className="block space-y-1.5">
+                    <span className="text-sm font-semibold text-slate-700">Designation</span>
+                    <Input
+                      value={contact.designation}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setContacts((current) => current.map((item, idx) => idx === index ? { ...item, designation: value } : item));
+                      }}
+                      className="h-10 px-3 text-[13px]"
+                    />
+                  </label>
+                  <label className="block space-y-1.5">
+                    <span className="text-sm font-semibold text-slate-700">Department</span>
+                    <Input
+                      value={contact.department}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setContacts((current) => current.map((item, idx) => idx === index ? { ...item, department: value } : item));
+                      }}
+                      className="h-10 px-3 text-[13px]"
+                    />
+                  </label>
+                </div>
+
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold text-slate-700">Phones</p>
+                    <div className="space-y-2">
+                      {contact.phones.map((phone, phoneIndex) => (
+                        <div key={`contact-${index}-phone-${phoneIndex}`} className="flex items-center gap-2">
+                          <Input
+                            value={phone}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setContacts((current) => current.map((item, idx) => idx === index ? { ...item, phones: updateListValue(item.phones, phoneIndex, value) } : item));
+                            }}
+                            placeholder={phoneIndex === 0 ? "Primary phone" : `Phone ${phoneIndex + 1}`}
+                            className="h-10 px-3 text-[13px]"
+                          />
+                          {contact.phones.length > 1 ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setContacts((current) => current.map((item, idx) => idx === index ? { ...item, phones: item.phones.filter((_, pIdx) => pIdx !== phoneIndex) } : item))}
+                              aria-label="Remove contact phone"
+                              className="h-10 w-10 text-slate-500 hover:bg-red-50 hover:text-red-700"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setContacts((current) => current.map((item, idx) => idx === index ? { ...item, phones: [...item.phones, ""] } : item))}
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add phone
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold text-slate-700">Emails</p>
+                    <div className="space-y-2">
+                      {contact.emails.map((email, emailIndex) => (
+                        <div key={`contact-${index}-email-${emailIndex}`} className="flex items-center gap-2">
+                          <Input
+                            value={email}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setContacts((current) => current.map((item, idx) => idx === index ? { ...item, emails: updateListValue(item.emails, emailIndex, value) } : item));
+                            }}
+                            placeholder={emailIndex === 0 ? "Primary email" : `Email ${emailIndex + 1}`}
+                            className="h-10 px-3 text-[13px]"
+                          />
+                          {contact.emails.length > 1 ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setContacts((current) => current.map((item, idx) => idx === index ? { ...item, emails: item.emails.filter((_, eIdx) => eIdx !== emailIndex) } : item))}
+                              aria-label="Remove contact email"
+                              className="h-10 w-10 text-slate-500 hover:bg-red-50 hover:text-red-700"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setContacts((current) => current.map((item, idx) => idx === index ? { ...item, emails: [...item.emails, ""] } : item))}
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add email
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
@@ -3387,9 +3498,792 @@ export function LeadDetailsPage({ role, workspace, lead }: { role: Role; workspa
   );
 }
 
+type CustomerImportApiResult = {
+  inserted: number;
+  updated: number;
+  failed: Array<{ row: number; reason: string }>;
+  distribution?: Array<{ assignedToId: string; requestedCount: number; inserted: number; updated: number; failed: number }>;
+};
+
+type CustomerPdfAssignmentDraft = {
+  id: string;
+  assignedToId: string;
+  count: string;
+};
+
+function createCustomerPdfAssignmentDraft(assignedToId = "", count = ""): CustomerPdfAssignmentDraft {
+  const id = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return { id, assignedToId, count };
+}
+
+function CustomerSpreadsheetImportModal({
+  open,
+  role,
+  currentUserId,
+  ownerOptions,
+  defaultAssignedToId,
+  onClose,
+  onImported,
+}: {
+  open: boolean;
+  role: Role;
+  currentUserId?: string;
+  ownerOptions: AssigneeOption[];
+  defaultAssignedToId: string;
+  onClose: () => void;
+  onImported: (result: CustomerImportApiResult) => Promise<void> | void;
+}) {
+  const [file, setFile] = React.useState<File | null>(null);
+  const [preview, setPreview] = React.useState<{
+    totalRows: number;
+    failed: Array<{ row: number; reason: string }>;
+    previewRows: Array<{ companyName: string; primaryPhone: string; city?: string; address?: string; industry?: string }>;
+  } | null>(null);
+  const [assignments, setAssignments] = React.useState<CustomerPdfAssignmentDraft[]>([]);
+  const [assignLater, setAssignLater] = React.useState(false);
+  const [message, setMessage] = React.useState("");
+  const [previewing, startPreview] = React.useTransition();
+  const [importing, startImport] = React.useTransition();
+  const assignedTotal = assignments.reduce((sum, assignment) => sum + Math.max(0, Number(assignment.count) || 0), 0);
+  const remainingRows = preview ? Math.max(preview.totalRows - assignedTotal, 0) : 0;
+
+  const loadPreview = React.useCallback(() => {
+    if (!file) {
+      setMessage("Choose an Excel or CSV file first.");
+      return;
+    }
+
+    const lowerName = file.name.toLowerCase();
+    if (!(lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".csv"))) {
+      setMessage("Only .xlsx, .xls, and .csv files are supported here.");
+      return;
+    }
+
+    startPreview(async () => {
+      setMessage("");
+      setPreview(null);
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("mode", "preview");
+
+        const response = await fetch("/api/customers/import", {
+          method: "POST",
+          body: formData,
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(typeof result.message === "string" ? result.message : "Spreadsheet preview failed.");
+        }
+
+        const nextPreview = result as {
+          totalRows: number;
+          failed: Array<{ row: number; reason: string }>;
+          previewRows: Array<{ companyName: string; primaryPhone: string; city?: string; address?: string; industry?: string }>;
+        };
+        setPreview(nextPreview);
+
+        const starterOwnerId = role === "MARKETER"
+          ? (currentUserId ?? "")
+          : (defaultAssignedToId || ownerOptions[0]?.id || "");
+        setAssignments(nextPreview.totalRows
+          ? [createCustomerPdfAssignmentDraft(starterOwnerId, String(nextPreview.totalRows))]
+          : []);
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "Spreadsheet preview failed.");
+      }
+    });
+  }, [currentUserId, defaultAssignedToId, file, ownerOptions, role]);
+
+  React.useEffect(() => {
+    if (open && file) {
+      loadPreview();
+    }
+  }, [file, loadPreview, open]);
+
+  return (
+    <FormModal open={open} title="Import Excel / CSV Customers" onClose={onClose} panelClassName="max-w-3xl">
+      <div className="space-y-4">
+        <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-slate-950">Excel / CSV File</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">Preview the file, then assign rows to marketers before importing.</p>
+            </div>
+            <Button type="button" variant="outline" onClick={loadPreview} disabled={previewing || importing}>
+              <FileText className="h-4 w-4" />
+              {previewing ? "Reading File..." : "Preview File"}
+            </Button>
+          </div>
+          <input
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            onChange={(event) => {
+              setFile(event.target.files?.[0] ?? null);
+              setPreview(null);
+              setAssignments([]);
+              setMessage("");
+            }}
+            className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700"
+          />
+          {file ? <p className="text-xs font-semibold text-slate-600">Selected: {file.name}</p> : null}
+        </div>
+
+        {role !== "MARKETER" ? (
+          <label className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <input
+              type="checkbox"
+              checked={assignLater}
+              onChange={(event) => setAssignLater(event.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span>
+              <span className="block text-sm font-semibold text-slate-900">Import first, assign later</span>
+              <span className="mt-1 block text-xs font-semibold text-slate-500">Rows will stay under your admin/supervisor list first. Then you can use checkboxes to assign exact customers to marketers.</span>
+            </span>
+          </label>
+        ) : null}
+
+        {preview ? (
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
+                <p className="text-xs font-bold uppercase text-blue-600">Rows Ready</p>
+                <p className="mt-1 text-2xl font-black text-slate-950">{preview.totalRows}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                <p className="text-xs font-bold uppercase text-slate-500">File Type</p>
+                <p className="mt-1 text-sm font-bold text-slate-900">{file?.name.toLowerCase().endsWith(".csv") ? "CSV" : "Excel"}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                <p className="text-xs font-bold uppercase text-slate-500">Preview Rows</p>
+                <p className="mt-1 text-sm font-bold text-slate-900">{preview.previewRows.length}</p>
+              </div>
+            </div>
+
+            {preview.previewRows.length ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-black text-slate-950">File Preview</p>
+                  <span className="text-xs font-semibold text-slate-500">First {preview.previewRows.length} rows</span>
+                </div>
+                <div className="mt-3 overflow-hidden rounded-2xl border border-slate-100">
+                  <table className="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2">Company</th>
+                        <th className="px-3 py-2">Phone</th>
+                        <th className="px-3 py-2">Location</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {preview.previewRows.map((row, index) => (
+                        <tr key={`${row.companyName}-${index}`}>
+                          <td className="px-3 py-2 font-semibold text-slate-900">{row.companyName}</td>
+                          <td className="px-3 py-2 text-slate-700">{row.primaryPhone}</td>
+                          <td className="px-3 py-2 text-slate-600">{row.address || row.city || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
+            {role !== "MARKETER" && !assignLater ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-black text-slate-950">Assign Rows To Marketers</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Quantity diye bolo ke koto row pabe. Import-er shomoy ei split tai apply hobe.</p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setAssignments((current) => [...current, createCustomerPdfAssignmentDraft("", "")])}
+                    disabled={importing}
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add marketer split
+                  </Button>
+                </div>
+
+                <div className="mt-3 space-y-3">
+                  {assignments.map((assignment, index) => (
+                    <div key={assignment.id} className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3 md:grid-cols-[minmax(0,1fr)_140px_auto]">
+                      <label className="space-y-1.5">
+                        <span className="text-xs font-bold uppercase text-slate-500">Marketer {index + 1}</span>
+                        <select
+                          value={assignment.assignedToId}
+                          onChange={(event) => setAssignments((current) => current.map((item) => item.id === assignment.id ? { ...item, assignedToId: event.target.value } : item))}
+                          className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                        >
+                          <option value="">Select marketer</option>
+                          {ownerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                        </select>
+                      </label>
+                      <label className="space-y-1.5">
+                        <span className="text-xs font-bold uppercase text-slate-500">Row Count</span>
+                        <Input
+                          type="number"
+                          min={1}
+                          value={assignment.count}
+                          onChange={(event) => setAssignments((current) => current.map((item) => item.id === assignment.id ? { ...item, count: event.target.value } : item))}
+                          className="h-10 px-3 text-sm"
+                        />
+                      </label>
+                      <div className="flex items-end">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setAssignments((current) => current.filter((item) => item.id !== assignment.id))}
+                          disabled={assignments.length === 1}
+                          className="text-slate-600 hover:bg-red-50 hover:text-red-700"
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className={cn(
+                  "mt-3 rounded-2xl px-4 py-3 text-sm font-semibold",
+                  remainingRows === 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800",
+                )}>
+                  Assigned {assignedTotal} of {preview.totalRows} rows. Remaining: {remainingRows}.
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+                {role === "MARKETER"
+                  ? "Imported spreadsheet rows will stay under your own marketer account."
+                  : "Imported spreadsheet rows will stay under your admin/supervisor list first. After that, select exact customers with checkboxes and assign them to marketers."}
+              </div>
+            )}
+
+            {preview.failed.length ? (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+                {preview.failed.length} rows could not be prepared. First issue: row {preview.failed[0].row} - {preview.failed[0].reason}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            disabled={!preview || importing || previewing || preview.totalRows === 0}
+            onClick={() => {
+              if (!file || !preview) {
+                setMessage("Preview the spreadsheet before importing.");
+                return;
+              }
+
+              if (role !== "MARKETER" && !assignLater) {
+                if (!assignments.length) {
+                  setMessage("Add at least one marketer split before importing.");
+                  return;
+                }
+                if (remainingRows !== 0) {
+                  setMessage(`Assign all ${preview.totalRows} rows before importing the spreadsheet.`);
+                  return;
+                }
+                if (assignments.some((assignment) => !assignment.assignedToId.trim() || Number(assignment.count) <= 0)) {
+                  setMessage("Each marketer split needs a marketer and a positive row count.");
+                  return;
+                }
+              }
+
+              startImport(async () => {
+                setMessage("");
+                try {
+                  const formData = new FormData();
+                  formData.append("file", file);
+                  formData.append("mode", "assigned-import");
+                  if (assignLater) {
+                    formData.append("assignLater", "true");
+                  }
+                  if (role === "MARKETER" && currentUserId) {
+                    formData.append("assignedToId", currentUserId);
+                  } else if (!assignLater) {
+                    formData.append("assignmentsJson", JSON.stringify(assignments.map((assignment) => ({
+                      assignedToId: assignment.assignedToId.trim(),
+                      count: Number(assignment.count) || 0,
+                    }))));
+                  }
+
+                  const response = await fetch("/api/customers/import", {
+                    method: "POST",
+                    body: formData,
+                  });
+                  const result = await response.json();
+
+                  if (!response.ok) {
+                    throw new Error(typeof result.message === "string" ? result.message : "Customer spreadsheet import failed.");
+                  }
+
+                  await onImported(result as CustomerImportApiResult);
+                } catch (error) {
+                  setMessage(error instanceof Error ? error.message : "Customer spreadsheet import failed.");
+                }
+              });
+            }}
+          >
+            <Upload className="h-4 w-4" />
+            {importing ? "Importing..." : "Import Excel / CSV"}
+          </Button>
+          <Button type="button" variant="outline" disabled={importing || previewing} onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </FormModal>
+  );
+}
+
+function CustomerPdfImportModal({
+  open,
+  role,
+  currentUserId,
+  ownerOptions,
+  defaultAssignedToId,
+  onClose,
+  onImported,
+}: {
+  open: boolean;
+  role: Role;
+  currentUserId?: string;
+  ownerOptions: AssigneeOption[];
+  defaultAssignedToId: string;
+  onClose: () => void;
+  onImported: (result: CustomerImportApiResult) => Promise<void> | void;
+}) {
+  const [file, setFile] = React.useState<File | null>(null);
+  const [preview, setPreview] = React.useState<{
+    totalRows: number;
+    failed: Array<{ row: number; reason: string }>;
+    previewRows: Array<{ companyName: string; primaryPhone: string; city?: string; address?: string; industry?: string }>;
+    context?: { division?: string; district?: string; thana?: string; industry?: string };
+  } | null>(null);
+  const [assignments, setAssignments] = React.useState<CustomerPdfAssignmentDraft[]>([]);
+  const [assignLater, setAssignLater] = React.useState(false);
+  const [message, setMessage] = React.useState("");
+  const [previewing, startPreview] = React.useTransition();
+  const [importing, startImport] = React.useTransition();
+
+  const assignedTotal = assignments.reduce((sum, assignment) => sum + Math.max(0, Number(assignment.count) || 0), 0);
+  const remainingRows = preview ? Math.max(preview.totalRows - assignedTotal, 0) : 0;
+
+  const loadPreview = React.useCallback(() => {
+    if (!file) {
+      setMessage("Choose a PDF file first.");
+      return;
+    }
+
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      setMessage("Only .pdf files are supported in PDF import.");
+      return;
+    }
+
+    startPreview(async () => {
+      setMessage("");
+      setPreview(null);
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("mode", "pdf-preview");
+
+        const response = await fetch("/api/customers/import", {
+          method: "POST",
+          body: formData,
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(typeof result.message === "string" ? result.message : "PDF preview failed.");
+        }
+
+        const nextPreview = result as {
+          totalRows: number;
+          failed: Array<{ row: number; reason: string }>;
+          previewRows: Array<{ companyName: string; primaryPhone: string; city?: string; address?: string; industry?: string }>;
+          context?: { division?: string; district?: string; thana?: string; industry?: string };
+        };
+        setPreview(nextPreview);
+
+        const starterOwnerId = role === "MARKETER"
+          ? (currentUserId ?? "")
+          : (defaultAssignedToId || ownerOptions[0]?.id || "");
+        setAssignments(nextPreview.totalRows
+          ? [createCustomerPdfAssignmentDraft(starterOwnerId, String(nextPreview.totalRows))]
+          : []);
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "PDF preview failed.");
+      }
+    });
+  }, [currentUserId, defaultAssignedToId, file, ownerOptions, role]);
+
+  React.useEffect(() => {
+    if (open && file) {
+      loadPreview();
+    }
+  }, [file, loadPreview, open]);
+
+  return (
+    <FormModal open={open} title="Import PDF Customers" onClose={onClose} panelClassName="max-w-3xl">
+      <div className="space-y-4">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-slate-950">PDF Source File</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">This supports the madrasha list PDF format and imports rows in file order.</p>
+            </div>
+            <Button type="button" variant="outline" onClick={loadPreview} disabled={previewing || importing}>
+              <FileText className="h-4 w-4" />
+              {previewing ? "Reading PDF..." : "Preview PDF"}
+            </Button>
+          </div>
+          <input
+            type="file"
+            accept=".pdf"
+            onChange={(event) => {
+              setFile(event.target.files?.[0] ?? null);
+              setPreview(null);
+              setAssignments([]);
+              setMessage("");
+            }}
+            className="mt-3 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700"
+          />
+          {file ? <p className="mt-2 text-xs font-semibold text-slate-600">Selected: {file.name}</p> : null}
+        </div>
+
+        {role !== "MARKETER" ? (
+          <label className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <input
+              type="checkbox"
+              checked={assignLater}
+              onChange={(event) => setAssignLater(event.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span>
+              <span className="block text-sm font-semibold text-slate-900">Import first, assign later</span>
+              <span className="mt-1 block text-xs font-semibold text-slate-500">PDF rows will stay under your admin/supervisor list first. Then you can select exact rows from the customer table and assign them to marketers.</span>
+            </span>
+          </label>
+        ) : null}
+
+        {preview ? (
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
+                <p className="text-xs font-bold uppercase text-blue-600">Rows Ready</p>
+                <p className="mt-1 text-2xl font-black text-slate-950">{preview.totalRows}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                <p className="text-xs font-bold uppercase text-slate-500">Division</p>
+                <p className="mt-1 text-sm font-bold text-slate-900">{preview.context?.division || "-"}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                <p className="text-xs font-bold uppercase text-slate-500">District</p>
+                <p className="mt-1 text-sm font-bold text-slate-900">{preview.context?.district || "-"}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                <p className="text-xs font-bold uppercase text-slate-500">Thana</p>
+                <p className="mt-1 text-sm font-bold text-slate-900">{preview.context?.thana || "-"}</p>
+              </div>
+            </div>
+
+            {preview.previewRows.length ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-black text-slate-950">PDF Preview</p>
+                  <span className="text-xs font-semibold text-slate-500">First {preview.previewRows.length} rows</span>
+                </div>
+                <div className="mt-3 overflow-hidden rounded-2xl border border-slate-100">
+                  <table className="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2">Company</th>
+                        <th className="px-3 py-2">Phone</th>
+                        <th className="px-3 py-2">Location</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {preview.previewRows.map((row, index) => (
+                        <tr key={`${row.companyName}-${index}`}>
+                          <td className="px-3 py-2 font-semibold text-slate-900">{row.companyName}</td>
+                          <td className="px-3 py-2 text-slate-700">{row.primaryPhone}</td>
+                          <td className="px-3 py-2 text-slate-600">{row.address || row.city || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
+            {role !== "MARKETER" && !assignLater ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-black text-slate-950">Assign Rows To Marketers</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Rows are assigned from top to bottom based on these counts.</p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setAssignments((current) => [...current, createCustomerPdfAssignmentDraft("", "")])}
+                    disabled={importing}
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add marketer split
+                  </Button>
+                </div>
+
+                <div className="mt-3 space-y-3">
+                  {assignments.map((assignment, index) => (
+                    <div key={assignment.id} className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3 md:grid-cols-[minmax(0,1fr)_140px_auto]">
+                      <label className="space-y-1.5">
+                        <span className="text-xs font-bold uppercase text-slate-500">Marketer {index + 1}</span>
+                        <select
+                          value={assignment.assignedToId}
+                          onChange={(event) => setAssignments((current) => current.map((item) => item.id === assignment.id ? { ...item, assignedToId: event.target.value } : item))}
+                          className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                        >
+                          <option value="">Select marketer</option>
+                          {ownerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                        </select>
+                      </label>
+                      <label className="space-y-1.5">
+                        <span className="text-xs font-bold uppercase text-slate-500">Row Count</span>
+                        <Input
+                          type="number"
+                          min={1}
+                          value={assignment.count}
+                          onChange={(event) => setAssignments((current) => current.map((item) => item.id === assignment.id ? { ...item, count: event.target.value } : item))}
+                          className="h-10 px-3 text-sm"
+                        />
+                      </label>
+                      <div className="flex items-end">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setAssignments((current) => current.filter((item) => item.id !== assignment.id))}
+                          disabled={assignments.length === 1}
+                          className="text-slate-600 hover:bg-red-50 hover:text-red-700"
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className={cn(
+                  "mt-3 rounded-2xl px-4 py-3 text-sm font-semibold",
+                  remainingRows === 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800",
+                )}>
+                  Assigned {assignedTotal} of {preview.totalRows} rows. Remaining: {remainingRows}.
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+                {role === "MARKETER"
+                  ? "All parsed PDF rows will stay under your own marketer account."
+                  : "All parsed PDF rows will stay under your admin/supervisor list first. After import, use checkboxes to assign exact customers to marketers."}
+              </div>
+            )}
+
+            {preview.failed.length ? (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+                {preview.failed.length} rows could not be prepared. First issue: row {preview.failed[0].row} - {preview.failed[0].reason}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            disabled={!preview || importing || previewing || preview.totalRows === 0}
+            onClick={() => {
+              if (!file || !preview) {
+                setMessage("Preview the PDF before importing.");
+                return;
+              }
+
+              if (role !== "MARKETER" && !assignLater) {
+                if (!assignments.length) {
+                  setMessage("Add at least one marketer split before importing.");
+                  return;
+                }
+                if (remainingRows !== 0) {
+                  setMessage(`Assign all ${preview.totalRows} rows before importing the PDF.`);
+                  return;
+                }
+                if (assignments.some((assignment) => !assignment.assignedToId.trim() || Number(assignment.count) <= 0)) {
+                  setMessage("Each marketer split needs a marketer and a positive row count.");
+                  return;
+                }
+              }
+
+              startImport(async () => {
+                setMessage("");
+                try {
+                  const formData = new FormData();
+                  formData.append("file", file);
+                  formData.append("mode", "pdf-import");
+                  if (assignLater) {
+                    formData.append("assignLater", "true");
+                  }
+                  if (role === "MARKETER" && currentUserId) {
+                    formData.append("assignedToId", currentUserId);
+                  } else if (!assignLater) {
+                    formData.append("assignmentsJson", JSON.stringify(assignments.map((assignment) => ({
+                      assignedToId: assignment.assignedToId.trim(),
+                      count: Number(assignment.count) || 0,
+                    }))));
+                  }
+
+                  const response = await fetch("/api/customers/import", {
+                    method: "POST",
+                    body: formData,
+                  });
+                  const result = await response.json();
+
+                  if (!response.ok) {
+                    throw new Error(typeof result.message === "string" ? result.message : "PDF import failed.");
+                  }
+
+                  await onImported(result as CustomerImportApiResult);
+                } catch (error) {
+                  setMessage(error instanceof Error ? error.message : "PDF import failed.");
+                }
+              });
+            }}
+          >
+            <Upload className="h-4 w-4" />
+            {importing ? "Importing PDF..." : "Import PDF Data"}
+          </Button>
+          <Button type="button" variant="outline" disabled={importing || previewing} onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </FormModal>
+  );
+}
+
+function BulkCustomerAssignModal({
+  open,
+  ownerOptions,
+  selectedCount,
+  customerIds,
+  onClose,
+  onAssigned,
+}: {
+  open: boolean;
+  ownerOptions: AssigneeOption[];
+  selectedCount: number;
+  customerIds: string[];
+  onClose: () => void;
+  onAssigned: (assignedToId: string, updatedCount: number) => Promise<void> | void;
+}) {
+  const [assignedToId, setAssignedToId] = React.useState("");
+  const [message, setMessage] = React.useState("");
+  const [pending, startTransition] = React.useTransition();
+
+  React.useEffect(() => {
+    if (!open) return;
+    setAssignedToId(ownerOptions[0]?.id ?? "");
+    setMessage("");
+  }, [open, ownerOptions]);
+
+  return (
+    <FormModal open={open} title="Assign Selected Customers" onClose={onClose} panelClassName="max-w-lg">
+      <form
+        className="space-y-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!selectedCount) {
+            setMessage("Select customers first.");
+            return;
+          }
+          if (!assignedToId.trim()) {
+            setMessage("Select a marketer.");
+            return;
+          }
+
+          startTransition(async () => {
+            setMessage("");
+            try {
+              const response = await fetch("/api/customers/assign", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  customerIds,
+                  assignedToId,
+                }),
+              });
+              const result = await response.json();
+
+              if (!response.ok) {
+                throw new Error(typeof result.message === "string" ? result.message : "Bulk assignment failed.");
+              }
+
+              await onAssigned(assignedToId, typeof result.updatedCount === "number" ? result.updatedCount : customerIds.length);
+            } catch (error) {
+              setMessage(error instanceof Error ? error.message : "Bulk assignment failed.");
+            }
+          });
+        }}
+      >
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+          <p className="text-sm font-black text-slate-950">{selectedCount} customer{selectedCount === 1 ? "" : "s"} selected</p>
+          <p className="mt-1 text-xs font-semibold text-slate-500">These selected customers will move only to the marketer you choose here.</p>
+        </div>
+        <label className="block space-y-1.5">
+          <span className="text-sm font-semibold text-slate-700">Assign To Marketer</span>
+          <select
+            value={assignedToId}
+            onChange={(event) => setAssignedToId(event.target.value)}
+            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+          >
+            <option value="">Select marketer</option>
+            {ownerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+          </select>
+        </label>
+        {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={pending}>
+            <UserPlus className="h-4 w-4" />
+            {pending ? "Assigning..." : "Assign Selected"}
+          </Button>
+          <Button type="button" variant="outline" disabled={pending} onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
+      </form>
+    </FormModal>
+  );
+}
+
 export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
+  const [spreadsheetImportOpen, setSpreadsheetImportOpen] = React.useState(false);
+  const [pdfImportOpen, setPdfImportOpen] = React.useState(false);
+  const [bulkAssignOpen, setBulkAssignOpen] = React.useState(false);
   const [customers, setCustomers] = React.useState<CompanyRow[]>(() => workspace.companies);
   const [filteredCount, setFilteredCount] = React.useState(workspace.companies.length);
   const [viewCustomer, setViewCustomer] = React.useState<CompanyRow | null>(null);
@@ -3397,12 +4291,11 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   const [deleteCustomer, setDeleteCustomer] = React.useState<CompanyRow | null>(null);
   const [deleting, setDeleting] = React.useState(false);
   const [deleteError, setDeleteError] = React.useState("");
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const exportMenuRef = React.useRef<HTMLDivElement>(null);
-  const [importing, setImporting] = React.useState(false);
   const [exportingFormat, setExportingFormat] = React.useState<"xlsx" | "csv" | null>(null);
   const [exportMenuOpen, setExportMenuOpen] = React.useState(false);
   const [feedback, setFeedback] = React.useState<{ type: "success" | "error"; title: string; message: string } | null>(null);
+  const [selectedCustomerIds, setSelectedCustomerIds] = React.useState<string[]>([]);
   const [filters, setFilters] = React.useState({
     search: "",
     city: "",
@@ -3410,6 +4303,14 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
     assignedToId: "all",
   });
   const ownerOptions = React.useMemo(() => getCustomerOwnerOptions(workspace, role), [role, workspace]);
+  const selectedCount = selectedCustomerIds.length;
+  const defaultImportOwnerId = role === "MARKETER"
+    ? (workspace.user.id ?? "")
+    : filters.assignedToId !== "all"
+      ? filters.assignedToId
+      : ownerOptions.length === 1
+        ? ownerOptions[0].id
+        : "";
 
   const refreshCustomers = React.useCallback(async () => {
     const params = new URLSearchParams();
@@ -3427,6 +4328,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
 
     const rows = result.rows as CompanyRow[];
     setCustomers(rows);
+    setSelectedCustomerIds((current) => current.filter((id) => rows.some((row) => row.id === id)));
     setFilteredCount(typeof result.summary?.count === "number" ? result.summary.count : rows.length);
     setViewCustomer((current) => current ? rows.find((item) => item.id === current.id) ?? null : null);
     setEditCustomer((current) => current ? rows.find((item) => item.id === current.id) ?? null : null);
@@ -3446,9 +4348,33 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
     setDeleteCustomer(customer);
   }, []);
 
+  const toggleCustomerSelection = React.useCallback((customerId: string, checked: boolean) => {
+    setSelectedCustomerIds((current) => {
+      if (checked) {
+        return current.includes(customerId) ? current : [...current, customerId];
+      }
+      return current.filter((id) => id !== customerId);
+    });
+  }, []);
+
   const columns = React.useMemo<ColumnDef<CompanyRow>[]>(
     () => {
       const baseColumns: ColumnDef<CompanyRow>[] = [
+        ...(role !== "MARKETER"
+          ? [{
+              id: "selectCustomer",
+              header: "Select",
+              cell: ({ row }: { row: { original: CompanyRow } }) => (
+                <input
+                  type="checkbox"
+                  checked={selectedCustomerIds.includes(row.original.id)}
+                  onChange={(event) => toggleCustomerSelection(row.original.id, event.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  aria-label={`Select ${row.original.name}`}
+                />
+              ),
+            } satisfies ColumnDef<CompanyRow>]
+          : []),
         { accessorKey: "name", header: "Company Name", cell: ({ row }) => <EntityLink href={`/customers/${row.original.id}`} className="font-bold">{row.original.name}</EntityLink> },
         { accessorKey: "contactPerson", header: "Contact Person" },
         { accessorKey: "phone", header: "Primary Phone" },
@@ -3478,7 +4404,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
 
       return baseColumns;
     },
-    [handleViewCustomer, handleDeleteCustomer, handleEditCustomer, role],
+    [handleViewCustomer, handleDeleteCustomer, handleEditCustomer, role, selectedCustomerIds, toggleCustomerSelection],
   );
 
   React.useEffect(() => {
@@ -3510,77 +4436,21 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, []);
 
-  const handleImportClick = () => {
-    if (importing) return;
-    fileInputRef.current?.click();
-  };
-
-  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-
-    if (!file) return;
-
-    const lowerName = file.name.toLowerCase();
-    const supportedFile = lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".csv") || lowerName.endsWith(".pdf");
-    if (!supportedFile) {
-      setFeedback({
-        type: "error",
-        title: "Import failed",
-        message: "Please choose a valid Excel, CSV, or PDF file.",
-      });
-      return;
-    }
-
-    setImporting(true);
-    setFeedback(null);
-
-    try {
-      const importOwnerId = role === "MARKETER"
-        ? workspace.user.id ?? ""
-        : filters.assignedToId !== "all"
-          ? filters.assignedToId
-          : ownerOptions.length === 1
-            ? ownerOptions[0].id
-            : "";
-
-      if (role !== "MARKETER" && !importOwnerId) {
-        throw new Error("Select a marketer before importing customers.");
-      }
-
-      const formData = new FormData();
-      formData.append("file", file);
-      if (importOwnerId) {
-        formData.append("assignedToId", importOwnerId);
-      }
-
-      const response = await fetch("/api/customers/import", {
-        method: "POST",
-        body: formData,
-      });
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(typeof result.message === "string" ? result.message : "Customer import failed.");
-      }
-
-      setFeedback({
-        type: "success",
-        title: "Import complete",
-        message: `${result.inserted} inserted, ${result.updated} updated, ${result.failed.length} failed.${result.failed.length ? ` First issue: row ${result.failed[0].row} - ${result.failed[0].reason}` : ""}`,
-      });
-      await refreshCustomers();
-      router.refresh();
-    } catch (error) {
-      setFeedback({
-        type: "error",
-        title: "Import failed",
-        message: error instanceof Error ? error.message : "Customer import failed.",
-      });
-    } finally {
-      setImporting(false);
-    }
-  };
+  const handleCustomerImportDone = React.useCallback(async (result: CustomerImportApiResult) => {
+    const distributionNote = Array.isArray(result.distribution) && result.distribution.length
+      ? ` Assigned across ${result.distribution.length} marketer${result.distribution.length > 1 ? "s" : ""}.`
+      : "";
+    const assignmentModeNote = !distributionNote && role !== "MARKETER"
+      ? " Imported rows are now under your list until you assign them."
+      : "";
+    setFeedback({
+      type: "success",
+      title: "Import complete",
+      message: `${result.inserted} inserted, ${result.updated} updated, ${result.failed.length} failed.${distributionNote}${assignmentModeNote}${result.failed.length ? ` First issue: row ${result.failed[0].row} - ${result.failed[0].reason}` : ""}`,
+    });
+    await refreshCustomers();
+    router.refresh();
+  }, [refreshCustomers, role, router]);
 
   const handleExport = async (format: "xlsx" | "csv") => {
     setExportMenuOpen(false);
@@ -3648,6 +4518,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
       }
 
       setCustomers((prev) => prev.filter((customer) => customer.id !== deleteCustomer.id));
+      setSelectedCustomerIds((current) => current.filter((id) => id !== deleteCustomer.id));
       setDeleteCustomer(null);
       setFeedback({
         type: "success",
@@ -3696,9 +4567,13 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
               <Plus className="h-4 w-4" />
               Add Customer
             </Button>
-            <Button type="button" size="sm" variant="outline" onClick={handleImportClick} disabled={importing}>
+            <Button type="button" size="sm" variant="outline" onClick={() => setPdfImportOpen(true)}>
+              <FileText className="h-4 w-4" />
+              Import PDF
+            </Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => setSpreadsheetImportOpen(true)}>
               <Upload className="h-4 w-4" />
-              {importing ? "Importing..." : "Import Excel/CSV/PDF"}
+              Import Excel / CSV
             </Button>
             <div ref={exportMenuRef} className="relative">
               <Button type="button" size="sm" variant="outline" disabled={Boolean(exportingFormat)} onClick={() => setExportMenuOpen((open) => !open)}>
@@ -3720,7 +4595,6 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
           </>
         )}
       />
-      <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.pdf" className="hidden" onChange={handleImportFile} />
       <AnimatePresence>
         {feedback ? (
           <motion.div
@@ -3802,10 +4676,97 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
           ) : null}
         </div>
       </div>
+      {role !== "MARKETER" ? (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <div>
+            <p className="text-sm font-black text-slate-950">Manual marketer assignment</p>
+            <p className="mt-1 text-xs font-semibold text-slate-500">
+              Import without assign korle ekhane checkbox diye exact customer select kore marketer-er kache pathate parben.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+              {selectedCount} selected
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!customers.length}
+              onClick={() => setSelectedCustomerIds(customers.map((customer) => customer.id))}
+            >
+              Select All Loaded
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!selectedCount}
+              onClick={() => setSelectedCustomerIds([])}
+            >
+              Clear Selection
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={!selectedCount || ownerOptions.length === 0}
+              onClick={() => setBulkAssignOpen(true)}
+            >
+              <UserPlus className="h-4 w-4" />
+              Assign Selected
+            </Button>
+          </div>
+        </div>
+      ) : null}
       <DataTable data={customers} columns={columns} searchPlaceholder="Search customer..." />
       <FormModal open={open} title="Create Customer / Company" onClose={() => setOpen(false)}>
         <CustomerForm workspace={workspace} onDone={handleCreateDone} />
       </FormModal>
+      <CustomerSpreadsheetImportModal
+        key={spreadsheetImportOpen ? "customer-spreadsheet-import-open" : "customer-spreadsheet-import-closed"}
+        open={spreadsheetImportOpen}
+        role={role}
+        currentUserId={workspace.user.id}
+        ownerOptions={ownerOptions}
+        defaultAssignedToId={defaultImportOwnerId}
+        onClose={() => setSpreadsheetImportOpen(false)}
+        onImported={async (result) => {
+          setSpreadsheetImportOpen(false);
+          await handleCustomerImportDone(result);
+        }}
+      />
+      <CustomerPdfImportModal
+        key={pdfImportOpen ? "customer-pdf-import-open" : "customer-pdf-import-closed"}
+        open={pdfImportOpen}
+        role={role}
+        currentUserId={workspace.user.id}
+        ownerOptions={ownerOptions}
+        defaultAssignedToId={defaultImportOwnerId}
+        onClose={() => setPdfImportOpen(false)}
+        onImported={async (result) => {
+          setPdfImportOpen(false);
+          await handleCustomerImportDone(result);
+        }}
+      />
+      <BulkCustomerAssignModal
+        open={bulkAssignOpen}
+        ownerOptions={ownerOptions}
+        selectedCount={selectedCount}
+        customerIds={selectedCustomerIds}
+        onClose={() => setBulkAssignOpen(false)}
+        onAssigned={async (assignedToId, updatedCount) => {
+          const ownerLabel = ownerOptions.find((option) => option.id === assignedToId)?.label ?? "the selected marketer";
+          setBulkAssignOpen(false);
+          setSelectedCustomerIds([]);
+          await refreshCustomers();
+          router.refresh();
+          setFeedback({
+            type: "success",
+            title: "Customers assigned",
+            message: `${updatedCount} customer${updatedCount === 1 ? "" : "s"} assigned to ${ownerLabel}.`,
+          });
+        }}
+      />
       <CustomerViewModal open={Boolean(viewCustomer)} customer={viewCustomer} onClose={() => setViewCustomer(null)} />
       <CustomerEditModal workspace={workspace} customer={editCustomer} open={Boolean(editCustomer)} onDone={handleEditDone} onClose={() => setEditCustomer(null)} />
       <FormModal open={Boolean(deleteCustomer)} title="Delete Customer" onClose={() => !deleting && setDeleteCustomer(null)} panelClassName="max-w-md">
@@ -4354,10 +5315,7 @@ function defaultNextCrmPipelineStep(value?: string | null): CrmPipelineStep {
 
 function suggestedCrmPipelineStep(rating: number): CrmPipelineStep {
   if (rating <= 1) return "Lead Lost";
-  if (rating === 2) return "Follow-up";
-  if (rating === 3) return "Demo Send";
-  if (rating === 4) return "Quotation";
-  return "Sale Won";
+  return "Follow-up";
 }
 
 function CrmPipelineStrip({
@@ -4458,6 +5416,7 @@ export function TaskCreateModal({
   const [assignedToId, setAssignedToId] = React.useState("");
   const [priority, setPriority] = React.useState<Exclude<TodayTaskPriorityFilter, "ALL">>("MEDIUM");
   const [taskDateTime, setTaskDateTime] = React.useState(defaultTaskDateTimeValue());
+  const [reminder, setReminder] = React.useState<TaskReminderValue>("");
   const [pending, setPending] = React.useState(false);
   const [message, setMessage] = React.useState("");
   const isEditing = Boolean(initialTask?.id);
@@ -4507,6 +5466,7 @@ export function TaskCreateModal({
     setAssignedToId(initialTask?.assignedToId ?? defaultAssigneeId);
     setPriority(initialTask?.priorityKey ?? "MEDIUM");
     setTaskDateTime(initialTask?.taskDateIso ? dateTimeLocalValue(new Date(initialTask.taskDateIso)) : defaultTaskDateTimeValue());
+    setReminder(normalizeTaskReminderValue(initialTask?.reminder));
     setMessage("");
   }, [defaultAssigneeId, initialTask, open]);
 
@@ -4540,6 +5500,7 @@ export function TaskCreateModal({
           assignedToId,
           priority,
           taskDateTime,
+          reminder,
           customerContactPerson,
           customerPhone,
           customerCity,
@@ -4691,7 +5652,7 @@ export function TaskCreateModal({
             className="min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
           />
         </label>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <label className="space-y-1.5">
             <span className="text-sm font-semibold text-slate-700">Priority</span>
             <select
@@ -4713,6 +5674,18 @@ export function TaskCreateModal({
               onChange={(event) => setTaskDateTime(event.target.value)}
               required
             />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-sm font-semibold text-slate-700">Reminder</span>
+            <select
+              value={reminder}
+              onChange={(event) => setReminder(event.target.value as TaskReminderValue)}
+              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+            >
+              {TASK_REMINDER_OPTIONS.map((option) => (
+                <option key={option.value || "none"} value={option.value}>{option.label}</option>
+              ))}
+            </select>
           </label>
         </div>
         {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
@@ -4785,11 +5758,19 @@ export function TaskFollowUpModal({
     leadId?: string | null;
     leadName?: string | null;
     taskId?: string | null;
+    defaultStep?: CrmPipelineStep;
+    defaultMethod?: string;
   } | null;
   workspace: CrmWorkspace;
   onClose: () => void;
   onSaved: (result?: ActionResult) => void;
 }) {
+  const followUpMethods = ["Phone Call", "WhatsApp", "Email", "Physical Visit", "Meeting"] as const;
+  const initialTaskTitle = task?.defaultStep ?? "Follow-up";
+  const initialMethod = task?.defaultMethod && followUpMethods.includes(task.defaultMethod as (typeof followUpMethods)[number]) ? task.defaultMethod : "Phone Call";
+  const [taskTitle, setTaskTitle] = React.useState<CrmPipelineStep>(initialTaskTitle);
+  const [method, setMethod] = React.useState(initialMethod);
+
   return (
     <FormModal open={Boolean(task)} title="Add Follow-up" onClose={onClose} panelClassName="max-w-xl">
       {task ? (
@@ -4800,6 +5781,28 @@ export function TaskFollowUpModal({
           </div>
           {task.taskId ? <input type="hidden" name="taskId" value={task.taskId} /> : null}
           <input type="hidden" name="followUpDateTzOffset" value={new Date().getTimezoneOffset().toString()} />
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-slate-700">Continue From Step</p>
+              <span className="text-xs font-semibold text-slate-500">Auto-selected from last completed stage</span>
+            </div>
+            <div className="mt-3 space-y-3">
+              <select
+                name="taskTitle"
+                value={taskTitle}
+                onChange={(event) => setTaskTitle(event.target.value as CrmPipelineStep)}
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+              >
+                <option>Call</option>
+                <option>Follow-up</option>
+                <option>Demo Send</option>
+                <option>Quotation</option>
+                <option>Sale Won</option>
+                <option>Lead Lost</option>
+              </select>
+              <CrmPipelineStrip activeStep={taskTitle} highlight />
+            </div>
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <SearchableEntitySelect
               label="Customer / Company"
@@ -4810,13 +5813,19 @@ export function TaskFollowUpModal({
               defaultLabel={task.companyName}
               placeholder="Search customer"
             />
-            <SelectBox label="Method" name="method">
-              <option>Phone Call</option>
-              <option>WhatsApp</option>
-              <option>Email</option>
-              <option>Physical Visit</option>
-              <option>Meeting</option>
-            </SelectBox>
+            <label className="space-y-1.5">
+              <span className="text-xs font-bold uppercase text-slate-500">Method</span>
+              <select
+                name="method"
+                value={method}
+                onChange={(event) => setMethod(event.target.value)}
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+              >
+                {followUpMethods.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+            </label>
           </div>
           <TextField label="Follow-up Date" name="followUpDate" type="datetime-local" defaultValue={dateTimeLocalValue()} required />
           <TextAreaField label="Follow-up Note" name="note" required />
@@ -5170,8 +6179,19 @@ export function TodayWorkQueueList({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, x: 16 }}
             transition={{ duration: 0.18 }}
+            role={onOpen ? "button" : undefined}
+            tabIndex={onOpen ? 0 : undefined}
+            onClick={() => onOpen?.(task)}
+            onKeyDown={(event) => {
+              if (!onOpen) return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpen(task);
+              }
+            }}
             className={cn(
               "rounded-[20px] border px-4 py-3.5 shadow-[0_12px_28px_rgba(15,23,42,0.05)] transition hover:shadow-[0_14px_32px_rgba(15,23,42,0.08)]",
+              onOpen && "cursor-pointer",
               task.queueType === "OVERDUE" || task.queueType === "CARRY_FORWARD"
                 ? "border-rose-200 bg-gradient-to-br from-rose-50 to-white ring-1 ring-rose-100"
                 : task.queueType === "DUE_FOLLOW_UP"
@@ -5185,6 +6205,7 @@ export function TodayWorkQueueList({
               <input
                 type="checkbox"
                 checked={false}
+                onClick={(event) => event.stopPropagation()}
                 onChange={() => onComplete(task)}
                 className="mt-3 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 aria-label={`Complete ${task.title}`}
@@ -5204,10 +6225,16 @@ export function TodayWorkQueueList({
                 })()}
                 <div className="space-y-1">
                   <div className="flex min-w-0 items-start justify-between gap-3">
-                    <button type="button" onClick={() => onOpen?.(task)} className="truncate text-left text-lg font-black text-slate-900 hover:text-blue-700">
+                    <button type="button" onClick={(event) => {
+                      event.stopPropagation();
+                      onOpen?.(task);
+                    }} className="truncate text-left text-lg font-black text-slate-900 hover:text-blue-700">
                       {task.title}
                     </button>
-                    <p className="shrink-0 text-sm font-bold text-slate-600">{task.timeLabel}</p>
+                    <div className="shrink-0 text-right">
+                      <p className="text-sm font-bold text-slate-700">{task.timeLabel}</p>
+                      <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{task.taskDateLabel}</p>
+                    </div>
                   </div>
                   <div className="flex min-w-0 items-center justify-between gap-3">
                     <div className="min-w-0 flex items-center gap-3">
@@ -5225,6 +6252,7 @@ export function TodayWorkQueueList({
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <span className="truncate text-xs font-semibold text-slate-600">{task.method}</span>
                   {task.productName !== "-" ? <span className="truncate text-xs font-semibold text-blue-700">Product: {task.productName}</span> : null}
+                  {task.reminder !== "-" ? <span className="truncate text-xs font-semibold text-violet-700">Reminder: {taskReminderLabel(task.reminder)}</span> : null}
                   {viewerRole !== "MARKETER" ? <span className="truncate text-xs font-semibold text-slate-500">Assigned: {task.assignedTo}</span> : null}
                   <Badge
                     variant={task.queueType === "OVERDUE" ? "danger" : task.queueType === "DUE_FOLLOW_UP" ? "warning" : "default"}
@@ -5243,25 +6271,40 @@ export function TodayWorkQueueList({
                   size="sm"
                   className="mt-1 h-8 rounded-xl px-3 text-xs shadow-sm"
                   disabled={Boolean(activeItemId && activeItemId === task.id)}
-                  onClick={() => onComplete(task)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onComplete(task);
+                  }}
                 >
                   Complete
                 </Button>
                 {task.sourceType === "TASK" ? (
                   <>
-                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => onEdit?.(task as TodayTaskApiRow)}>
+                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={(event) => {
+                      event.stopPropagation();
+                      onEdit?.(task as TodayTaskApiRow);
+                    }}>
                       Edit
                     </Button>
-                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs text-red-600" onClick={() => onDelete?.(task as TodayTaskApiRow)}>
+                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs text-red-600" onClick={(event) => {
+                      event.stopPropagation();
+                      onDelete?.(task as TodayTaskApiRow);
+                    }}>
                       Delete
                     </Button>
                   </>
                 ) : task.sourceType === "FOLLOW_UP" ? (
                   <>
-                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => onEditFollowUp?.(task)}>
+                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={(event) => {
+                      event.stopPropagation();
+                      onEditFollowUp?.(task);
+                    }}>
                       Edit
                     </Button>
-                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs text-red-600" onClick={() => onDeleteFollowUp?.(task)}>
+                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs text-red-600" onClick={(event) => {
+                      event.stopPropagation();
+                      onDeleteFollowUp?.(task);
+                    }}>
                       Delete
                     </Button>
                   </>
@@ -5313,7 +6356,23 @@ export function CompletedWorkList({
     <div className="space-y-3">
       <div className={cn("space-y-2.5 pr-1", previewCount ? (expanded ? "max-h-none overflow-visible" : `${compactHeightClassName} overflow-y-auto`) : "")}>
         {rows.map((task) => (
-          <div key={task.id} className="rounded-[16px] border border-slate-200 bg-slate-50/90 px-3.5 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]">
+          <div
+            key={task.id}
+            role={onOpen ? "button" : undefined}
+            tabIndex={onOpen ? 0 : undefined}
+            onClick={() => onOpen?.(task)}
+            onKeyDown={(event) => {
+              if (!onOpen) return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpen(task);
+              }
+            }}
+            className={cn(
+              "rounded-[16px] border border-slate-200 bg-slate-50/90 px-3.5 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]",
+              onOpen && "cursor-pointer transition hover:border-emerald-200 hover:bg-emerald-50/40",
+            )}
+          >
             <div className="flex items-start gap-3">
               <MiniAvatar label={task.companyName || task.title} />
               <div className="min-w-0 flex-1">
@@ -5327,20 +6386,33 @@ export function CompletedWorkList({
                 })()}
                 <div className="flex min-w-0 items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <button type="button" onClick={() => onOpen?.(task)} className="truncate text-left text-lg font-black text-slate-900 hover:text-blue-700">
+                    <button type="button" onClick={(event) => {
+                      event.stopPropagation();
+                      onOpen?.(task);
+                    }} className="truncate text-left text-lg font-black text-slate-900 hover:text-blue-700">
                       {task.title}
                     </button>
                     <p className="mt-0.5 truncate text-base font-bold text-slate-700">
                       <EntityLink href={task.companyHref} className="text-base font-bold text-slate-800" stopPropagation>{task.companyName}</EntityLink>
                     </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Scheduled: {task.taskDateLabel} {task.timeLabel}</p>
                   </div>
-                  <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpen?.(task);
+                    }}
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 transition hover:bg-emerald-200"
+                    aria-label={`Open completed details for ${task.title}`}
+                  >
                     <Check className="h-4 w-4" />
-                  </span>
+                  </button>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
                   {task.method !== "Task" && task.method !== "-" ? <span>{task.method}</span> : null}
                   {task.productName !== "-" ? <span className="text-blue-700">Product: {task.productName}</span> : null}
+                  {task.reminder !== "-" ? <span className="text-violet-700">Reminder: {taskReminderLabel(task.reminder)}</span> : null}
                   {viewerRole !== "MARKETER" ? <span>Assigned: {task.assignedTo}</span> : null}
                   <span>Completed by {task.completedBy}</span>
                 </div>
@@ -5353,7 +6425,10 @@ export function CompletedWorkList({
                     size="sm"
                     variant="outline"
                     className="h-8 rounded-xl gap-1.5 px-3 text-xs"
-                    onClick={() => onAddFollowUp(task)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onAddFollowUp(task);
+                    }}
                   >
                     <Plus className="h-3.5 w-3.5" />
                     Add Follow-up
@@ -5509,6 +6584,8 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
     leadId?: string | null;
     leadName?: string | null;
     taskId?: string | null;
+    defaultStep?: CrmPipelineStep;
+    defaultMethod?: string;
   } | null>(null);
   const [activeFilter, setActiveFilter] = React.useState<TodayWorkFilter>("all");
   const { refreshTaskCount } = useTaskCounterContext();
@@ -5594,10 +6671,11 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
     scheduledRefreshTimers.current.push(timer);
   }, [loadTasks, refreshTaskCount]);
 
-  const handleCreated = (_row: TodayTaskApiRow) => {
+  const handleCreated = (row: TodayTaskApiRow) => {
     setEditingTask(null);
     void loadTasks();
     void refreshTaskCount();
+    scheduleQueueRefreshAt(row.taskDateIso);
   };
 
   const handleCompletionSaved = (result?: ActionResult) => {
@@ -5671,6 +6749,8 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
       leadId: task.leadId,
       leadName: task.leadName,
       taskId: task.taskId ?? (task.sourceType === "TASK" ? task.sourceId : null),
+      defaultStep: normalizeCrmPipelineStep(task.title) ?? "Follow-up",
+      defaultMethod: task.method,
     });
   }, []);
 
@@ -5967,6 +7047,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
         onSaved={handleCompletionSaved}
       />
       <TaskFollowUpModal
+        key={followUpTask ? `${followUpTask.id}:${followUpTask.defaultStep ?? "Follow-up"}:${followUpTask.defaultMethod ?? "Phone Call"}` : "follow-up-empty"}
         task={followUpTask}
         workspace={workspace}
         onClose={() => setFollowUpTask(null)}
@@ -5992,8 +7073,12 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
               <InfoLine label="Product" value={detailItem.productName || "-"} />
               <InfoLine label="Priority" value={detailItem.priority} />
               <InfoLine label="Date & Time" value={`${detailItem.taskDateLabel} ${detailItem.timeLabel}`} />
+              {detailItem.reminder !== "-" ? <InfoLine label="Reminder" value={taskReminderLabel(detailItem.reminder)} /> : null}
+              <InfoLine label="Assigned At" value={detailItem.assignedAtLabel} />
               {role !== "MARKETER" ? <InfoLine label="Assigned To" value={detailItem.assignedTo} /> : null}
               {"companyPrimaryPhone" in detailItem ? <InfoLine label="Phone" value={detailItem.companyPrimaryPhone || "-"} /> : null}
+              {detailItem.statusKey === "COMPLETED" ? <InfoLine label="Completed At" value={detailItem.completedAtLabel} /> : null}
+              {detailItem.statusKey === "COMPLETED" ? <InfoLine label="Completed By" value={detailItem.completedBy} /> : null}
             </div>
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
               <p className="text-xs font-bold uppercase text-slate-500">Details</p>
@@ -6224,6 +7309,8 @@ export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorks
               <InfoLine label="Assigned Marketer" value={selected.assignedTo} />
               <InfoLine label="Last Communication Type" value={selected.lastCommunicationType} />
               <InfoLine label="Created By" value={selected.createdBy} />
+              <InfoLine label="Created At" value={selected.createdAt} />
+              {selected.completedAt !== "-" ? <InfoLine label="Completed At" value={selected.completedAt} /> : null}
             </div>
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
               <p className="text-xs font-bold uppercase text-slate-500">Follow-up Note</p>
