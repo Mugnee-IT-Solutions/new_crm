@@ -519,7 +519,7 @@ type SupervisorPerformanceRow = CrmWorkspace["employees"][number] & {
   performanceScore: number;
   performanceScoreRaw: number;
 };
-type TeamPerformanceMetricKey = "leads" | "calls" | "whatsapp" | "meetings" | "followUps" | "pendingTasks" | "overdueFollowUps" | "sales" | "conversion" | "score";
+type TeamPerformanceMetricKey = "overview" | "leads" | "calls" | "whatsapp" | "meetings" | "followUps" | "pendingTasks" | "overdueFollowUps" | "sales" | "conversion" | "score";
 
 type TeamPerformanceDrilldownPayload = {
   marketerId: string;
@@ -545,6 +545,7 @@ type TeamPerformancePeriod = "today" | "week" | "month" | "year" | "custom";
 type TeamPerformanceSource = "table" | "mobile";
 
 const teamPerformanceMetricLabels: Record<TeamPerformanceMetricKey, string> = {
+  overview: "Activity Overview",
   leads: "Leads",
   calls: "Calls",
   whatsapp: "WhatsApp",
@@ -559,6 +560,8 @@ const teamPerformanceMetricLabels: Record<TeamPerformanceMetricKey, string> = {
 
 const teamPerformanceMetricValue = (row: SupervisorPerformanceRow, metric: TeamPerformanceMetricKey): string | number => {
   switch (metric) {
+    case "overview":
+      return row.leads + row.calls + row.whatsapp + row.meetings + row.followUps + row.pendingTasks + row.overdueFollowUps + row.sales;
     case "leads":
       return row.leads;
     case "calls":
@@ -592,9 +595,47 @@ const isTeamPerformanceMetricClickable = (
   metric: TeamPerformanceMetricKey,
   value: string | number,
 ): boolean => {
+  if (metric === "overview") return true;
   if (metric === "score") return Number(value) > 0;
   return teamPerformanceMetricValueNumber(value) > 0;
 };
+
+function TeamPerformanceDrilldownTable({ rows }: { rows: TeamPerformanceDrilldownRow[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-[1120px] w-full text-left text-sm">
+        <thead className="border-b border-slate-100 text-xs uppercase tracking-[0.12em] text-slate-400">
+          <tr>
+            <th className="px-3 py-2 font-bold">Company / Customer</th>
+            <th className="px-3 py-2 font-bold">Contact</th>
+            <th className="px-3 py-2 font-bold">Phone</th>
+            <th className="px-3 py-2 font-bold">Method</th>
+            <th className="px-3 py-2 font-bold">Type</th>
+            <th className="px-3 py-2 font-bold">Title</th>
+            <th className="px-3 py-2 font-bold">Date & Time</th>
+            <th className="px-3 py-2 font-bold">Status</th>
+            <th className="px-3 py-2 font-bold">Note</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {rows.map((record) => (
+            <tr key={record.id} className="hover:bg-slate-50/70">
+              <td className="max-w-[180px] truncate px-3 py-2">{record.customerOrCompany}</td>
+              <td className="max-w-[160px] truncate px-3 py-2">{record.contactPerson}</td>
+              <td className="px-3 py-2">{record.phone}</td>
+              <td className="px-3 py-2">{record.method}</td>
+              <td className="px-3 py-2">{record.type}</td>
+              <td className="max-w-[200px] truncate px-3 py-2">{record.title}</td>
+              <td className="px-3 py-2">{record.dateTime}</td>
+              <td className="px-3 py-2">{record.status}</td>
+              <td className="max-w-[220px] truncate px-3 py-2" title={record.note}>{record.note}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 const supervisorKpiConfig = {
   "Total Marketers": {
@@ -1208,10 +1249,26 @@ function SupervisorTeamPerformancePanelV2({
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-black text-white shadow-sm">
                           {initials(row.name)}
                         </div>
-                        <div className="min-w-0">
-                          <p className="truncate font-black text-slate-950">{row.name}</p>
-                          <p className="truncate text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.role}</p>
-                        </div>
+                        {onMetricClick ? (
+                          <button
+                            type="button"
+                            onClick={() => onMetricClick({
+                              marketerId: row.id,
+                              marketerName: row.name,
+                              metric: "overview",
+                              metricLabel: teamPerformanceMetricLabels.overview,
+                            })}
+                            className="min-w-0 text-left transition hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                          >
+                            <p className="truncate font-black text-slate-950">{row.name}</p>
+                            <p className="truncate text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.role}</p>
+                          </button>
+                        ) : (
+                          <div className="min-w-0">
+                            <p className="truncate font-black text-slate-950">{row.name}</p>
+                            <p className="truncate text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.role}</p>
+                          </div>
+                        )}
                       </div>
                     </td>
                     {(["leads", "calls", "whatsapp", "meetings", "followUps", "pendingTasks", "overdueFollowUps", "sales", "conversion"] as TeamPerformanceMetricKey[]).map((metric) => {
@@ -1280,10 +1337,26 @@ function SupervisorTeamPerformancePanelV2({
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="truncate text-sm font-black text-slate-950">{row.name}</p>
-                        <p className="text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.role}</p>
-                      </div>
+                      {onMetricClick ? (
+                        <button
+                          type="button"
+                          onClick={() => onMetricClick({
+                            marketerId: row.id,
+                            marketerName: row.name,
+                            metric: "overview",
+                            metricLabel: teamPerformanceMetricLabels.overview,
+                          })}
+                          className="min-w-0 text-left transition hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                        >
+                          <p className="truncate text-sm font-black text-slate-950">{row.name}</p>
+                          <p className="text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.role}</p>
+                        </button>
+                      ) : (
+                        <div>
+                          <p className="truncate text-sm font-black text-slate-950">{row.name}</p>
+                          <p className="text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.role}</p>
+                        </div>
+                      )}
                       <span className="text-sm font-bold text-slate-700">{row.conversionRate}</span>
                     </div>
                     <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
@@ -2282,32 +2355,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
             </p>
 
             {drilldownRows.length ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="border-b border-slate-100 text-xs uppercase tracking-[0.12em] text-slate-400">
-                    <tr>
-                      <th className="px-3 py-2 font-bold">Contact</th>
-                      <th className="px-3 py-2 font-bold">Phone</th>
-                      <th className="px-3 py-2 font-bold">Method</th>
-                      <th className="px-3 py-2 font-bold">Title</th>
-                      <th className="px-3 py-2 font-bold">Date & Time</th>
-                      <th className="px-3 py-2 font-bold">Note</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {drilldownRows.map((record) => (
-                      <tr key={record.id} className="hover:bg-slate-50/70">
-                        <td className="max-w-[160px] truncate px-3 py-2">{record.contactPerson}</td>
-                        <td className="px-3 py-2">{record.phone}</td>
-                        <td className="px-3 py-2">{record.method}</td>
-                        <td className="max-w-[180px] truncate px-3 py-2">{record.title}</td>
-                        <td className="px-3 py-2">{record.dateTime}</td>
-                        <td className="max-w-[200px] truncate px-3 py-2">{record.note}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <TeamPerformanceDrilldownTable rows={drilldownRows} />
             ) : (
               <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
                 No records found for this metric in selected period.
@@ -2629,10 +2677,14 @@ function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-950 text-xs font-black text-white">
                       {initials(row.name)}
                     </div>
-                    <div className="min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => handleMetricClick(row, "overview")}
+                      className="min-w-0 text-left transition hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                    >
                       <p className="truncate font-black text-slate-950">{row.name}</p>
                       <p className="truncate text-xs font-semibold text-slate-500">{row.designation !== "-" ? row.designation : row.email}</p>
-                    </div>
+                    </button>
                   </div>
                 </td>
                 <td className="px-3 py-4">
@@ -2716,32 +2768,7 @@ function AdminTeamPerformancePanel({ rows }: { rows: AdminPerformanceRow[] }) {
             </p>
 
             {drilldownRows.length ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="border-b border-slate-100 text-xs uppercase tracking-[0.12em] text-slate-400">
-                    <tr>
-                      <th className="px-3 py-2 font-bold">Contact</th>
-                      <th className="px-3 py-2 font-bold">Phone</th>
-                      <th className="px-3 py-2 font-bold">Method</th>
-                      <th className="px-3 py-2 font-bold">Title</th>
-                      <th className="px-3 py-2 font-bold">Date & Time</th>
-                      <th className="px-3 py-2 font-bold">Note</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {drilldownRows.map((record) => (
-                      <tr key={record.id} className="hover:bg-slate-50/70">
-                        <td className="max-w-[160px] truncate px-3 py-2">{record.contactPerson}</td>
-                        <td className="px-3 py-2">{record.phone}</td>
-                        <td className="px-3 py-2">{record.method}</td>
-                        <td className="max-w-[180px] truncate px-3 py-2">{record.title}</td>
-                        <td className="px-3 py-2">{record.dateTime}</td>
-                        <td className="max-w-[200px] truncate px-3 py-2">{record.note}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <TeamPerformanceDrilldownTable rows={drilldownRows} />
             ) : (
               <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
                 No records found for this metric in selected period.
@@ -3026,4 +3053,3 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
     </div>
   );
 }
-

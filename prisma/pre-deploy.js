@@ -1,8 +1,43 @@
+require("dotenv/config");
 const { execSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
 const { syncDatabaseUrlEnv } = require("./database-url");
 
+function findBundledSchemaEngine() {
+  try {
+    const enginesPackagePath = require.resolve("@prisma/engines/package.json");
+    const enginesDir = path.dirname(enginesPackagePath);
+    const engineFile = fs
+      .readdirSync(enginesDir)
+      .find((file) => /^schema-engine(?:-.+)?(?:\.exe)?$/i.test(file));
+
+    if (!engineFile) {
+      return null;
+    }
+
+    const enginePath = path.join(enginesDir, engineFile);
+    return fs.existsSync(enginePath) ? enginePath : null;
+  } catch {
+    return null;
+  }
+}
+
+function getPrismaEnv() {
+  const env = { ...process.env };
+
+  if (!env.PRISMA_SCHEMA_ENGINE_BINARY) {
+    const bundledSchemaEngine = findBundledSchemaEngine();
+    if (bundledSchemaEngine) {
+      env.PRISMA_SCHEMA_ENGINE_BINARY = bundledSchemaEngine;
+    }
+  }
+
+  return env;
+}
+
 function run(command) {
-  execSync(command, { stdio: "inherit" });
+  execSync(command, { stdio: "inherit", env: getPrismaEnv() });
 }
 
 function readMigrateStatus() {
@@ -10,6 +45,7 @@ function readMigrateStatus() {
     return execSync("npx prisma migrate status", {
       encoding: "utf8",
       stdio: ["inherit", "pipe", "pipe"],
+      env: getPrismaEnv(),
     });
   } catch (error) {
     const stdout = error.stdout?.toString() ?? "";
@@ -18,9 +54,17 @@ function readMigrateStatus() {
   }
 }
 
+function hasGeneratedPrismaClient() {
+  return fs.existsSync(
+    path.join(process.cwd(), "node_modules", ".prisma", "client", "index.js"),
+  );
+}
+
 const databaseUrl = syncDatabaseUrlEnv();
 
-run("npx prisma generate");
+if (!hasGeneratedPrismaClient()) {
+  run("npx prisma generate");
+}
 
 if (!databaseUrl) {
   console.error(`

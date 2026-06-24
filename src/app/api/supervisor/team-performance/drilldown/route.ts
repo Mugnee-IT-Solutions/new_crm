@@ -7,6 +7,7 @@ import { getMarketerScopeUserIds } from "@/lib/customer-ownership";
 
 type TeamPerformancePeriod = "today" | "week" | "month" | "year" | "custom";
 type MetricType =
+  | "overview"
   | "leads"
   | "calls"
   | "whatsapp"
@@ -119,7 +120,7 @@ export async function GET(request: Request) {
     const period = (rawPeriod === "today" || rawPeriod === "week" || rawPeriod === "month" || rawPeriod === "year" || rawPeriod === "custom")
       ? rawPeriod
       : "month";
-    const metric = (metricType === "leads" || metricType === "calls" || metricType === "whatsapp" || metricType === "meetings" || metricType === "followUps" || metricType === "pendingTasks"
+    const metric = (metricType === "overview" || metricType === "leads" || metricType === "calls" || metricType === "whatsapp" || metricType === "meetings" || metricType === "followUps" || metricType === "pendingTasks"
       || metricType === "overdueFollowUps" || metricType === "sales" || metricType === "conversion" || metricType === "score")
       ? metricType
       : undefined;
@@ -198,6 +199,217 @@ export async function GET(request: Request) {
         status: lead.status,
         note: lead.notes ?? "-",
       }));
+    }
+
+    if (metric === "overview") {
+      const [leads, tasks, followUps, communications, sales] = await Promise.all([
+        prisma.lead.findMany({
+          where: {
+            assignedToId: marketerId,
+            createdAt: { gte: window.from, lt: window.to },
+          },
+          select: {
+            id: true,
+            title: true,
+            customerName: true,
+            phone: true,
+            status: true,
+            notes: true,
+            createdAt: true,
+            company: {
+              select: {
+                name: true,
+                contactPerson: true,
+                phone: true,
+              },
+            },
+          },
+          orderBy: { createdAt: "desc" },
+        }),
+        prisma.task.findMany({
+          where: {
+            assignedToId: marketerId,
+            status: { not: "COMPLETED" },
+            dueDate: { gte: window.from, lt: window.to },
+          },
+          select: {
+            id: true,
+            title: true,
+            description: true,
+            status: true,
+            updatedAt: true,
+            leadName: true,
+            companyName: true,
+            company: { select: { name: true, contactPerson: true, phone: true } },
+            lead: { select: { title: true, customerName: true, phone: true } },
+          },
+          orderBy: { dueDate: "asc" },
+        }),
+        prisma.followUp.findMany({
+          where: {
+            assignedToId: marketerId,
+            followUpDate: { gte: window.from, lt: window.to },
+          },
+          select: {
+            id: true,
+            method: true,
+            note: true,
+            nextDiscussionPlan: true,
+            status: true,
+            followUpDate: true,
+            lead: {
+              select: {
+                title: true,
+                customerName: true,
+                phone: true,
+                company: { select: { name: true, contactPerson: true, phone: true } },
+              },
+            },
+            company: { select: { name: true, contactPerson: true, phone: true } },
+            task: { select: { title: true } },
+          },
+          orderBy: { followUpDate: "desc" },
+        }),
+        prisma.communicationLog.findMany({
+          where: {
+            userId: marketerId,
+            communicationAt: { gte: window.from, lt: window.to },
+          },
+          select: {
+            id: true,
+            method: true,
+            note: true,
+            discussionTopic: true,
+            communicationAt: true,
+            lead: {
+              select: {
+                title: true,
+                customerName: true,
+                phone: true,
+                company: { select: { name: true, contactPerson: true, phone: true } },
+              },
+            },
+            company: { select: { name: true, contactPerson: true, phone: true } },
+            task: { select: { title: true } },
+            followUpNote: true,
+            productDiscussed: true,
+          },
+          orderBy: { communicationAt: "desc" },
+        }),
+        prisma.lead.findMany({
+          where: {
+            assignedToId: marketerId,
+            status: "WON_SALE",
+            updatedAt: { gte: window.from, lt: window.to },
+          },
+          select: {
+            id: true,
+            title: true,
+            customerName: true,
+            phone: true,
+            status: true,
+            notes: true,
+            updatedAt: true,
+            company: {
+              select: {
+                name: true,
+                contactPerson: true,
+                phone: true,
+              },
+            },
+          },
+          orderBy: { updatedAt: "desc" },
+        }),
+      ]);
+
+      const merged: DrilldownDetailRow[] = [];
+
+      for (const lead of leads) {
+        merged.push({
+          id: `lead-${lead.id}`,
+          type: "Lead",
+          customerOrCompany: lead.company?.name || lead.customerName,
+          leadName: normalizeLeadTitle(lead.title, lead.customerName),
+          contactPerson: normalizeContactPerson(lead.company?.contactPerson),
+          phone: pickPhone(lead.phone || lead.company?.phone),
+          method: "Lead",
+          title: normalizeLeadTitle(lead.title, lead.customerName),
+          dateTime: formatDisplayDate(lead.createdAt),
+          sortDate: lead.createdAt.getTime(),
+          status: lead.status,
+          note: lead.notes ?? "-",
+        });
+      }
+
+      for (const task of tasks) {
+        merged.push({
+          id: `task-${task.id}`,
+          type: "Task",
+          customerOrCompany: task.company?.name || task.companyName || task.lead?.customerName || "Company",
+          leadName: task.leadName || task.lead?.title || "-",
+          contactPerson: normalizeContactPerson(task.company?.contactPerson),
+          phone: pickPhone(task.company?.phone || task.lead?.phone),
+          method: "Task",
+          title: task.title,
+          dateTime: formatDisplayDate(task.updatedAt),
+          sortDate: task.updatedAt.getTime(),
+          status: task.status,
+          note: task.description || "-",
+        });
+      }
+
+      for (const followUp of followUps) {
+        merged.push({
+          id: `followup-${followUp.id}`,
+          type: "Follow-up",
+          customerOrCompany: followUp.company?.name || followUp.lead?.company?.name || followUp.lead?.customerName || "Customer",
+          leadName: normalizeLeadTitle(followUp.lead?.title, followUp.lead?.customerName),
+          contactPerson: normalizeContactPerson(followUp.company?.contactPerson || followUp.lead?.company?.contactPerson),
+          phone: pickPhone(followUp.lead?.phone || followUp.company?.phone),
+          method: followUp.method || "Follow-up",
+          title: followUp.task?.title || followUp.nextDiscussionPlan || followUp.note || "Follow-up",
+          dateTime: formatDisplayDate(followUp.followUpDate),
+          sortDate: followUp.followUpDate.getTime(),
+          status: followUp.status,
+          note: followUp.note || "-",
+        });
+      }
+
+      for (const communication of communications) {
+        merged.push({
+          id: `communication-${communication.id}`,
+          type: "Communication",
+          customerOrCompany: communication.company?.name || communication.lead?.company?.name || communication.lead?.customerName || "Company",
+          leadName: normalizeLeadTitle(communication.lead?.title, communication.lead?.customerName),
+          contactPerson: normalizeContactPerson(communication.company?.contactPerson || communication.lead?.company?.contactPerson),
+          phone: pickPhone(communication.lead?.phone || communication.company?.phone),
+          method: communication.method || "Communication",
+          title: communication.task?.title || communication.discussionTopic || communication.productDiscussed || communication.followUpNote || "Communication",
+          dateTime: formatDisplayDate(communication.communicationAt),
+          sortDate: communication.communicationAt.getTime(),
+          status: "COMPLETED",
+          note: communication.note || "-",
+        });
+      }
+
+      for (const lead of sales) {
+        merged.push({
+          id: `sale-${lead.id}`,
+          type: "Sales",
+          customerOrCompany: lead.company?.name || lead.customerName,
+          leadName: normalizeLeadTitle(lead.title, lead.customerName),
+          contactPerson: normalizeContactPerson(lead.company?.contactPerson),
+          phone: pickPhone(lead.phone || lead.company?.phone),
+          method: "Won Lead",
+          title: normalizeLeadTitle(lead.title, lead.customerName),
+          dateTime: formatDisplayDate(lead.updatedAt),
+          sortDate: lead.updatedAt.getTime(),
+          status: lead.status,
+          note: lead.notes || "-",
+        });
+      }
+
+      rows = merged.sort((left, right) => right.sortDate - left.sortDate);
     }
 
     if (metric === "followUps" || metric === "overdueFollowUps") {
@@ -433,6 +645,7 @@ export async function GET(request: Request) {
     count = rows.length;
 
     const labelByMetric: Record<MetricType, string> = {
+      overview: "Activity Overview",
       leads: "Leads",
       calls: "Calls",
       whatsapp: "WhatsApp",
