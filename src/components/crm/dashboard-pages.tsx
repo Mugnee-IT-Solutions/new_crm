@@ -2047,6 +2047,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   const [activeFilter, setActiveFilter] = React.useState<MarketerTaskFilter>("all");
   const [activeTasks, setActiveTasks] = React.useState<TodayWorkQueueItem[]>([]);
   const [completedTasks, setCompletedTasks] = React.useState<CompletedWorkItem[]>([]);
+  const [completedStageFilter, setCompletedStageFilter] = React.useState<"all" | "Call" | "Follow-up" | "Demo Send" | "Quotation" | "Sale Won" | "Lead Lost">("all");
   const [completionItem, setCompletionItem] = React.useState<TodayWorkQueueItem | null>(null);
   const [editingTask, setEditingTask] = React.useState<TodayTaskApiRow | null>(null);
   const [editingFollowUp, setEditingFollowUp] = React.useState<TodayWorkQueueItem | null>(null);
@@ -2064,6 +2065,18 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   const scheduledRefreshTimers = React.useRef<number[]>([]);
   const shownReminderKeys = React.useRef<Set<string>>(new Set());
   const role = workspace.user.role;
+
+  const completedPipelineStage = React.useCallback((item: CompletedWorkItem) => {
+    const normalized = item.title?.trim().toLowerCase();
+    if (!normalized) return item.sourceType === "FOLLOW_UP" ? "Follow-up" : null;
+    if (normalized === "call" || normalized === "phone call") return "Call" as const;
+    if (normalized === "follow-up" || normalized === "follow up") return "Follow-up" as const;
+    if (normalized === "demo send" || normalized === "demo") return "Demo Send" as const;
+    if (normalized === "quotation" || normalized === "quote" || normalized === "quatation") return "Quotation" as const;
+    if (normalized === "sale" || normalized === "sale won" || normalized === "won" || normalized === "conversion") return "Sale Won" as const;
+    if (normalized === "lead lost" || normalized === "lost") return "Lead Lost" as const;
+    return item.sourceType === "FOLLOW_UP" ? "Follow-up" : null;
+  }, []);
 
   const reminderKey = React.useCallback((item: TodayWorkQueueItem) => `${item.sourceId}:${item.taskDateIso}`, []);
 
@@ -2247,6 +2260,30 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
     () => activeTasks.filter((item) => matchesTodayWorkFilter(item, activeFilter)),
     [activeFilter, activeTasks],
   );
+
+  const completedStageCounts = React.useMemo(() => {
+    const base = {
+      all: completedTasks.length,
+      Call: 0,
+      "Follow-up": 0,
+      "Demo Send": 0,
+      Quotation: 0,
+      "Sale Won": 0,
+      "Lead Lost": 0,
+    } as const;
+    const next = { ...base };
+    for (const task of completedTasks) {
+      const stage = completedPipelineStage(task);
+      if (!stage) continue;
+      next[stage] += 1;
+    }
+    return next;
+  }, [completedPipelineStage, completedTasks]);
+
+  const filteredCompletedTasks = React.useMemo(() => {
+    if (completedStageFilter === "all") return completedTasks;
+    return completedTasks.filter((task) => completedPipelineStage(task) === completedStageFilter);
+  }, [completedPipelineStage, completedStageFilter, completedTasks]);
   const chips: { key: MarketerTaskFilter; label: string }[] = [
     { key: "all", label: "All" },
     { key: "tasks", label: "Tasks" },
@@ -2365,10 +2402,37 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
 
           <DashboardCard
             title="Completed Tasks"
-            action={<Badge variant="neutral">{completedTasks.length} Completed</Badge>}
+            action={
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {(["all", "Call", "Follow-up", "Demo Send", "Quotation", "Sale Won", "Lead Lost"] as const).map((stage) => {
+                    const active = completedStageFilter === stage;
+                    const count = stage === "all" ? completedStageCounts.all : completedStageCounts[stage];
+
+                    return (
+                      <button
+                        key={stage}
+                        type="button"
+                        onClick={() => setCompletedStageFilter(stage)}
+                        className={cn(
+                          "inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-bold transition",
+                          active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-500 hover:border-emerald-100 hover:text-slate-700",
+                        )}
+                      >
+                        {stage === "all" ? "All" : stage}
+                        <span className={cn("rounded-full px-1.5 py-0.5 text-[11px]", active ? "bg-white text-emerald-700" : "bg-slate-100 text-slate-500")}>
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <Badge variant="neutral">{completedTasks.length} Completed</Badge>
+              </div>
+            }
           >
             <CompletedWorkList
-              rows={completedTasks}
+              rows={filteredCompletedTasks}
               loading={loading}
               viewerRole={role}
               emptyMessage="No completed tasks yet."

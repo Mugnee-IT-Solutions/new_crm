@@ -6159,24 +6159,37 @@ export function WorkCompletionModal({
   );
   const [nextStep, setNextStep] = React.useState<CrmPipelineStep>("Follow-up");
   const [nextStepDirty, setNextStepDirty] = React.useState(false);
+  const [nextFollowUpDate, setNextFollowUpDate] = React.useState("");
+  const [nextFollowUpTime, setNextFollowUpTime] = React.useState("");
   const suggestedStep = rating > 0 ? suggestedCrmPipelineStep(rating) : initialNextStep;
+  const showNextFollowUpSchedule = nextStep === "Follow-up";
 
   React.useEffect(() => {
     if (!item) {
       setRating(0);
       setNextStep("Follow-up");
       setNextStepDirty(false);
+      setNextFollowUpDate("");
+      setNextFollowUpTime("");
       return;
     }
     setRating(0);
     setNextStep(initialNextStep);
     setNextStepDirty(false);
+    setNextFollowUpDate("");
+    setNextFollowUpTime("");
   }, [initialNextStep, item]);
 
   React.useEffect(() => {
     if (!item || nextStepDirty || rating <= 0) return;
     setNextStep(suggestedStep);
   }, [item, nextStepDirty, rating, suggestedStep]);
+
+  React.useEffect(() => {
+    if (showNextFollowUpSchedule) return;
+    setNextFollowUpDate("");
+    setNextFollowUpTime("");
+  }, [showNextFollowUpSchedule]);
 
   return (
     <FormModal open={Boolean(item)} title={title} onClose={onClose} panelClassName="max-w-2xl">
@@ -6221,9 +6234,29 @@ export function WorkCompletionModal({
                 <option>Lead Lost</option>
               </select>
             </label>
-            <TextField label="Next Follow-up Date" name="nextFollowUpDate" type="date" />
-            <TextField label="Next Follow-up Time" name="nextFollowUpTime" type="time" />
-            <input type="hidden" name="nextFollowUpDateTzOffset" value={new Date().getTimezoneOffset().toString()} />
+            {showNextFollowUpSchedule ? (
+              <>
+                <label className="space-y-1.5">
+                  <span className="text-xs font-bold uppercase text-slate-500">Follow-up Date</span>
+                  <Input
+                    name="nextFollowUpDate"
+                    type="date"
+                    value={nextFollowUpDate}
+                    onChange={(event) => setNextFollowUpDate(event.target.value)}
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="text-xs font-bold uppercase text-slate-500">Follow-up Time</span>
+                  <Input
+                    name="nextFollowUpTime"
+                    type="time"
+                    value={nextFollowUpTime}
+                    onChange={(event) => setNextFollowUpTime(event.target.value)}
+                  />
+                </label>
+                <input type="hidden" name="nextFollowUpDateTzOffset" value={new Date().getTimezoneOffset().toString()} />
+              </>
+            ) : null}
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <p className="text-sm font-semibold text-slate-700">Rating</p>
@@ -6561,7 +6594,9 @@ export function CompletedWorkList({
   return (
     <div className="space-y-3">
       <div className={cn("space-y-2.5 pr-1", previewCount ? (expanded ? "max-h-none overflow-visible" : `${compactHeightClassName} overflow-y-auto`) : "")}>
-        {rows.map((task) => (
+        {rows.map((task, index) => {
+          const isLatest = index === 0;
+          return (
           <div
             key={task.id}
             role={onOpen ? "button" : undefined}
@@ -6576,6 +6611,7 @@ export function CompletedWorkList({
             }}
             className={cn(
               "rounded-[16px] border border-slate-200 bg-slate-50/90 px-3.5 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]",
+              isLatest && "border-emerald-200 bg-emerald-50/50 ring-1 ring-emerald-100",
               onOpen && "cursor-pointer transition hover:border-emerald-200 hover:bg-emerald-50/40",
             )}
           >
@@ -6598,6 +6634,7 @@ export function CompletedWorkList({
                     }} className="truncate text-left text-lg font-black text-slate-900 hover:text-blue-700">
                       {task.title}
                     </button>
+                    {isLatest ? <p className="mt-1 text-[11px] font-black uppercase tracking-[0.18em] text-emerald-700">Latest completed</p> : null}
                     <p className="mt-0.5 truncate text-base font-bold text-slate-700">
                       <EntityLink href={task.companyHref} className="text-base font-bold text-slate-800" stopPropagation>{task.companyName}</EntityLink>
                     </p>
@@ -6622,8 +6659,8 @@ export function CompletedWorkList({
                   {viewerRole !== "MARKETER" ? <span>Assigned: {task.assignedTo}</span> : null}
                   <span>Completed by {task.completedBy}</span>
                 </div>
-                <p className="mt-2 text-[15px] leading-6 text-slate-700 line-clamp-2">{task.description !== "-" ? task.description : task.method}</p>
-                {task.notes !== "-" ? <p className="mt-1.5 truncate text-sm font-medium text-slate-500"><span className="font-semibold text-slate-600">Note:</span> {task.notes}</p> : null}
+                <p className={cn("mt-2 text-[15px] leading-6 text-slate-700", !isLatest && "line-clamp-2")}>{task.description !== "-" ? task.description : task.method}</p>
+                {task.notes !== "-" ? <p className={cn("mt-1.5 text-sm font-medium text-slate-500", !isLatest && "truncate")}><span className="font-semibold text-slate-600">Note:</span> {task.notes}</p> : null}
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
                   <p className="text-xs font-bold text-slate-500">{task.completedAtLabel}</p>
                   <Button
@@ -6643,7 +6680,8 @@ export function CompletedWorkList({
               </div>
             </div>
           </div>
-        ))}
+        );
+        })}
       </div>
       {previewCount && hiddenCount > 0 ? (
         <div className="flex justify-center">

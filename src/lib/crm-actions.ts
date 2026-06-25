@@ -1679,7 +1679,8 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
   const productDiscussed = text(formData, "productDiscussed");
   const outcome = text(formData, "outcome");
   const notes = text(formData, "notes");
-  const nextFollowUpDate = dateTimeFromDateAndTimeWithClientOffset(formData, "nextFollowUpDate", "nextFollowUpTime", "nextFollowUpDateTzOffset");
+  const requestedNextFollowUpDate = dateTimeFromDateAndTimeWithClientOffset(formData, "nextFollowUpDate", "nextFollowUpTime", "nextFollowUpDateTzOffset");
+  const nextFollowUpDate = discussionTopic === "Follow-up" ? requestedNextFollowUpDate : undefined;
   const rating = formData.has("rating") ? clampEngagementRating(formData.get("rating")) : undefined;
 
   if (!id) {
@@ -1864,7 +1865,8 @@ export async function completeFollowUpWithCommunicationAction(formData: FormData
   const productDiscussed = text(formData, "productDiscussed");
   const outcome = text(formData, "outcome");
   const notes = text(formData, "notes");
-  const nextFollowUpDate = dateTimeFromDateAndTimeWithClientOffset(formData, "nextFollowUpDate", "nextFollowUpTime", "nextFollowUpDateTzOffset");
+  const requestedNextFollowUpDate = dateTimeFromDateAndTimeWithClientOffset(formData, "nextFollowUpDate", "nextFollowUpTime", "nextFollowUpDateTzOffset");
+  const nextFollowUpDate = discussionTopic === "Follow-up" ? requestedNextFollowUpDate : undefined;
   const rating = formData.has("rating") ? clampEngagementRating(formData.get("rating")) : undefined;
 
   if (!id) {
