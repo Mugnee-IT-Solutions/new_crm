@@ -98,9 +98,9 @@ export async function GET(request: Request) {
 
     const formatDisplayDate = (value: Date) => formatCrmDate(value, "dd/MM/yyyy hh:mm a");
 
-    type DrilldownDetailRow = {
+      type DrilldownDetailRow = {
       id: string;
-      type: "Lead" | "Task" | "Follow-up" | "Communication" | "Conversion" | "Sales";
+        type: "Lead" | "Task" | "Follow-up" | "Communication" | "Conversion" | "Sales" | "Quotation";
       customerOrCompany: string;
       companyId?: string | null;
       companyHref?: string | null;
@@ -167,7 +167,7 @@ export async function GET(request: Request) {
     }
 
     if (metric === "overview") {
-      const [leads, tasks, followUps, communications, sales] = await Promise.all([
+      const [leads, tasks, followUps, communications, quotations, sales] = await Promise.all([
         prisma.lead.findMany({
           where: {
             assignedToId: marketerId,
@@ -268,6 +268,34 @@ export async function GET(request: Request) {
             productDiscussed: true,
           },
           orderBy: { communicationAt: "desc" },
+        }),
+        prisma.quotation.findMany({
+          where: {
+            createdById: marketerId,
+            createdAt: { gte: window.from, lt: window.to },
+          },
+          select: {
+            id: true,
+            quoteNumber: true,
+            companyId: true,
+            leadId: true,
+            status: true,
+            notes: true,
+            createdAt: true,
+            totalAmount: true,
+            company: { select: { name: true, contactPerson: true, phone: true } },
+            lead: {
+              select: {
+                id: true,
+                title: true,
+                customerName: true,
+                phone: true,
+                companyId: true,
+                company: { select: { name: true, contactPerson: true, phone: true } },
+              },
+            },
+          },
+          orderBy: { createdAt: "desc" },
         }),
         prisma.lead.findMany({
           where: {
@@ -378,6 +406,27 @@ export async function GET(request: Request) {
           sortDate: communication.communicationAt.getTime(),
           status: "COMPLETED",
           note: communication.note || "-",
+        });
+      }
+
+      for (const quotation of quotations) {
+        const companyId = quotation.companyId ?? quotation.lead?.companyId ?? null;
+        merged.push({
+          id: `quotation-${quotation.id}`,
+          type: "Quotation",
+          customerOrCompany: quotation.company?.name || quotation.lead?.company?.name || quotation.lead?.customerName || "Company",
+          companyId,
+          companyHref: companyHrefFromId(companyId),
+          leadId: quotation.leadId ?? quotation.lead?.id ?? null,
+          leadName: normalizeLeadTitle(quotation.lead?.title, quotation.lead?.customerName),
+          contactPerson: normalizeContactPerson(quotation.company?.contactPerson || quotation.lead?.company?.contactPerson),
+          phone: pickPhone(quotation.lead?.phone || quotation.company?.phone),
+          method: "Quotation",
+          title: quotation.quoteNumber || "Quotation",
+          dateTime: formatDisplayDate(quotation.createdAt),
+          sortDate: quotation.createdAt.getTime(),
+          status: quotation.status,
+          note: quotation.notes || `Amount: ${quotation.totalAmount.toString()}`,
         });
       }
 

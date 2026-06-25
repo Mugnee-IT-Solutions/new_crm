@@ -733,6 +733,17 @@ function activityCategoryLabel(activity: CrmWorkspace["activities"][number]) {
   }
 }
 
+type DrilldownActivityFilter = "all" | "call" | "followUp" | "demo" | "quotation";
+
+function drilldownActivityCategory(row: TeamPerformanceDrilldownRow): Exclude<DrilldownActivityFilter, "all"> | null {
+  const haystack = [row.type, row.method, row.title, row.note].join(" ").toLowerCase();
+  if (haystack.includes("quotation") || haystack.includes("quatation") || haystack.includes("quote")) return "quotation";
+  if (haystack.includes("demo")) return "demo";
+  if (haystack.includes("follow")) return "followUp";
+  if (haystack.includes("call") || haystack.includes("phone")) return "call";
+  return null;
+}
+
 function TeamPerformanceDrilldownTable({
   rows,
   workspace,
@@ -747,12 +758,42 @@ function TeamPerformanceDrilldownTable({
   const pageSize = 8;
   const [page, setPage] = React.useState(1);
   const [selectedRecordKey, setSelectedRecordKey] = React.useState<string | null>(null);
-  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const [activityFilter, setActivityFilter] = React.useState<DrilldownActivityFilter>("all");
+  const filteredRows = React.useMemo(() => {
+    if (activityFilter === "all") return rows;
+    return rows.filter((row) => drilldownActivityCategory(row) === activityFilter);
+  }, [activityFilter, rows]);
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   const currentPage = Math.min(page, totalPages);
-  const pagedRows = React.useMemo(() => rows.slice((currentPage - 1) * pageSize, currentPage * pageSize), [currentPage, rows]);
+  const pagedRows = React.useMemo(() => filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize), [currentPage, filteredRows]);
   const selectedRecord = React.useMemo(() => (
-    rows.find((row) => `${row.type}:${row.id}:${row.dateTime}` === selectedRecordKey) ?? null
-  ), [rows, selectedRecordKey]);
+    filteredRows.find((row) => `${row.type}:${row.id}:${row.dateTime}` === selectedRecordKey) ?? null
+  ), [filteredRows, selectedRecordKey]);
+
+  React.useEffect(() => {
+    setPage(1);
+  }, [activityFilter]);
+
+  React.useEffect(() => {
+    if (!selectedRecordKey) return;
+    const exists = filteredRows.some((row) => `${row.type}:${row.id}:${row.dateTime}` === selectedRecordKey);
+    if (!exists) setSelectedRecordKey(null);
+  }, [filteredRows, selectedRecordKey]);
+
+  const filterCounts = React.useMemo(() => {
+    return rows.reduce((summary, row) => {
+      const category = drilldownActivityCategory(row);
+      summary.all += 1;
+      if (category) summary[category] += 1;
+      return summary;
+    }, { all: 0, call: 0, followUp: 0, demo: 0, quotation: 0 });
+  }, [rows]);
+
+  const latestNotes = React.useMemo(() => (
+    filteredRows
+      .filter((row) => row.note && row.note !== "-")
+      .slice(0, 4)
+  ), [filteredRows]);
 
   const selectedCompany = React.useMemo(() => {
     if (!selectedRecord) return null;
@@ -836,6 +877,74 @@ function TeamPerformanceDrilldownTable({
 
   return (
     <div className="relative space-y-4">
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {([
+            ["all", "All"],
+            ["call", "Call"],
+            ["followUp", "Follow-up"],
+            ["demo", "Demo Send"],
+            ["quotation", "Quotation"],
+          ] as const).map(([key, label]) => {
+            const active = activityFilter === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActivityFilter(key)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold transition",
+                  active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-blue-100 hover:text-slate-900",
+                )}
+              >
+                {label}
+                <span className={cn("rounded-full px-1.5 py-0.5 text-[11px]", active ? "bg-white text-blue-700" : "bg-slate-100 text-slate-500")}>
+                  {filterCounts[key]}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Calls</p>
+            <p className="mt-2 text-2xl font-black text-slate-950">{filterCounts.call}</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Follow-ups</p>
+            <p className="mt-2 text-2xl font-black text-slate-950">{filterCounts.followUp}</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Demo</p>
+            <p className="mt-2 text-2xl font-black text-slate-950">{filterCounts.demo}</p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Quotation</p>
+            <p className="mt-2 text-2xl font-black text-slate-950">{filterCounts.quotation}</p>
+          </div>
+        </div>
+        {latestNotes.length ? (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-black text-slate-950">Overall Notes</p>
+              <Badge variant="neutral">{latestNotes.length} latest</Badge>
+            </div>
+            <div className="mt-3 space-y-2">
+              {latestNotes.map((row) => (
+                <div key={`${row.type}:${row.id}:${row.dateTime}:note`} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-black text-slate-900">{row.customerOrCompany} - {row.title}</p>
+                    <p className="text-[11px] font-semibold text-slate-500">{row.dateTime}</p>
+                  </div>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">{row.method} - {row.status}</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{row.note}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
       <div className="max-h-[min(56vh,540px)] max-w-full overflow-auto rounded-2xl border border-slate-200">
         <table className="min-w-[1040px] w-full text-left text-sm">
           <thead className="sticky top-0 z-[1] border-b border-slate-100 bg-white text-xs uppercase tracking-[0.12em] text-slate-400">
@@ -875,10 +984,10 @@ function TeamPerformanceDrilldownTable({
         </table>
       </div>
 
-      {rows.length > pageSize ? (
+      {filteredRows.length > pageSize ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
           <p className="text-sm font-semibold text-slate-600">
-            Showing {Math.min((currentPage - 1) * pageSize + 1, rows.length)}-{Math.min(currentPage * pageSize, rows.length)} of {rows.length}
+            Showing {Math.min((currentPage - 1) * pageSize + 1, filteredRows.length)}-{Math.min(currentPage * pageSize, filteredRows.length)} of {filteredRows.length}
           </p>
           <div className="flex items-center gap-2">
             <Button type="button" variant="outline" size="sm" onClick={() => setPage(Math.max(1, currentPage - 1))} disabled={currentPage === 1}>
@@ -2750,12 +2859,17 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
   const [drilldownCount, setDrilldownCount] = React.useState(0);
   const [drilldownLoading, setDrilldownLoading] = React.useState(false);
   const [drilldownError, setDrilldownError] = React.useState("");
+  const [drilldownPeriod, setDrilldownPeriod] = React.useState<TeamPerformancePeriod>(performancePeriod);
 
   const metricPeriodLabel = React.useCallback((period: TeamPerformancePeriod) => performancePeriodLabels[period], []);
 
-  const handlePerformanceMetricClick = React.useCallback(async (payload: TeamPerformanceDrilldownPayload) => {
-    setDrilldownPayload(payload);
-    setDrilldownOpen(true);
+  React.useEffect(() => {
+    if (!drilldownOpen) {
+      setDrilldownPeriod(performancePeriod);
+    }
+  }, [drilldownOpen, performancePeriod]);
+
+  const loadDrilldown = React.useCallback(async (payload: TeamPerformanceDrilldownPayload, selectedPeriod: TeamPerformancePeriod) => {
     setDrilldownLoading(true);
     setDrilldownError("");
     setDrilldownRows([]);
@@ -2765,7 +2879,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
       const params = new URLSearchParams({
         marketerId: payload.marketerId,
         metricType: payload.metric,
-        period: performancePeriod,
+        period: selectedPeriod,
       });
 
       const response = await fetch(`/api/supervisor/team-performance/drilldown?${params.toString()}`);
@@ -2782,7 +2896,20 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
     } finally {
       setDrilldownLoading(false);
     }
-  }, [performancePeriod]);
+  }, []);
+
+  const handlePerformanceMetricClick = React.useCallback(async (payload: TeamPerformanceDrilldownPayload) => {
+    setDrilldownPayload(payload);
+    setDrilldownPeriod(performancePeriod);
+    setDrilldownOpen(true);
+    await loadDrilldown(payload, performancePeriod);
+  }, [loadDrilldown, performancePeriod]);
+
+  const handleDrilldownPeriodChange = React.useCallback(async (nextPeriod: TeamPerformancePeriod) => {
+    if (!drilldownPayload || nextPeriod === drilldownPeriod) return;
+    setDrilldownPeriod(nextPeriod);
+    await loadDrilldown(drilldownPayload, nextPeriod);
+  }, [drilldownPayload, drilldownPeriod, loadDrilldown]);
 
   const closeDrilldown = React.useCallback(() => {
     setDrilldownOpen(false);
@@ -2860,7 +2987,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
       <FormModal
         open={drilldownOpen}
         title={drilldownPayload
-          ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} - ${metricPeriodLabel(performancePeriod)}`
+          ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} - ${metricPeriodLabel(drilldownPeriod)}`
           : "Team performance drill-down"}
         onClose={closeDrilldown}
         panelClassName="w-[96vw] max-w-[1180px]"
@@ -2874,6 +3001,24 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
           </div>
         ) : (
           <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {teamPerformancePeriods.map((period) => {
+                const active = drilldownPeriod === period;
+                return (
+                  <button
+                    key={period}
+                    type="button"
+                    onClick={() => void handleDrilldownPeriodChange(period)}
+                    className={cn(
+                      "inline-flex items-center rounded-full border px-4 py-2 text-sm font-bold transition",
+                      active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-blue-100 hover:text-slate-900",
+                    )}
+                  >
+                    {performancePeriodLabels[period]}
+                  </button>
+                );
+              })}
+            </div>
             <p className="text-sm font-semibold text-slate-600">
               {drilldownRows.length ? `${drilldownRows.length} of ${drilldownCount}` : "No records found for this metric."}
             </p>
@@ -3271,6 +3416,13 @@ function AdminTeamPerformancePanel({
   const [drilldownCount, setDrilldownCount] = React.useState(0);
   const [drilldownLoading, setDrilldownLoading] = React.useState(false);
   const [drilldownError, setDrilldownError] = React.useState("");
+  const [drilldownPeriod, setDrilldownPeriod] = React.useState<TeamPerformancePeriod>(period);
+
+  React.useEffect(() => {
+    if (!drilldownOpen) {
+      setDrilldownPeriod(period);
+    }
+  }, [drilldownOpen, period]);
 
   const closeDrilldown = React.useCallback(() => {
     setDrilldownOpen(false);
@@ -3281,15 +3433,7 @@ function AdminTeamPerformancePanel({
     setDrilldownLoading(false);
   }, []);
 
-  const handleMetricClick = React.useCallback(async (employee: AdminPerformanceRow, metric: TeamPerformanceMetricKey) => {
-    const metricLabel = teamPerformanceMetricLabels[metric] ?? metric;
-    setDrilldownPayload({
-      marketerId: employee.id,
-      marketerName: employee.name,
-      metric,
-      metricLabel,
-    });
-    setDrilldownOpen(true);
+  const loadDrilldown = React.useCallback(async (payload: TeamPerformanceDrilldownPayload, selectedPeriod: TeamPerformancePeriod) => {
     setDrilldownLoading(true);
     setDrilldownError("");
     setDrilldownRows([]);
@@ -3297,9 +3441,9 @@ function AdminTeamPerformancePanel({
 
     try {
       const params = new URLSearchParams({
-        marketerId: employee.id,
-        metricType: metric,
-        period,
+        marketerId: payload.marketerId,
+        metricType: payload.metric,
+        period: selectedPeriod,
       });
       const response = await fetch(`/api/supervisor/team-performance/drilldown?${params.toString()}`);
       const json = await response.json();
@@ -3315,7 +3459,28 @@ function AdminTeamPerformancePanel({
     } finally {
       setDrilldownLoading(false);
     }
-  }, [period]);
+  }, []);
+
+  const handleMetricClick = React.useCallback(async (employee: AdminPerformanceRow, metric: TeamPerformanceMetricKey) => {
+    const metricLabel = teamPerformanceMetricLabels[metric] ?? metric;
+    const payload = {
+      marketerId: employee.id,
+      marketerName: employee.name,
+      metric,
+      metricLabel,
+    } satisfies TeamPerformanceDrilldownPayload;
+
+    setDrilldownPayload(payload);
+    setDrilldownPeriod(period);
+    setDrilldownOpen(true);
+    await loadDrilldown(payload, period);
+  }, [loadDrilldown, period]);
+
+  const handleDrilldownPeriodChange = React.useCallback(async (nextPeriod: TeamPerformancePeriod) => {
+    if (!drilldownPayload || nextPeriod === drilldownPeriod) return;
+    setDrilldownPeriod(nextPeriod);
+    await loadDrilldown(drilldownPayload, nextPeriod);
+  }, [drilldownPayload, drilldownPeriod, loadDrilldown]);
 
   const openMarketersPage = React.useCallback(() => {
     router.push(rolePath(workspace.user.role, "users"), { scroll: false });
@@ -3426,7 +3591,7 @@ function AdminTeamPerformancePanel({
 
       <FormModal
         open={drilldownOpen}
-        title={drilldownPayload ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} - ${performancePeriodLabels[period]}` : "Team performance drill-down"}
+        title={drilldownPayload ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} - ${performancePeriodLabels[drilldownPeriod]}` : "Team performance drill-down"}
         onClose={closeDrilldown}
         panelClassName="w-[96vw] max-w-[1180px]"
         contentClassName="min-h-0 p-4 sm:p-5"
@@ -3439,6 +3604,24 @@ function AdminTeamPerformancePanel({
           </div>
         ) : (
           <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {teamPerformancePeriods.map((period) => {
+                const active = drilldownPeriod === period;
+                return (
+                  <button
+                    key={period}
+                    type="button"
+                    onClick={() => void handleDrilldownPeriodChange(period)}
+                    className={cn(
+                      "inline-flex items-center rounded-full border px-4 py-2 text-sm font-bold transition",
+                      active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-blue-100 hover:text-slate-900",
+                    )}
+                  >
+                    {performancePeriodLabels[period]}
+                  </button>
+                );
+              })}
+            </div>
             <p className="text-sm font-semibold text-slate-600">
               {drilldownRows.length ? `${drilldownRows.length} of ${drilldownCount}` : "No records found for this metric."}
             </p>
