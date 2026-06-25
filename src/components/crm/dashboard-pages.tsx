@@ -2869,11 +2869,18 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
     }
   }, [drilldownOpen, performancePeriod]);
 
-  const loadDrilldown = React.useCallback(async (payload: TeamPerformanceDrilldownPayload, selectedPeriod: TeamPerformancePeriod) => {
+  const loadDrilldown = React.useCallback(async (
+    payload: TeamPerformanceDrilldownPayload,
+    selectedPeriod: TeamPerformancePeriod,
+    options?: { preserveExisting?: boolean },
+  ) => {
+    const preserveExisting = options?.preserveExisting ?? false;
     setDrilldownLoading(true);
     setDrilldownError("");
-    setDrilldownRows([]);
-    setDrilldownCount(0);
+    if (!preserveExisting) {
+      setDrilldownRows([]);
+      setDrilldownCount(0);
+    }
 
     try {
       const params = new URLSearchParams({
@@ -2908,7 +2915,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
   const handleDrilldownPeriodChange = React.useCallback(async (nextPeriod: TeamPerformancePeriod) => {
     if (!drilldownPayload || nextPeriod === drilldownPeriod) return;
     setDrilldownPeriod(nextPeriod);
-    await loadDrilldown(drilldownPayload, nextPeriod);
+    await loadDrilldown(drilldownPayload, nextPeriod, { preserveExisting: true });
   }, [drilldownPayload, drilldownPeriod, loadDrilldown]);
 
   const closeDrilldown = React.useCallback(() => {
@@ -2993,50 +3000,62 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
         panelClassName="w-[96vw] max-w-[1180px]"
         contentClassName="min-h-0 p-4 sm:p-5"
       >
-        {drilldownLoading ? (
-          <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-600">Loading records...</p>
-        ) : drilldownError ? (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
-            {drilldownError}
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {teamPerformancePeriods.map((period) => {
+              const active = drilldownPeriod === period;
+              return (
+                <button
+                  key={period}
+                  type="button"
+                  onClick={() => void handleDrilldownPeriodChange(period)}
+                  className={cn(
+                    "inline-flex items-center rounded-full border px-4 py-2 text-sm font-bold transition",
+                    active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-blue-100 hover:text-slate-900",
+                  )}
+                >
+                  {performancePeriodLabels[period]}
+                </button>
+              );
+            })}
           </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              {teamPerformancePeriods.map((period) => {
-                const active = drilldownPeriod === period;
-                return (
-                  <button
-                    key={period}
-                    type="button"
-                    onClick={() => void handleDrilldownPeriodChange(period)}
-                    className={cn(
-                      "inline-flex items-center rounded-full border px-4 py-2 text-sm font-bold transition",
-                      active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-blue-100 hover:text-slate-900",
-                    )}
-                  >
-                    {performancePeriodLabels[period]}
-                  </button>
-                );
-              })}
+          <p className="text-sm font-semibold text-slate-600">
+            {drilldownRows.length ? `${drilldownRows.length} of ${drilldownCount}` : "No records found for this metric."}
+          </p>
+          {drilldownError ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+              {drilldownError}
             </div>
-            <p className="text-sm font-semibold text-slate-600">
-              {drilldownRows.length ? `${drilldownRows.length} of ${drilldownCount}` : "No records found for this metric."}
-            </p>
+          ) : null}
 
-            {drilldownRows.length ? (
-              <TeamPerformanceDrilldownTable
-                rows={drilldownRows}
-                workspace={workspace}
-                marketerId={drilldownPayload?.marketerId ?? ""}
-                marketerName={drilldownPayload?.marketerName ?? "Marketer"}
-              />
-            ) : (
-              <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
-                No records found for this metric in selected period.
-              </p>
-            )}
-          </div>
-        )}
+          {drilldownLoading && !drilldownRows.length ? (
+            <div className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-600">Loading records...</div>
+          ) : (
+            <div className="relative min-h-[220px]">
+              <div className={cn("transition-opacity duration-200", drilldownLoading ? "opacity-60" : "opacity-100")}>
+                {drilldownRows.length ? (
+                  <TeamPerformanceDrilldownTable
+                    rows={drilldownRows}
+                    workspace={workspace}
+                    marketerId={drilldownPayload?.marketerId ?? ""}
+                    marketerName={drilldownPayload?.marketerName ?? "Marketer"}
+                  />
+                ) : (
+                  <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+                    No records found for this metric in selected period.
+                  </p>
+                )}
+              </div>
+              {drilldownLoading ? (
+                <div className="pointer-events-none absolute inset-0 flex items-start justify-end rounded-xl bg-white/35 px-3 py-2 backdrop-blur-[1px]">
+                  <span className="rounded-full border border-blue-100 bg-white px-3 py-1 text-xs font-bold text-blue-700 shadow-sm">
+                    Refreshing...
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
       </FormModal>
     </div>
   );
@@ -3433,11 +3452,18 @@ function AdminTeamPerformancePanel({
     setDrilldownLoading(false);
   }, []);
 
-  const loadDrilldown = React.useCallback(async (payload: TeamPerformanceDrilldownPayload, selectedPeriod: TeamPerformancePeriod) => {
+  const loadDrilldown = React.useCallback(async (
+    payload: TeamPerformanceDrilldownPayload,
+    selectedPeriod: TeamPerformancePeriod,
+    options?: { preserveExisting?: boolean },
+  ) => {
+    const preserveExisting = options?.preserveExisting ?? false;
     setDrilldownLoading(true);
     setDrilldownError("");
-    setDrilldownRows([]);
-    setDrilldownCount(0);
+    if (!preserveExisting) {
+      setDrilldownRows([]);
+      setDrilldownCount(0);
+    }
 
     try {
       const params = new URLSearchParams({
@@ -3479,7 +3505,7 @@ function AdminTeamPerformancePanel({
   const handleDrilldownPeriodChange = React.useCallback(async (nextPeriod: TeamPerformancePeriod) => {
     if (!drilldownPayload || nextPeriod === drilldownPeriod) return;
     setDrilldownPeriod(nextPeriod);
-    await loadDrilldown(drilldownPayload, nextPeriod);
+    await loadDrilldown(drilldownPayload, nextPeriod, { preserveExisting: true });
   }, [drilldownPayload, drilldownPeriod, loadDrilldown]);
 
   const openMarketersPage = React.useCallback(() => {
@@ -3596,50 +3622,62 @@ function AdminTeamPerformancePanel({
         panelClassName="w-[96vw] max-w-[1180px]"
         contentClassName="min-h-0 p-4 sm:p-5"
       >
-        {drilldownLoading ? (
-          <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-600">Loading records...</p>
-        ) : drilldownError ? (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
-            {drilldownError}
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {teamPerformancePeriods.map((period) => {
+              const active = drilldownPeriod === period;
+              return (
+                <button
+                  key={period}
+                  type="button"
+                  onClick={() => void handleDrilldownPeriodChange(period)}
+                  className={cn(
+                    "inline-flex items-center rounded-full border px-4 py-2 text-sm font-bold transition",
+                    active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-blue-100 hover:text-slate-900",
+                  )}
+                >
+                  {performancePeriodLabels[period]}
+                </button>
+              );
+            })}
           </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              {teamPerformancePeriods.map((period) => {
-                const active = drilldownPeriod === period;
-                return (
-                  <button
-                    key={period}
-                    type="button"
-                    onClick={() => void handleDrilldownPeriodChange(period)}
-                    className={cn(
-                      "inline-flex items-center rounded-full border px-4 py-2 text-sm font-bold transition",
-                      active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-blue-100 hover:text-slate-900",
-                    )}
-                  >
-                    {performancePeriodLabels[period]}
-                  </button>
-                );
-              })}
+          <p className="text-sm font-semibold text-slate-600">
+            {drilldownRows.length ? `${drilldownRows.length} of ${drilldownCount}` : "No records found for this metric."}
+          </p>
+          {drilldownError ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+              {drilldownError}
             </div>
-            <p className="text-sm font-semibold text-slate-600">
-              {drilldownRows.length ? `${drilldownRows.length} of ${drilldownCount}` : "No records found for this metric."}
-            </p>
+          ) : null}
 
-            {drilldownRows.length ? (
-              <TeamPerformanceDrilldownTable
-                rows={drilldownRows}
-                workspace={workspace}
-                marketerId={drilldownPayload?.marketerId ?? ""}
-                marketerName={drilldownPayload?.marketerName ?? "Marketer"}
-              />
-            ) : (
-              <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
-                No records found for this metric in selected period.
-              </p>
-            )}
-          </div>
-        )}
+          {drilldownLoading && !drilldownRows.length ? (
+            <div className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-600">Loading records...</div>
+          ) : (
+            <div className="relative min-h-[220px]">
+              <div className={cn("transition-opacity duration-200", drilldownLoading ? "opacity-60" : "opacity-100")}>
+                {drilldownRows.length ? (
+                  <TeamPerformanceDrilldownTable
+                    rows={drilldownRows}
+                    workspace={workspace}
+                    marketerId={drilldownPayload?.marketerId ?? ""}
+                    marketerName={drilldownPayload?.marketerName ?? "Marketer"}
+                  />
+                ) : (
+                  <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+                    No records found for this metric in selected period.
+                  </p>
+                )}
+              </div>
+              {drilldownLoading ? (
+                <div className="pointer-events-none absolute inset-0 flex items-start justify-end rounded-xl bg-white/35 px-3 py-2 backdrop-blur-[1px]">
+                  <span className="rounded-full border border-blue-100 bg-white px-3 py-1 text-xs font-bold text-blue-700 shadow-sm">
+                    Refreshing...
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
       </FormModal>
     </SupervisorSurfaceCard>
   );
