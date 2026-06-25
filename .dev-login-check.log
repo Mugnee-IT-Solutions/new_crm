@@ -1,0 +1,19 @@
+
+> new_crm@0.1.0 predev
+> node scripts/clean-next-dev.mjs
+
+
+> new_crm@0.1.0 dev
+> next dev --hostname 127.0.0.1 --port 3006
+
+▲ Next.js 16.2.9 (Turbopack)
+- Local:         http://127.0.0.1:3006
+- Network:       http://127.0.0.1:3006
+- Environments: .env
+✓ Ready in 1883ms
+Creating turbopack project { dir: 'D:\\new_crm\\new_crm\\new_crm', testMode: true }
+- Experiments (use with caution):
+  ⨯ turbopackFileSystemCacheForDev
+
+○ Compiling /login ...
+ GET /login 200 in 5.8s (next.js: 5.4s, application-code: 417ms)

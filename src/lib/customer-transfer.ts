@@ -1216,16 +1216,16 @@ async function applyCustomerImportRows(
     return { inserted: 0, updated: 0, failed };
   }
 
+  const normalizeExistingCompanyKey = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
+  const normalizeRawJsonRecord = (value: Prisma.Prisma.JsonValue | null | undefined) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {} as Record<string, unknown>;
+    return value as Record<string, unknown>;
+  };
+
   const companyNames = rows.map((row) => row.companyName);
-  const scopedExistingWhere = await buildCustomerScopeWhere(prisma, { id: actor.id, role: actor.role });
   const existingCompanies = await prisma.customerCompany.findMany({
     where: {
-      AND: [
-        scopedExistingWhere,
-        {
-          OR: companyNames.map((name) => ({ name: { equals: name, mode: "insensitive" } })),
-        },
-      ],
+      OR: companyNames.map((name) => ({ name: { equals: name, mode: "insensitive" } })),
     },
     include: {
       contacts: { orderBy: { createdAt: "asc" } },
@@ -1259,6 +1259,7 @@ async function applyCustomerImportRows(
       const asString = normalizeText(value);
       if (asString === undefined) continue;
       if (key === "SL") continue;
+      if (["Created By", "Created By Role", "Created At"].includes(key) && normalizeText(base[key])) continue;
       merged[key] = asString;
     }
 
@@ -1282,7 +1283,8 @@ async function applyCustomerImportRows(
     }
 
     const existing = existingByName.get(rowKey);
-    const assignedRelation = { assignedTo: { connect: { id: ownerId } } };
+    const existingAssignedToId = (existing as (ExistingCustomerRecord & { assignedToId?: string | null }) | undefined)?.assignedToId;
+    const assignedRelation = existingAssignedToId ? {} : { assignedTo: { connect: { id: ownerId } } };
 
     const mergedRawData = existing
       ? mergeRawData((existing as { rawData?: Prisma.Prisma.JsonValue }).rawData, row.rawData)
@@ -1305,13 +1307,44 @@ async function applyCustomerImportRows(
     } as Prisma.Prisma.CustomerCompanyUpdateInput & { rawData?: Prisma.Prisma.JsonValue };
 
     if (existing) {
+      const contactCreateMutation = buildContactCreateMutation(row);
+      const phoneCreateMutation = buildPhoneCreateMutation(row);
+      const contactCreateItems = Array.isArray(contactCreateMutation?.create) ? contactCreateMutation.create : [];
+      const phoneCreateItems = Array.isArray(phoneCreateMutation.create) ? phoneCreateMutation.create : [];
+      const existingContactSignatures = new Set(
+        existing.contacts.map((contact) => `${(contact.name ?? "").trim().toLowerCase()}|${(contact.email ?? "").trim().toLowerCase()}|${(contact.mobile ?? "").trim()}`),
+      );
+      const newContacts = contactCreateItems.filter((contact) => {
+        const signature = `${(contact.name ?? "").trim().toLowerCase()}|${(contact.email ?? "").trim().toLowerCase()}|${(contact.mobile ?? "").trim()}`;
+        return signature !== "||" && !existingContactSignatures.has(signature);
+      });
+      const existingNumbers = new Set(existing.phoneNumbers.map((phoneNumber) => normalizeExistingCompanyKey(phoneNumber.number)));
+      const newPhoneNumbers = phoneCreateItems.filter((phoneNumber) => !existingNumbers.has(normalizeExistingCompanyKey(phoneNumber.number)));
+      const existingRaw = normalizeRawJsonRecord((existing as { rawData?: Prisma.Prisma.JsonValue }).rawData);
+      const existingCreatedBy = normalizeText(existingRaw["Created By"]);
+      const existingCreatedAt = normalizeText(existingRaw["Created At"]);
+
       updated += 1;
       operations.push(prisma.customerCompany.update({
         where: { id: existing.id },
         data: {
           ...companyPayload,
-          contacts: buildContactUpdateMutation(row, existing),
-          phoneNumbers: buildPhoneUpdateMutation(row, existing),
+          contactPerson: row.contactPerson ?? existing.contactPerson ?? companyPayload.contactPerson,
+          phone: row.primaryPhone || existing.phone || companyPayload.phone,
+          industry: row.industry ?? existing.industry ?? companyPayload.industry,
+          phone2: row.phone2 || existing.phone2 || companyPayload.phone2,
+          city: row.city ?? existing.city ?? companyPayload.city,
+          address: row.address ?? existing.address ?? companyPayload.address,
+          website: row.website ?? existing.website ?? companyPayload.website,
+          notes: row.note || existing.notes || companyPayload.notes,
+          rawData: {
+            ...mergedRawData,
+            ...(existingCreatedBy ? { "Created By": existingCreatedBy } : {}),
+            ...(normalizeText(existingRaw["Created By Role"]) ? { "Created By Role": existingRaw["Created By Role"] } : {}),
+            ...(existingCreatedAt ? { "Created At": existingCreatedAt } : {}),
+          } as Prisma.Prisma.InputJsonValue,
+          contacts: newContacts.length ? { create: newContacts } : undefined,
+          phoneNumbers: newPhoneNumbers.length ? { create: newPhoneNumbers } : undefined,
         },
       }));
       continue;

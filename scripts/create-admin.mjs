@@ -1,9 +1,10 @@
+import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import { syncDatabaseUrlEnv } from "../prisma/database-url.js";
 
-const ADMIN_EMAIL = "admin@crm.com";
-const ADMIN_PASSWORD = "Crm@admin1234";
+const ADMIN_EMAIL = (process.env.CRM_ADMIN_EMAIL || "admin@crm.com").trim().toLowerCase();
+const ADMIN_PASSWORD = process.env.CRM_ADMIN_PASSWORD || "Crm@admin1234";
 const ADMIN_MOBILE = (process.env.CRM_ADMIN_MOBILE || "01700000001").trim();
 
 const connectionString = syncDatabaseUrlEnv();

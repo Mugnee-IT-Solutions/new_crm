@@ -49,6 +49,11 @@ function formatNotificationType(type: string) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function hasExplicitTime(date: Date | null | undefined) {
+  if (!date) return false;
+  return date.getHours() !== 0 || date.getMinutes() !== 0 || date.getSeconds() !== 0 || date.getMilliseconds() !== 0;
+}
+
 function taskDueAt(task: { taskTime: Date | null; dueDate: Date | null; taskDate: Date }) {
   return task.taskTime ?? task.dueDate ?? task.taskDate;
 }
@@ -146,6 +151,9 @@ async function syncDueNotifications(user: RequestUser) {
     }),
   ]);
 
+  const eligibleFollowUps = dueFollowUps.filter((followUp) =>
+    hasExplicitTime(followUp.followUpDate) && followUp.followUpDate.getTime() <= now.getTime()
+  );
   const overdueTaskRows = overdueTasks.filter((task) => isBefore(taskDueAt(task), now));
   const reminderTaskRows = overdueTasks.filter((task) => {
     const reminderAt = taskReminderAt(task);
@@ -157,11 +165,11 @@ async function syncDueNotifications(user: RequestUser) {
     where: {
       recipientId: user.id,
       OR: [
-        ...(dueFollowUps.length
+        ...(eligibleFollowUps.length
           ? [
               {
                 type: { in: ["FOLLOW_UP_REMINDER", "FOLLOW_UP_OVERDUE"] as NotificationType[] },
-                followUpId: { in: dueFollowUps.map((item) => item.id) },
+                followUpId: { in: eligibleFollowUps.map((item) => item.id) },
               },
             ]
           : []),
@@ -205,7 +213,7 @@ async function syncDueNotifications(user: RequestUser) {
   );
 
   const notificationsToCreate = [
-    ...dueFollowUps.flatMap((followUp) => {
+    ...eligibleFollowUps.flatMap((followUp) => {
       const type: NotificationType = isBefore(followUp.followUpDate, today) ? "FOLLOW_UP_OVERDUE" : "FOLLOW_UP_REMINDER";
       const key = `${type}:${followUp.id}`;
       if (existingFollowUpKeys.has(key)) return [];
@@ -263,7 +271,7 @@ async function syncDueNotifications(user: RequestUser) {
 
   if (!recipient?.email) return;
 
-  const followUpsNeedingEmail = dueFollowUps.filter((followUp) => !followUp.reminderSentAt);
+  const followUpsNeedingEmail = eligibleFollowUps.filter((followUp) => !followUp.reminderSentAt);
   for (const followUp of followUpsNeedingEmail) {
     const type: NotificationType = isBefore(followUp.followUpDate, today) ? "FOLLOW_UP_OVERDUE" : "FOLLOW_UP_REMINDER";
     const emailSent = await sendDueFollowUpEmail({

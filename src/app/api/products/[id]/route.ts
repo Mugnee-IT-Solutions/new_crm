@@ -1,20 +1,10 @@
 import { NextResponse } from "next/server";
 import { deleteProductEntry, getProductById, ProductInputError, updateProductEntry } from "@/lib/product-center";
+import { parseProductInputRequest } from "@/lib/product-request";
 import { requireRequestUser } from "@/lib/request-user";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type ProductBody = {
-  name?: string;
-  category?: string;
-  brand?: string;
-  price?: number | string;
-  imageUrl?: string;
-  description?: string;
-  specification?: string;
-  status?: "ACTIVE" | "INACTIVE";
-};
 
 export async function GET(_: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -45,22 +35,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ success: false, message: auth.message }, { status: auth.status });
     }
 
-    const body = (await request.json()) as ProductBody;
+    const input = await parseProductInputRequest(request);
     const { id } = await context.params;
 
     const updated = await updateProductEntry(
       { id: auth.user.id, role: auth.user.role, name: auth.user.name },
       id,
-      {
-        name: body.name?.trim() ?? "",
-        category: body.category?.trim() ?? "",
-        brand: body.brand?.trim(),
-        price: Number(body.price),
-        imageUrl: body.imageUrl?.trim(),
-        description: body.description?.trim(),
-        specification: body.specification?.trim(),
-        status: body.status ?? "ACTIVE",
-      },
+      { ...input, status: input.status ?? "ACTIVE" },
     );
 
     return NextResponse.json({ success: true, row: updated.row });

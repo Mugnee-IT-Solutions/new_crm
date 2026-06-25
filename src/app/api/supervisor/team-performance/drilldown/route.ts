@@ -102,6 +102,9 @@ export async function GET(request: Request) {
       id: string;
       type: "Lead" | "Task" | "Follow-up" | "Communication" | "Conversion" | "Sales";
       customerOrCompany: string;
+      companyId?: string | null;
+      companyHref?: string | null;
+      leadId?: string | null;
       leadName: string;
       contactPerson: string;
       phone: string;
@@ -115,6 +118,7 @@ export async function GET(request: Request) {
 
     let rows: DrilldownDetailRow[] = [];
     let count = 0;
+    const companyHrefFromId = (companyId?: string | null) => (companyId ? `/customers/${companyId}` : null);
 
     if (metric === "leads") {
       const leads = await prisma.lead.findMany({
@@ -124,6 +128,7 @@ export async function GET(request: Request) {
         },
         select: {
           id: true,
+          companyId: true,
           title: true,
           customerName: true,
           phone: true,
@@ -146,6 +151,9 @@ export async function GET(request: Request) {
         id: lead.id,
         type: "Lead",
         customerOrCompany: lead.company?.name || lead.customerName,
+        companyId: lead.companyId,
+        companyHref: companyHrefFromId(lead.companyId),
+        leadId: lead.id,
         leadName: normalizeLeadTitle(lead.title, lead.customerName),
         contactPerson: normalizeContactPerson(lead.company?.contactPerson),
         phone: pickPhone(lead.phone || lead.company?.phone),
@@ -167,6 +175,7 @@ export async function GET(request: Request) {
           },
           select: {
             id: true,
+            companyId: true,
             title: true,
             customerName: true,
             phone: true,
@@ -191,6 +200,7 @@ export async function GET(request: Request) {
           },
           select: {
             id: true,
+            companyId: true,
             title: true,
             description: true,
             status: true,
@@ -198,7 +208,7 @@ export async function GET(request: Request) {
             leadName: true,
             companyName: true,
             company: { select: { name: true, contactPerson: true, phone: true } },
-            lead: { select: { title: true, customerName: true, phone: true } },
+            lead: { select: { id: true, title: true, customerName: true, phone: true, companyId: true } },
           },
           orderBy: { dueDate: "asc" },
         }),
@@ -209,6 +219,7 @@ export async function GET(request: Request) {
           },
           select: {
             id: true,
+            companyId: true,
             method: true,
             note: true,
             nextDiscussionPlan: true,
@@ -216,7 +227,9 @@ export async function GET(request: Request) {
             followUpDate: true,
             lead: {
               select: {
+                id: true,
                 title: true,
+                companyId: true,
                 customerName: true,
                 phone: true,
                 company: { select: { name: true, contactPerson: true, phone: true } },
@@ -234,13 +247,16 @@ export async function GET(request: Request) {
           },
           select: {
             id: true,
+            companyId: true,
             method: true,
             note: true,
             discussionTopic: true,
             communicationAt: true,
             lead: {
               select: {
+                id: true,
                 title: true,
+                companyId: true,
                 customerName: true,
                 phone: true,
                 company: { select: { name: true, contactPerson: true, phone: true } },
@@ -261,6 +277,7 @@ export async function GET(request: Request) {
           },
           select: {
             id: true,
+            companyId: true,
             title: true,
             customerName: true,
             phone: true,
@@ -286,6 +303,9 @@ export async function GET(request: Request) {
           id: `lead-${lead.id}`,
           type: "Lead",
           customerOrCompany: lead.company?.name || lead.customerName,
+          companyId: lead.companyId,
+          companyHref: companyHrefFromId(lead.companyId),
+          leadId: lead.id,
           leadName: normalizeLeadTitle(lead.title, lead.customerName),
           contactPerson: normalizeContactPerson(lead.company?.contactPerson),
           phone: pickPhone(lead.phone || lead.company?.phone),
@@ -299,10 +319,14 @@ export async function GET(request: Request) {
       }
 
       for (const task of tasks) {
+        const companyId = task.companyId ?? task.lead?.companyId ?? null;
         merged.push({
           id: `task-${task.id}`,
           type: "Task",
           customerOrCompany: task.company?.name || task.companyName || task.lead?.customerName || "Company",
+          companyId,
+          companyHref: companyHrefFromId(companyId),
+          leadId: task.lead?.id ?? null,
           leadName: task.leadName || task.lead?.title || "-",
           contactPerson: normalizeContactPerson(task.company?.contactPerson),
           phone: pickPhone(task.company?.phone || task.lead?.phone),
@@ -316,10 +340,14 @@ export async function GET(request: Request) {
       }
 
       for (const followUp of followUps) {
+        const companyId = followUp.companyId ?? followUp.lead?.companyId ?? null;
         merged.push({
           id: `followup-${followUp.id}`,
           type: "Follow-up",
           customerOrCompany: followUp.company?.name || followUp.lead?.company?.name || followUp.lead?.customerName || "Customer",
+          companyId,
+          companyHref: companyHrefFromId(companyId),
+          leadId: followUp.lead?.id ?? null,
           leadName: normalizeLeadTitle(followUp.lead?.title, followUp.lead?.customerName),
           contactPerson: normalizeContactPerson(followUp.company?.contactPerson || followUp.lead?.company?.contactPerson),
           phone: pickPhone(followUp.lead?.phone || followUp.company?.phone),
@@ -333,10 +361,14 @@ export async function GET(request: Request) {
       }
 
       for (const communication of communications) {
+        const companyId = communication.companyId ?? communication.lead?.companyId ?? null;
         merged.push({
           id: `communication-${communication.id}`,
           type: "Communication",
           customerOrCompany: communication.company?.name || communication.lead?.company?.name || communication.lead?.customerName || "Company",
+          companyId,
+          companyHref: companyHrefFromId(companyId),
+          leadId: communication.lead?.id ?? null,
           leadName: normalizeLeadTitle(communication.lead?.title, communication.lead?.customerName),
           contactPerson: normalizeContactPerson(communication.company?.contactPerson || communication.lead?.company?.contactPerson),
           phone: pickPhone(communication.lead?.phone || communication.company?.phone),
@@ -354,6 +386,9 @@ export async function GET(request: Request) {
           id: `sale-${lead.id}`,
           type: "Sales",
           customerOrCompany: lead.company?.name || lead.customerName,
+          companyId: lead.companyId,
+          companyHref: companyHrefFromId(lead.companyId),
+          leadId: lead.id,
           leadName: normalizeLeadTitle(lead.title, lead.customerName),
           contactPerson: normalizeContactPerson(lead.company?.contactPerson),
           phone: pickPhone(lead.phone || lead.company?.phone),
@@ -381,6 +416,7 @@ export async function GET(request: Request) {
           : whereBase,
         select: {
           id: true,
+          companyId: true,
           method: true,
           note: true,
           nextDiscussionPlan: true,
@@ -389,7 +425,9 @@ export async function GET(request: Request) {
           createdAt: true,
           lead: {
             select: {
+              id: true,
               title: true,
+              companyId: true,
               customerName: true,
               phone: true,
               company: { select: { name: true, contactPerson: true, phone: true } },
@@ -401,20 +439,27 @@ export async function GET(request: Request) {
         orderBy: { followUpDate: "desc" },
       });
 
-      rows = followUps.map((followUp) => ({
-        id: followUp.id,
-        type: "Follow-up",
-        customerOrCompany: followUp.company?.name || followUp.lead?.company?.name || followUp.lead?.customerName || "Customer",
-        leadName: normalizeLeadTitle(followUp.lead?.title, followUp.lead?.customerName),
-        contactPerson: normalizeContactPerson(followUp.company?.contactPerson || followUp.lead?.company?.contactPerson),
-        phone: pickPhone(followUp.lead?.phone || followUp.company?.phone),
-        method: followUp.method || "Follow-up",
-        title: followUp.task?.title || followUp.nextDiscussionPlan || followUp.note || "Follow-up",
-        dateTime: formatDisplayDate(followUp.followUpDate),
-        sortDate: followUp.followUpDate.getTime(),
-        status: followUp.status,
-        note: followUp.note || "-",
-      }));
+      rows = followUps.map((followUp) => {
+        const companyId = followUp.companyId ?? followUp.lead?.companyId ?? null;
+
+        return {
+          id: followUp.id,
+          type: "Follow-up",
+          customerOrCompany: followUp.company?.name || followUp.lead?.company?.name || followUp.lead?.customerName || "Customer",
+          companyId,
+          companyHref: companyHrefFromId(companyId),
+          leadId: followUp.lead?.id ?? null,
+          leadName: normalizeLeadTitle(followUp.lead?.title, followUp.lead?.customerName),
+          contactPerson: normalizeContactPerson(followUp.company?.contactPerson || followUp.lead?.company?.contactPerson),
+          phone: pickPhone(followUp.lead?.phone || followUp.company?.phone),
+          method: followUp.method || "Follow-up",
+          title: followUp.task?.title || followUp.nextDiscussionPlan || followUp.note || "Follow-up",
+          dateTime: formatDisplayDate(followUp.followUpDate),
+          sortDate: followUp.followUpDate.getTime(),
+          status: followUp.status,
+          note: followUp.note || "-",
+        };
+      });
     }
 
     if (metric === "pendingTasks") {
@@ -426,6 +471,7 @@ export async function GET(request: Request) {
         },
         select: {
           id: true,
+          companyId: true,
           title: true,
           description: true,
           status: true,
@@ -433,25 +479,32 @@ export async function GET(request: Request) {
           leadName: true,
           companyName: true,
           company: { select: { name: true, contactPerson: true, phone: true } },
-          lead: { select: { title: true, customerName: true, phone: true } },
+          lead: { select: { id: true, title: true, customerName: true, phone: true, companyId: true } },
         },
         orderBy: { dueDate: "asc" },
       });
 
-      rows = tasks.map((task) => ({
-        id: task.id,
-        type: "Task",
-        customerOrCompany: task.company?.name || task.companyName || task.lead?.customerName || "Company",
-        leadName: task.leadName || task.lead?.title || "-",
-        contactPerson: normalizeContactPerson(task.company?.contactPerson),
-        phone: pickPhone(task.company?.phone || task.lead?.phone),
-        method: "Task",
-        title: task.title,
-        dateTime: formatDisplayDate(task.updatedAt),
-        sortDate: task.updatedAt.getTime(),
-        status: task.status,
-        note: task.description || "-",
-      }));
+      rows = tasks.map((task) => {
+        const companyId = task.companyId ?? task.lead?.companyId ?? null;
+
+        return {
+          id: task.id,
+          type: "Task",
+          customerOrCompany: task.company?.name || task.companyName || task.lead?.customerName || "Company",
+          companyId,
+          companyHref: companyHrefFromId(companyId),
+          leadId: task.lead?.id ?? null,
+          leadName: task.leadName || task.lead?.title || "-",
+          contactPerson: normalizeContactPerson(task.company?.contactPerson),
+          phone: pickPhone(task.company?.phone || task.lead?.phone),
+          method: "Task",
+          title: task.title,
+          dateTime: formatDisplayDate(task.updatedAt),
+          sortDate: task.updatedAt.getTime(),
+          status: task.status,
+          note: task.description || "-",
+        };
+      });
     }
 
     if (metric === "sales" || metric === "conversion") {
@@ -463,6 +516,7 @@ export async function GET(request: Request) {
         },
         select: {
           id: true,
+          companyId: true,
           title: true,
           customerName: true,
           phone: true,
@@ -484,6 +538,9 @@ export async function GET(request: Request) {
         id: lead.id,
         type: metric === "sales" ? "Sales" : "Conversion",
         customerOrCompany: lead.company?.name || lead.customerName,
+        companyId: lead.companyId,
+        companyHref: companyHrefFromId(lead.companyId),
+        leadId: lead.id,
         leadName: normalizeLeadTitle(lead.title, lead.customerName),
         contactPerson: normalizeContactPerson(lead.company?.contactPerson),
         phone: pickPhone(lead.phone || lead.company?.phone),
@@ -511,13 +568,16 @@ export async function GET(request: Request) {
         },
         select: {
           id: true,
+          companyId: true,
           method: true,
           note: true,
           discussionTopic: true,
           communicationAt: true,
           lead: {
             select: {
+              id: true,
               title: true,
+              companyId: true,
               customerName: true,
               phone: true,
               company: { select: { name: true, contactPerson: true, phone: true } },
@@ -539,6 +599,7 @@ export async function GET(request: Request) {
         },
         select: {
           id: true,
+          companyId: true,
           method: true,
           note: true,
           nextDiscussionPlan: true,
@@ -546,7 +607,9 @@ export async function GET(request: Request) {
           status: true,
           lead: {
             select: {
+              id: true,
               title: true,
+              companyId: true,
               customerName: true,
               phone: true,
               company: { select: { name: true, contactPerson: true, phone: true } },
@@ -562,10 +625,14 @@ export async function GET(request: Request) {
 
       for (const communication of communications) {
         const companyName = communication.company?.name || communication.lead?.company?.name || communication.lead?.customerName;
+        const companyId = communication.companyId ?? communication.lead?.companyId ?? null;
         merged.push({
           id: communication.id,
           type: "Communication",
           customerOrCompany: companyName || "Company",
+          companyId,
+          companyHref: companyHrefFromId(companyId),
+          leadId: communication.lead?.id ?? null,
           leadName: normalizeLeadTitle(communication.lead?.title, communication.lead?.customerName),
           contactPerson: normalizeContactPerson(communication.company?.contactPerson || communication.lead?.company?.contactPerson),
           phone: pickPhone(communication.lead?.phone || communication.company?.phone),
@@ -580,10 +647,14 @@ export async function GET(request: Request) {
 
       for (const followUp of followUps) {
         const companyName = followUp.company?.name || followUp.lead?.company?.name || followUp.lead?.customerName;
+        const companyId = followUp.companyId ?? followUp.lead?.companyId ?? null;
         merged.push({
           id: followUp.id,
           type: "Follow-up",
           customerOrCompany: companyName || "Company",
+          companyId,
+          companyHref: companyHrefFromId(companyId),
+          leadId: followUp.lead?.id ?? null,
           leadName: normalizeLeadTitle(followUp.lead?.title, followUp.lead?.customerName),
           contactPerson: normalizeContactPerson(followUp.company?.contactPerson || followUp.lead?.company?.contactPerson),
           phone: pickPhone(followUp.lead?.phone || followUp.company?.phone),

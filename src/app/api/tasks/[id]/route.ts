@@ -26,6 +26,7 @@ type UpdateTaskBody = {
   customerContactPerson?: string;
   customerPhone?: string;
   customerCity?: string;
+  taskDateTimeTzOffset?: number;
 };
 
 function parsePriority(value: unknown): TaskPriorityFilter {
@@ -33,6 +34,24 @@ function parsePriority(value: unknown): TaskPriorityFilter {
     return value;
   }
   return "MEDIUM";
+}
+
+function parseTaskDateTimeWithOffset(value: string, offsetMinutes?: number) {
+  if (!value) return null;
+
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!match || !Number.isFinite(offsetMinutes)) {
+    return parseTaskDateTimeInput(value);
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const parsed = new Date(Date.UTC(year, month, day, hour, minute) + Number(offsetMinutes) * 60 * 1000);
+
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -57,7 +76,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const customerCity = body.customerCity?.trim();
     const priority = parsePriority(body.priority);
     const dateInput = body.taskDateTime?.trim() || body.taskDate?.trim() || "";
-    const taskDateTime = dateInput ? parseTaskDateTimeInput(dateInput) : null;
+    const taskDateTime = dateInput ? parseTaskDateTimeWithOffset(dateInput, Number(body.taskDateTimeTzOffset)) : null;
 
     if (!title) {
       return NextResponse.json({ success: false, message: "Task title is required." }, { status: 400 });

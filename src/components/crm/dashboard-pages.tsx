@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { gsap } from "gsap";
 import {
   ArrowRight,
@@ -41,7 +41,7 @@ import { useTaskCounterContext } from "@/components/app/app-shell";
 import type { CrmWorkspace } from "@/lib/crm-data";
 import { getCrmPeriodWindow } from "@/lib/crm-time";
 import { cn, initials, rolePath, type Role } from "@/lib/utils";
-import { CompletedWorkList, type TodayTaskApiRow, TaskCreateModal, TaskFollowUpModal, TodayWorkQueueList, todayWorkCounts, matchesTodayWorkFilter, sortTodayWorkQueue, WorkCompletionModal, type TodayWorkFilter } from "@/components/crm/resource-pages";
+import { CompletedWorkList, FollowUpEditModal, type TodayTaskApiRow, TaskCreateModal, TaskFollowUpModal, TodayWorkQueueList, todayWorkCounts, matchesTodayWorkFilter, sortTodayWorkQueue, WorkCompletionModal, type TodayWorkFilter } from "@/components/crm/resource-pages";
 import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
 import { updateFollowUpStatusAction, updateTaskStatusAction } from "@/lib/crm-actions";
 import { FormModal } from "@/components/shared/form-modal";
@@ -573,6 +573,9 @@ type TeamPerformanceDrilldownRow = {
   id: string;
   type: string;
   customerOrCompany: string;
+  companyId?: string | null;
+  companyHref?: string | null;
+  leadId?: string | null;
   leadName: string;
   contactPerson: string;
   phone: string;
@@ -694,39 +697,350 @@ const isTeamPerformanceMetricClickable = (
   return teamPerformanceMetricValueNumber(value) > 0;
 };
 
-function TeamPerformanceDrilldownTable({ rows }: { rows: TeamPerformanceDrilldownRow[] }) {
+function normalizeDrilldownLookup(value?: string | null) {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function drilldownStatusVariant(status: string) {
+  const normalized = status.trim().toUpperCase();
+  if (normalized.includes("COMPLETED") || normalized.includes("WON")) return "success" as const;
+  if (normalized.includes("OVERDUE") || normalized.includes("LOST")) return "danger" as const;
+  if (normalized.includes("TODAY") || normalized.includes("PENDING")) return "warning" as const;
+  if (normalized.includes("FOLLOW")) return "violet" as const;
+  return "neutral" as const;
+}
+
+function activityCategoryLabel(activity: CrmWorkspace["activities"][number]) {
+  switch (activity.category) {
+    case "CALL":
+      return "Phone call";
+    case "WHATSAPP":
+      return "WhatsApp";
+    case "EMAIL":
+      return "Email";
+    case "MEETING":
+      return "Meeting";
+    case "FOLLOW_UP":
+      return "Follow-up";
+    case "TASK":
+      return "Task";
+    case "LEAD":
+      return "Lead";
+    case "QUOTATION":
+      return "Quotation";
+    default:
+      return "Activity";
+  }
+}
+
+function TeamPerformanceDrilldownTable({
+  rows,
+  workspace,
+  marketerId,
+  marketerName,
+}: {
+  rows: TeamPerformanceDrilldownRow[];
+  workspace: CrmWorkspace;
+  marketerId: string;
+  marketerName: string;
+}) {
+  const pageSize = 8;
+  const [page, setPage] = React.useState(1);
+  const [selectedRecordKey, setSelectedRecordKey] = React.useState<string | null>(null);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedRows = React.useMemo(() => rows.slice((currentPage - 1) * pageSize, currentPage * pageSize), [currentPage, rows]);
+  const selectedRecord = React.useMemo(() => (
+    rows.find((row) => `${row.type}:${row.id}:${row.dateTime}` === selectedRecordKey) ?? null
+  ), [rows, selectedRecordKey]);
+
+  const selectedCompany = React.useMemo(() => {
+    if (!selectedRecord) return null;
+    const fallbackName = normalizeDrilldownLookup(selectedRecord.customerOrCompany);
+    return workspace.companies.find((company) => (
+      (selectedRecord.companyId && company.id === selectedRecord.companyId)
+      || normalizeDrilldownLookup(company.name) === fallbackName
+    )) ?? null;
+  }, [selectedRecord, workspace.companies]);
+
+  const relatedRows = React.useMemo(() => {
+    if (!selectedRecord) return [];
+    const selectedKey = normalizeDrilldownLookup(selectedRecord.customerOrCompany);
+    return rows
+      .filter((row) => (
+        (selectedRecord.companyId && row.companyId && selectedRecord.companyId === row.companyId)
+        || normalizeDrilldownLookup(row.customerOrCompany) === selectedKey
+      ))
+      .slice(0, 8);
+  }, [rows, selectedRecord]);
+
+  const relatedActivities = React.useMemo(() => {
+    if (!selectedRecord) return [];
+    const customerHref = selectedRecord.companyHref ?? (selectedRecord.companyId ? `/customers/${selectedRecord.companyId}` : null);
+    const customerKey = normalizeDrilldownLookup(selectedRecord.customerOrCompany);
+    const marketerKey = normalizeDrilldownLookup(marketerName);
+
+    return workspace.activities
+      .filter((activity) => {
+        const matchesMarketer = (
+          activity.employeeId === marketerId
+          || normalizeDrilldownLookup(activity.employeeName) === marketerKey
+          || normalizeDrilldownLookup(activity.createdBy) === marketerKey
+        );
+
+        if (!matchesMarketer) return false;
+        if (customerHref && (activity.customerHref === customerHref || activity.relatedCustomerHref === customerHref)) return true;
+        return normalizeDrilldownLookup(activity.customerName) === customerKey;
+      })
+      .sort((left, right) => new Date(right.createdAtValue ?? 0).getTime() - new Date(left.createdAtValue ?? 0).getTime())
+      .slice(0, 10);
+  }, [marketerId, marketerName, selectedRecord, workspace.activities]);
+
+  const activitySummary = React.useMemo(() => {
+    return relatedActivities.reduce((summary, activity) => {
+      switch (activity.category) {
+        case "CALL":
+          summary.calls += 1;
+          break;
+        case "WHATSAPP":
+          summary.whatsapp += 1;
+          break;
+        case "MEETING":
+          summary.meetings += 1;
+          break;
+        case "FOLLOW_UP":
+          summary.followUps += 1;
+          break;
+        case "TASK":
+          summary.tasks += 1;
+          break;
+        default:
+          summary.other += 1;
+          break;
+      }
+
+      return summary;
+    }, { calls: 0, whatsapp: 0, meetings: 0, followUps: 0, tasks: 0, other: 0 });
+  }, [relatedActivities]);
+
+  const rowSummary = React.useMemo(() => {
+    return relatedRows.reduce((summary, row) => {
+      const method = row.method.toLowerCase();
+      if (method.includes("call") || method.includes("phone")) summary.calls += 1;
+      if (method.includes("follow")) summary.followUps += 1;
+      if (method.includes("meeting")) summary.meetings += 1;
+      if (method.includes("whatsapp")) summary.whatsapp += 1;
+      return summary;
+    }, { calls: 0, followUps: 0, meetings: 0, whatsapp: 0 });
+  }, [relatedRows]);
+
   return (
-    <div className="max-h-[min(56vh,540px)] max-w-full overflow-auto rounded-2xl border border-slate-200">
-      <table className="min-w-[1120px] w-full text-left text-sm">
-        <thead className="sticky top-0 z-[1] border-b border-slate-100 bg-white text-xs uppercase tracking-[0.12em] text-slate-400">
-          <tr>
-            <th className="px-3 py-2 font-bold">Company / Customer</th>
-            <th className="px-3 py-2 font-bold">Contact</th>
-            <th className="px-3 py-2 font-bold">Phone</th>
-            <th className="px-3 py-2 font-bold">Method</th>
-            <th className="px-3 py-2 font-bold">Type</th>
-            <th className="px-3 py-2 font-bold">Title</th>
-            <th className="px-3 py-2 font-bold">Date & Time</th>
-            <th className="px-3 py-2 font-bold">Status</th>
-            <th className="px-3 py-2 font-bold">Note</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {rows.map((record) => (
-            <tr key={record.id} className="hover:bg-slate-50/70">
-              <td className="max-w-[180px] truncate px-3 py-2">{record.customerOrCompany}</td>
-              <td className="max-w-[160px] truncate px-3 py-2">{record.contactPerson}</td>
-              <td className="px-3 py-2">{record.phone}</td>
-              <td className="px-3 py-2">{record.method}</td>
-              <td className="px-3 py-2">{record.type}</td>
-              <td className="max-w-[200px] truncate px-3 py-2">{record.title}</td>
-              <td className="px-3 py-2">{record.dateTime}</td>
-              <td className="px-3 py-2">{record.status}</td>
-              <td className="max-w-[220px] truncate px-3 py-2" title={record.note}>{record.note}</td>
+    <div className="relative space-y-4">
+      <div className="max-h-[min(56vh,540px)] max-w-full overflow-auto rounded-2xl border border-slate-200">
+        <table className="min-w-[1040px] w-full text-left text-sm">
+          <thead className="sticky top-0 z-[1] border-b border-slate-100 bg-white text-xs uppercase tracking-[0.12em] text-slate-400">
+            <tr>
+              <th className="px-3 py-2 font-bold">Company / Customer</th>
+              <th className="px-3 py-2 font-bold">Contact</th>
+              <th className="px-3 py-2 font-bold">Phone</th>
+              <th className="px-3 py-2 font-bold">Method</th>
+              <th className="px-3 py-2 font-bold">Title</th>
+              <th className="px-3 py-2 font-bold">Date & Time</th>
+              <th className="px-3 py-2 font-bold">Status</th>
+              <th className="px-3 py-2 font-bold">Note</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {pagedRows.map((record) => (
+              <tr key={`${record.type}-${record.id}-${record.dateTime}`} className="align-top hover:bg-slate-50/70">
+                <td className="max-w-[180px] px-3 py-3 font-semibold text-slate-900">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRecordKey(`${record.type}:${record.id}:${record.dateTime}`)}
+                      className="text-left text-blue-700 transition hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                    >
+                      {record.customerOrCompany}
+                  </button>
+                </td>
+                <td className="max-w-[160px] px-3 py-3 text-slate-700">{record.contactPerson}</td>
+                <td className="px-3 py-3 text-slate-700">{record.phone}</td>
+                <td className="px-3 py-3 text-slate-700">{record.method}</td>
+                <td className="max-w-[220px] px-3 py-3 text-slate-700">{record.title}</td>
+                <td className="px-3 py-3 text-slate-700">{record.dateTime}</td>
+                <td className="px-3 py-3 text-slate-700">{record.status}</td>
+                <td className="min-w-[320px] whitespace-pre-wrap px-3 py-3 leading-6 text-slate-800">{record.note || "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {rows.length > pageSize ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+          <p className="text-sm font-semibold text-slate-600">
+            Showing {Math.min((currentPage - 1) * pageSize + 1, rows.length)}-{Math.min(currentPage * pageSize, rows.length)} of {rows.length}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => setPage(Math.max(1, currentPage - 1))} disabled={currentPage === 1}>
+              Previous
+            </Button>
+            <span className="text-sm font-bold text-slate-700">Page {currentPage} / {totalPages}</span>
+            <Button type="button" variant="outline" size="sm" onClick={() => setPage(Math.min(totalPages, currentPage + 1))} disabled={currentPage === totalPages}>
+              Next
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      <AnimatePresence>
+        {selectedRecord ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-3 sm:p-6"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setSelectedRecordKey(null);
+              }
+            }}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.97, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.97, y: 10 }}
+              className="flex max-h-[calc(100vh-1.5rem)] w-[96vw] max-w-[1120px] min-h-0 flex-col overflow-hidden rounded-[28px] bg-white shadow-2xl sm:max-h-[calc(100vh-3rem)]"
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-5 sm:p-6">
+                <div className="min-w-0">
+                  <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Company Activity Detail</p>
+                  <h3 className="mt-2 truncate text-xl font-black text-slate-950">
+                    {selectedCompany?.name ?? selectedRecord.customerOrCompany}
+                  </h3>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">
+                    {marketerName} er kaj, kotha, status, ar timeline ekshathe dekhen.
+                  </p>
+                </div>
+                <Button type="button" variant="ghost" size="icon" onClick={() => setSelectedRecordKey(null)} aria-label="Close company detail">
+                  <XCircle className="h-5 w-5" />
+                </Button>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+                <div className="space-y-5">
+                  <div className="rounded-[24px] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_#eff6ff_0%,_#ffffff_42%,_#f8fafc_100%)] p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="neutral">{selectedRecord.type}</Badge>
+                          <Badge variant={drilldownStatusVariant(selectedRecord.status)}>{selectedRecord.status}</Badge>
+                        </div>
+                        <p className="mt-3 text-lg font-black text-slate-950">{selectedRecord.title}</p>
+                        <p className="mt-1 text-sm font-semibold text-slate-500">{selectedRecord.method} - {selectedRecord.dateTime}</p>
+                      </div>
+                      {selectedRecord.companyHref ? (
+                        <Link
+                          href={selectedRecord.companyHref}
+                          className="inline-flex h-10 items-center rounded-full border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-blue-700"
+                        >
+                          Open Customer
+                          <ArrowRight className="ml-2 h-4 w-4" />
+                        </Link>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div>
+                          <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Company Info</p>
+                          <p className="mt-2 text-sm font-semibold text-slate-900">{selectedCompany?.name ?? selectedRecord.customerOrCompany}</p>
+                          <p className="mt-1 text-sm text-slate-600">
+                            {selectedCompany?.contactPerson || selectedRecord.contactPerson || "-"} - {selectedCompany?.phone || selectedRecord.phone || "-"}
+                          </p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            {[selectedCompany?.industry, selectedCompany?.cityOrZilla].filter(Boolean).join(", ") || "Basic company info"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Marketer Update</p>
+                          <p className="mt-2 text-sm font-semibold text-slate-900">{marketerName}</p>
+                          <p className="mt-1 text-sm text-slate-600">Current stage: {selectedRecord.status}</p>
+                          <p className="mt-1 text-sm text-slate-600">
+                            Calls {rowSummary.calls} | Follow-ups {rowSummary.followUps} | Records {relatedRows.length}
+                          </p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            Last touch: {relatedActivities[0]?.time || selectedCompany?.lastCommunication || selectedRecord.dateTime}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+                    <div className="rounded-[22px] border border-slate-200 bg-white p-5">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-black text-slate-950">Latest Note</p>
+                        <Badge variant="neutral">{relatedRows.length} items</Badge>
+                      </div>
+                      <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                        {selectedRecord.note || "No detailed note added for this record."}
+                      </p>
+                      <div className="mt-4 space-y-2 text-sm text-slate-600">
+                        <p><span className="font-semibold text-slate-900">Lead:</span> {selectedRecord.leadName || "-"}</p>
+                        <p><span className="font-semibold text-slate-900">Method:</span> {selectedRecord.method}</p>
+                        <p><span className="font-semibold text-slate-900">Status:</span> {selectedRecord.status}</p>
+                        <p><span className="font-semibold text-slate-900">Company Note:</span> {selectedCompany?.notes && selectedCompany.notes !== "-" ? selectedCompany.notes : "No company note saved yet."}</p>
+                      </div>
+                    </div>
+
+                    <div className="rounded-[22px] border border-slate-200 bg-white p-5">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-sm font-black text-slate-950">Recent Timeline</p>
+                        <p className="text-sm font-semibold text-slate-500">
+                          Calls {activitySummary.calls} | Follow-ups {activitySummary.followUps} | Meetings {activitySummary.meetings}
+                        </p>
+                      </div>
+                      {relatedActivities.length ? (
+                        <div className="mt-4 space-y-3">
+                          {relatedActivities.map((activity) => (
+                            <div key={`${activity.id}-${activity.createdAtValue ?? activity.time}`} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-sm font-bold text-slate-900">{activityCategoryLabel(activity)}</p>
+                                <p className="text-xs font-semibold text-slate-500">{activity.time}</p>
+                              </div>
+                              <p className="mt-1 text-xs font-semibold text-slate-500">{activity.title}</p>
+                              <p className="mt-2 text-sm text-slate-700">
+                                {activity.discussionSummary || activity.notes || activity.detail || "No summary available."}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : relatedRows.length ? (
+                        <div className="mt-4 space-y-3">
+                          {relatedRows.map((row) => (
+                            <div key={`${row.id}-${row.dateTime}`} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-sm font-bold text-slate-900">{row.title}</p>
+                                <p className="text-xs font-semibold text-slate-500">{row.dateTime}</p>
+                              </div>
+                              <p className="mt-1 text-xs font-semibold text-slate-500">{row.method} - {row.status}</p>
+                              <p className="mt-2 text-sm text-slate-700">{row.note || "No note added."}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-3 rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+                          Ei company ar marketer pair-er kono recent activity summary khuje paoa jayni.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }
@@ -820,10 +1134,12 @@ function SupervisorEmptyState({
 function SupervisorHeaderAction({
   children,
   href,
+  onClick,
   className,
 }: {
   children: React.ReactNode;
   href?: string;
+  onClick?: () => void;
   className?: string;
 }) {
   const classes = cn(
@@ -832,7 +1148,7 @@ function SupervisorHeaderAction({
   );
 
   if (href) return <Link href={href} className={classes}>{children}</Link>;
-  return <button type="button" className={classes}>{children}</button>;
+  return <button type="button" onClick={onClick} className={classes}>{children}</button>;
 }
 
 function SupervisorKpiGrid({ items }: { items: CrmWorkspace["stats"] }) {
@@ -1732,6 +2048,9 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   const [activeTasks, setActiveTasks] = React.useState<TodayWorkQueueItem[]>([]);
   const [completedTasks, setCompletedTasks] = React.useState<CompletedWorkItem[]>([]);
   const [completionItem, setCompletionItem] = React.useState<TodayWorkQueueItem | null>(null);
+  const [editingTask, setEditingTask] = React.useState<TodayTaskApiRow | null>(null);
+  const [editingFollowUp, setEditingFollowUp] = React.useState<TodayWorkQueueItem | null>(null);
+  const [dueReminderItem, setDueReminderItem] = React.useState<TodayWorkQueueItem | null>(null);
   const [followUpTask, setFollowUpTask] = React.useState<{
     id: string;
     title: string;
@@ -1743,7 +2062,46 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   } | null>(null);
   const { refreshTaskCount } = useTaskCounterContext();
   const scheduledRefreshTimers = React.useRef<number[]>([]);
+  const shownReminderKeys = React.useRef<Set<string>>(new Set());
   const role = workspace.user.role;
+
+  const reminderKey = React.useCallback((item: TodayWorkQueueItem) => `${item.sourceId}:${item.taskDateIso}`, []);
+
+  React.useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("crm_followup_reminders_shown_v1");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return;
+      shownReminderKeys.current = new Set(parsed.filter((value) => typeof value === "string"));
+    } catch {}
+  }, []);
+
+  const maybeOpenDueReminder = React.useCallback((rows: TodayWorkQueueItem[], preferredIso?: string | null) => {
+    const now = Date.now();
+    const preferredTime = preferredIso ? new Date(preferredIso).getTime() : Number.NaN;
+    const dueRows = rows
+      .filter((item) => (
+        item.queueType === "DUE_FOLLOW_UP"
+        && new Date(item.taskDateIso).getTime() <= now
+        && !shownReminderKeys.current.has(reminderKey(item))
+      ))
+      .sort((left, right) => new Date(left.taskDateIso).getTime() - new Date(right.taskDateIso).getTime());
+
+    if (!dueRows.length) return;
+
+    const matched = Number.isFinite(preferredTime)
+      ? dueRows.find((item) => Math.abs(new Date(item.taskDateIso).getTime() - preferredTime) < 60_000)
+      : undefined;
+    const nextItem = matched ?? dueRows[0];
+    if (!nextItem) return;
+
+    shownReminderKeys.current.add(reminderKey(nextItem));
+    try {
+      window.localStorage.setItem("crm_followup_reminders_shown_v1", JSON.stringify([...shownReminderKeys.current]));
+    } catch {}
+    setDueReminderItem(nextItem);
+  }, [reminderKey]);
 
   const loadTasks = React.useCallback(async () => {
     setLoading(true);
@@ -1768,10 +2126,13 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
         throw new Error(typeof completedResult.message === "string" ? completedResult.message : "Failed to load completed tasks.");
       }
 
-      setActiveTasks(sortTodayWorkQueue(todayResult.rows as TodayWorkQueueItem[]));
+      const sortedRows = sortTodayWorkQueue(todayResult.rows as TodayWorkQueueItem[]);
+      setActiveTasks(sortedRows);
       setCompletedTasks(completedResult.rows as CompletedWorkItem[]);
+      return sortedRows;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load tasks.");
+      return [] as TodayWorkQueueItem[];
     } finally {
       setLoading(false);
     }
@@ -1804,23 +2165,53 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
 
     const delay = triggerAt - Date.now();
     if (delay <= 0) {
-      void loadTasks();
+      void loadTasks().then((rows) => {
+        maybeOpenDueReminder(rows, isoDate);
+      });
       void refreshTaskCount();
       return;
     }
 
     const timer = window.setTimeout(() => {
-      void loadTasks();
+      void loadTasks().then((rows) => {
+        maybeOpenDueReminder(rows, isoDate);
+      });
       void refreshTaskCount();
       scheduledRefreshTimers.current = scheduledRefreshTimers.current.filter((value) => value !== timer);
     }, delay + 250);
 
     scheduledRefreshTimers.current.push(timer);
-  }, [loadTasks, refreshTaskCount]);
+  }, [loadTasks, maybeOpenDueReminder, refreshTaskCount]);
 
-  const handleCreated = () => {
+  React.useEffect(() => {
+    maybeOpenDueReminder(activeTasks);
+  }, [activeTasks, maybeOpenDueReminder]);
+
+  React.useEffect(() => {
+    for (const timer of scheduledRefreshTimers.current) {
+      window.clearTimeout(timer);
+    }
+    scheduledRefreshTimers.current = [];
+
+    const bootstrapTimer = window.setTimeout(() => {
+      for (const item of activeTasks) {
+        const triggerAt = new Date(item.taskDateIso).getTime();
+        if (Number.isFinite(triggerAt) && triggerAt > Date.now()) {
+          scheduleQueueRefreshAt(item.taskDateIso);
+        }
+      }
+    }, 0);
+
+    return () => {
+      window.clearTimeout(bootstrapTimer);
+    };
+  }, [activeTasks, scheduleQueueRefreshAt]);
+
+  const handleCreated = (row: TodayTaskApiRow) => {
+    setEditingTask(null);
     void loadTasks();
     void refreshTaskCount();
+    scheduleQueueRefreshAt(row.taskDateIso);
   };
 
   const extractDate = (result: unknown, key: "nextFollowUpDate" | "followUpDate") => {
@@ -1834,7 +2225,9 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   const handleCompletionSaved = (result?: unknown) => {
     setCompletionItem(null);
     const scheduledDate = extractDate(result, "nextFollowUpDate");
-    void loadTasks();
+    void loadTasks().then((rows) => {
+      maybeOpenDueReminder(rows, scheduledDate);
+    });
     void refreshTaskCount();
     scheduleQueueRefreshAt(scheduledDate);
   };
@@ -1842,7 +2235,9 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   const handleFollowUpSaved = (result?: unknown) => {
     setFollowUpTask(null);
     const scheduledDate = extractDate(result, "followUpDate");
-    void loadTasks();
+    void loadTasks().then((rows) => {
+      maybeOpenDueReminder(rows, scheduledDate);
+    });
     void refreshTaskCount();
     scheduleQueueRefreshAt(scheduledDate);
   };
@@ -1871,6 +2266,39 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
       taskId: task.taskId ?? (task.sourceType === "TASK" ? task.sourceId : null),
     });
   }, []);
+
+  const handleTaskDelete = React.useCallback(async (task: TodayTaskApiRow) => {
+    setActionError("");
+    try {
+      const response = await fetch(`/api/tasks/${task.id}`, { method: "DELETE" });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(typeof result.message === "string" ? result.message : "Task delete failed.");
+      }
+      setEditingTask(null);
+      void loadTasks();
+      void refreshTaskCount();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Task delete failed.");
+    }
+  }, [loadTasks, refreshTaskCount]);
+
+  const handleFollowUpDelete = React.useCallback(async (item: TodayWorkQueueItem) => {
+    if (item.sourceType !== "FOLLOW_UP") return;
+    setActionError("");
+    try {
+      const response = await fetch(`/api/follow-ups/${item.sourceId}`, { method: "DELETE" });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(typeof result.message === "string" ? result.message : "Follow-up delete failed.");
+      }
+      setEditingFollowUp(null);
+      void loadTasks();
+      void refreshTaskCount();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Follow-up delete failed.");
+    }
+  }, [loadTasks, refreshTaskCount]);
 
   return (
     <>
@@ -1924,6 +2352,10 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
               viewerRole={role}
               emptyMessage="No work items in this view."
               activeItemId={completionItem?.id ?? null}
+              onEdit={setEditingTask}
+              onDelete={(task) => void handleTaskDelete(task)}
+              onEditFollowUp={setEditingFollowUp}
+              onDeleteFollowUp={(item) => void handleFollowUpDelete(item)}
               onComplete={(item) => {
                 setActionError("");
                 setCompletionItem(item);
@@ -1947,9 +2379,36 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
         </div>
       </div>
 
+      <TaskCreateModal
+        open={Boolean(editingTask)}
+        onClose={() => setEditingTask(null)}
+        onCreated={handleCreated}
+        onDeleted={() => {
+          setEditingTask(null);
+          void loadTasks();
+          void refreshTaskCount();
+        }}
+        role={workspace.user.role}
+        workspace={workspace}
+        initialTask={editingTask}
+      />
+
+      <FollowUpEditModal
+        item={editingFollowUp}
+        onClose={() => setEditingFollowUp(null)}
+        onSaved={(result) => {
+          setEditingFollowUp(null);
+          handleFollowUpSaved(result);
+        }}
+        onDeleted={() => {
+          setEditingFollowUp(null);
+          void loadTasks();
+          void refreshTaskCount();
+        }}
+      />
+
       <WorkCompletionModal
         item={completionItem}
-        workspace={workspace}
         onClose={() => {
           setCompletionItem(null);
           setActionError("");
@@ -1959,10 +2418,61 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
 
       <TaskFollowUpModal
         task={followUpTask}
-        workspace={workspace}
         onClose={() => setFollowUpTask(null)}
         onSaved={handleFollowUpSaved}
       />
+
+      <FormModal
+        open={Boolean(dueReminderItem)}
+        title="Follow-up Reminder"
+        onClose={() => setDueReminderItem(null)}
+        panelClassName="w-[95vw] max-w-[520px]"
+        contentClassName="space-y-4"
+      >
+        {dueReminderItem ? (
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-orange-200 bg-gradient-to-br from-orange-50 via-amber-50 to-white p-4">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-700">Live now</p>
+              <h3 className="mt-2 text-2xl font-black text-slate-950">{dueReminderItem.title}</h3>
+              <p className="mt-2 text-base font-bold text-slate-800">{dueReminderItem.companyName}</p>
+              <p className="mt-1 text-sm font-semibold text-slate-600">{dueReminderItem.timeLabel} • {dueReminderItem.taskDateLabel}</p>
+              <p className="mt-3 text-sm leading-6 text-slate-700">{dueReminderItem.description !== "-" ? dueReminderItem.description : dueReminderItem.method}</p>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-3">
+              <Button
+                type="button"
+                className="w-full"
+                onClick={() => {
+                  setCompletionItem(dueReminderItem);
+                  setDueReminderItem(null);
+                }}
+              >
+                Complete
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  setEditingFollowUp(dueReminderItem);
+                  setDueReminderItem(null);
+                }}
+              >
+                Edit Follow-up
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => setDueReminderItem(null)}
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </FormModal>
     </>
   );
 }
@@ -2092,7 +2602,7 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
       .filter((item): item is CrmWorkspace["stats"][number] => Boolean(item));
   }, [workspace.stats]);
   const performanceRows = React.useMemo<SupervisorPerformanceRow[]>(() => {
-    const teamRows = teamPerformanceRows ?? [];
+    const teamRows = (teamPerformanceRows ?? []).filter((row) => row.roleKey === "MARKETER");
     return teamRows
       .map((row) => ({
         ...row,
@@ -2122,7 +2632,11 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
     params.set("performancePeriod", period);
 
     const nextQuery = params.toString();
-    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
+    const href = nextQuery ? `${pathname}?${nextQuery}` : pathname;
+    React.startTransition(() => {
+      router.replace(href, { scroll: false });
+      router.refresh();
+    });
   }, [pathname, router, searchParams]);
 
   const handlePeriodChange = React.useCallback((period: TeamPerformancePeriod) => {
@@ -2256,15 +2770,15 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
       <SupervisorKpiGrid items={supervisorStats} />
 
       <div data-supervisor-section>
-        <AdminCallTrackingPanel workspace={workspace} />
-      </div>
-
-      <div data-supervisor-section>
         <SupervisorTeamPerformancePanelV2
           rows={performanceRows}
           toolbar={performanceFilterToolbar}
           onMetricClick={handlePerformanceMetricClick}
         />
+      </div>
+
+      <div data-supervisor-section>
+        <AdminCallTrackingPanel workspace={workspace} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.45fr_0.88fr_1fr]" data-supervisor-section>
@@ -2301,7 +2815,12 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
             </p>
 
             {drilldownRows.length ? (
-              <TeamPerformanceDrilldownTable rows={drilldownRows} />
+              <TeamPerformanceDrilldownTable
+                rows={drilldownRows}
+                workspace={workspace}
+                marketerId={drilldownPayload?.marketerId ?? ""}
+                marketerName={drilldownPayload?.marketerName ?? "Marketer"}
+              />
             ) : (
               <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
                 No records found for this metric in selected period.
@@ -2409,6 +2928,29 @@ function AdminKpiGrid({ items }: { items: { title: keyof typeof adminKpiConfig; 
   );
 }
 
+function isRealCallActivity(item: CrmWorkspace["activities"][number]) {
+  if (item.category !== "CALL") return false;
+
+  const combined = [
+    item.title,
+    item.rawAction,
+    item.discussionSummary,
+    item.notes,
+    item.contactMethod,
+    item.entity,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toLowerCase();
+
+  if (combined.includes("assigned to")) return false;
+  if (item.entity === "CommunicationLog") return true;
+  if ((item.contactMethod ?? "").toLowerCase().includes("call")) return true;
+  if ((item.title ?? "").toLowerCase().includes("phone call")) return true;
+  if ((item.rawAction ?? "").toLowerCase().includes("call opened")) return true;
+  return false;
+}
+
 function AdminSalesPanel({ data }: { data: Array<{ month: string; sales: number }> }) {
   const hasData = data.some((item) => item.sales > 0);
 
@@ -2437,6 +2979,7 @@ function AdminSalesPanel({ data }: { data: Array<{ month: string; sales: number 
 }
 
 function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
+  const router = useRouter();
   const periodOptions: TeamPerformancePeriod[] = ["today", "week", "month"];
   const [callPeriod, setCallPeriod] = React.useState<TeamPerformancePeriod>("today");
   const [detailOpen, setDetailOpen] = React.useState(false);
@@ -2450,7 +2993,7 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
   const periodWindow = React.useMemo(() => getCrmPeriodWindow(new Date(), { period: callPeriod }), [callPeriod]);
   const rows = React.useMemo(() => {
     const filtered = workspace.activities
-      .filter((item) => item.category === "CALL")
+      .filter(isRealCallActivity)
       .filter((item) => {
         if (!item.createdAtValue) return false;
         const createdAt = new Date(item.createdAtValue);
@@ -2462,7 +3005,7 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
 
   const totalCallsInPeriod = React.useMemo(() => {
     return workspace.activities
-      .filter((item) => item.category === "CALL")
+      .filter(isRealCallActivity)
       .filter((item) => {
         if (!item.createdAtValue) return false;
         const createdAt = new Date(item.createdAtValue);
@@ -2478,7 +3021,7 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
   const companyCalls = React.useMemo(() => {
     if (!detailCustomerHref) return [];
     return workspace.activities
-      .filter((item) => item.category === "CALL" && item.customerHref === detailCustomerHref)
+      .filter((item) => isRealCallActivity(item) && item.customerHref === detailCustomerHref)
       .sort((left, right) => (right.createdAtValue ?? "").localeCompare(left.createdAtValue ?? ""))
       .slice(0, 24);
   }, [detailCustomerHref, workspace.activities]);
@@ -2503,6 +3046,10 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
     </div>
   );
 
+  const openCallActivityPage = React.useCallback(() => {
+    router.push(rolePath(workspace.user.role, "communication"), { scroll: false });
+  }, [router, workspace.user.role]);
+
   return (
     <SupervisorSurfaceCard
       title="Call Activity Center"
@@ -2510,7 +3057,7 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
       action={
         <div className="flex flex-wrap items-center justify-end gap-2">
           {callPeriodToolbar}
-          <Badge variant="neutral">{totalCallsInPeriod} Calls</Badge>
+          <SupervisorHeaderAction onClick={openCallActivityPage}>{totalCallsInPeriod} Calls</SupervisorHeaderAction>
         </div>
       }
       className="h-full"
@@ -2643,14 +3190,17 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
 }
 
 function AdminTeamPerformancePanel({
+  workspace,
   rows,
   period,
   toolbar,
 }: {
+  workspace: CrmWorkspace;
   rows: AdminPerformanceRow[];
   period: TeamPerformancePeriod;
   toolbar?: React.ReactNode;
 }) {
+  const router = useRouter();
   const [drilldownOpen, setDrilldownOpen] = React.useState(false);
   const [drilldownPayload, setDrilldownPayload] = React.useState<TeamPerformanceDrilldownPayload | null>(null);
   const [drilldownRows, setDrilldownRows] = React.useState<TeamPerformanceDrilldownRow[]>([]);
@@ -2703,6 +3253,10 @@ function AdminTeamPerformancePanel({
     }
   }, [period]);
 
+  const openMarketersPage = React.useCallback(() => {
+    router.push(rolePath(workspace.user.role, "users"), { scroll: false });
+  }, [router, workspace.user.role]);
+
   return (
     <SupervisorSurfaceCard
       title="Team Performance"
@@ -2710,10 +3264,10 @@ function AdminTeamPerformancePanel({
       action={toolbar ? (
         <div className="flex flex-wrap items-center justify-end gap-2">
           {toolbar}
-          <Badge variant="neutral">{rows.length} Team Members</Badge>
+          <SupervisorHeaderAction onClick={openMarketersPage}>{rows.length} Marketers</SupervisorHeaderAction>
         </div>
       ) : (
-        <Badge variant="neutral">{rows.length} Team Members</Badge>
+        <SupervisorHeaderAction onClick={openMarketersPage}>{rows.length} Marketers</SupervisorHeaderAction>
       )}
       className="h-full"
     >
@@ -2826,7 +3380,12 @@ function AdminTeamPerformancePanel({
             </p>
 
             {drilldownRows.length ? (
-              <TeamPerformanceDrilldownTable rows={drilldownRows} />
+              <TeamPerformanceDrilldownTable
+                rows={drilldownRows}
+                workspace={workspace}
+                marketerId={drilldownPayload?.marketerId ?? ""}
+                marketerName={drilldownPayload?.marketerName ?? "Marketer"}
+              />
             ) : (
               <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
                 No records found for this metric in selected period.
@@ -2977,7 +3536,7 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
   }, [workspace]);
   const adminTeamRows = React.useMemo<AdminPerformanceRow[]>(() => {
     const baseRows = (workspace.teamPerformance?.rows ?? [])
-      .filter((row) => row.statusKey === "ACTIVE");
+      .filter((row) => row.statusKey === "ACTIVE" && row.roleKey === "MARKETER");
 
     return baseRows
       .map((row) => ({
@@ -3002,7 +3561,11 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
     const params = new URLSearchParams(searchParams.toString());
     params.set("performancePeriod", period);
     const nextQuery = params.toString();
-    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
+    const href = nextQuery ? `${pathname}?${nextQuery}` : pathname;
+    React.startTransition(() => {
+      router.replace(href, { scroll: false });
+      router.refresh();
+    });
   }, [pathname, router, searchParams]);
 
   const handlePeriodChange = React.useCallback((period: TeamPerformancePeriod) => {
@@ -3072,11 +3635,11 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
       <AdminKpiGrid items={adminStats} />
 
       <div data-admin-section>
-        <AdminCallTrackingPanel workspace={workspace} />
+        <AdminTeamPerformancePanel workspace={workspace} rows={adminTeamRows} period={performancePeriod} toolbar={performanceFilterToolbar} />
       </div>
 
       <div data-admin-section>
-        <AdminTeamPerformancePanel rows={adminTeamRows} period={performancePeriod} toolbar={performanceFilterToolbar} />
+        <AdminCallTrackingPanel workspace={workspace} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.45fr_1fr]" data-admin-section>
