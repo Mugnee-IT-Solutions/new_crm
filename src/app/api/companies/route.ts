@@ -22,8 +22,8 @@ type CompanyListRow = Prisma.CustomerCompanyGetPayload<{
 
 function parseLimit(value: string | null) {
   const parsed = Number.parseInt(value ?? "", 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return 100;
-  return Math.min(parsed, 200);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 500;
+  return Math.min(parsed, 2000);
 }
 
 export async function GET(request: Request) {

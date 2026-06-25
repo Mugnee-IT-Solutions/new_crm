@@ -66,15 +66,11 @@ function ensureProductManageAccess(actor: ProductActor) {
 
 function validateProductInput(input: ProductInput) {
   const name = normalizeText(input.name);
-  const category = normalizeText(input.category);
+  const category = normalizeText(input.category || "General");
   const price = Number(input.price);
 
   if (!name) {
     throw new ProductInputError("Product name is required.");
-  }
-
-  if (!category) {
-    throw new ProductInputError("Category is required.");
   }
 
   if (!Number.isFinite(price) || price < 0) {
@@ -110,6 +106,11 @@ function mapProductRow(product: ProductRecord): ProductRow {
     quotationCount: 0,
     salesCount: 0,
     conversionRate: 0,
+    assignedCount: 0,
+    assignedMarketers: [],
+    targetCompanies: 0,
+    contactedCompanies: 0,
+    remainingCompanies: 0,
   };
 }
 

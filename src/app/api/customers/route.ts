@@ -111,10 +111,55 @@ function parseDate(value: unknown) {
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
+function formatDateTimeLabel(value?: Date | null) {
+  if (!value) return "-";
+
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Dhaka",
+  }).formatToParts(value);
+
+  const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${lookup.day}/${lookup.month}/${lookup.year} ${lookup.hour}:${lookup.minute} ${lookup.dayPeriod ?? ""}`.trim();
+}
+
 function normalizeToInt(value: unknown, fallback = 0) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(0, Math.trunc(parsed));
+}
+
+function deriveActivityLabel(input: {
+  leadStatuses: string[];
+  followUpStatuses: string[];
+  hasCommunication: boolean;
+}) {
+  const pendingFollowUp = input.followUpStatuses.find((status) => status !== "COMPLETED");
+  if (pendingFollowUp) {
+    return {
+      label: pendingFollowUp === "OVERDUE" ? "OVERDUE FOLLOW-UP" : "FOLLOW-UP",
+      tone: "blue" as const,
+    };
+  }
+
+  if (input.leadStatuses.includes("WON_SALE")) {
+    return { label: "DONE", tone: "green" as const };
+  }
+
+  if (input.leadStatuses.some((status) => ["CONTACTED", "INTERESTED", "FOLLOW_UP_REQUIRED", "QUOTATION_SENT", "NEGOTIATION"].includes(status))) {
+    return { label: "IN PROGRESS", tone: "amber" as const };
+  }
+
+  if (input.hasCommunication) {
+    return { label: "DONE", tone: "green" as const };
+  }
+
+  return { label: "NEW", tone: "blue" as const };
 }
 
 type CustomerTemplateRaw = Record<string, string>;
@@ -232,6 +277,25 @@ export async function GET(request: Request) {
       where,
       include: {
         assignedTo: { select: { name: true, email: true } },
+        leads: {
+          select: {
+            status: true,
+          },
+        },
+        followUps: {
+          select: {
+            status: true,
+          },
+          orderBy: { followUpDate: "asc" },
+          take: 5,
+        },
+        communications: {
+          select: {
+            createdAt: true,
+          },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
         contacts: {
           orderBy: { createdAt: "asc" },
           take: 3,
@@ -264,9 +328,13 @@ export async function GET(request: Request) {
       notes: string | null;
       totalLeads: number;
       lastCommunication: Date | null;
+      createdAt: Date;
       assignedToId: string | null;
       rawData?: unknown;
       assignedTo: { name: string | null; email?: string | null } | null;
+      leads: { status: string }[];
+      followUps: { status: string }[];
+      communications: { createdAt: Date }[];
       contacts: { email: string | null; whatsapp: string | null }[];
       phoneNumbers: { number: string; whatsapp: boolean }[];
     }>;
@@ -293,11 +361,23 @@ export async function GET(request: Request) {
           | undefined;
         const rawPhone2 = readRawString(raw, ["Phone 2", "Phone2", "Phone 2_1", "Phone_2", "Second Phone"]);
         const rawCity = readRawString(raw, ["City / Zilla", "City/Zilla", "City", "Zilla"]);
+        const createdBy = readRawString(raw, ["Created By", "createdBy", "Added By", "addedBy"]);
+        const createdByRole = readRawString(raw, ["Created By Role", "createdByRole", "Added By Role", "addedByRole"]);
+        const activity = deriveActivityLabel({
+          leadStatuses: row.leads.map((item) => item.status),
+          followUpStatuses: row.followUps.map((item) => item.status),
+          hasCommunication: Boolean(row.lastCommunication ?? row.communications[0]?.createdAt),
+        });
 
         return {
           ...row,
+          activityLabel: activity.label,
+          activityTone: activity.tone,
           assignedToId: row.assignedToId,
           assignedTo: row.assignedTo?.name?.trim() || row.assignedTo?.email?.trim() || "-",
+          createdBy: createdBy || row.assignedTo?.name?.trim() || row.assignedTo?.email?.trim() || "-",
+          createdByRole: createdByRole || undefined,
+          createdAtLabel: formatDateTimeLabel(row.createdAt),
           email: primaryEmail ?? (typeof rawEmail === "string" ? rawEmail.trim() : rawEmail?.toString() ?? null),
           phone: row.phone || row.phoneNumbers[0]?.number || "",
           whatsapp: row.phoneNumbers.find((item) => item.whatsapp)?.number ?? "",
@@ -355,7 +435,7 @@ export async function POST(request: Request) {
           mode: "insensitive",
         },
       },
-      select: { id: true },
+      select: { id: true, assignedToId: true, rawData: true },
     });
 
     if (matches.length > 1) {
@@ -373,20 +453,45 @@ export async function POST(request: Request) {
       totalLeads: normalizeToInt(payload.totalLeads, 0),
       lastCommunication: parseDate(payload.lastCommunication),
       rawData,
-      assignedTo: { connect: { id: ownerId } },
     };
 
     if (matches.length === 1) {
       const updated = await prisma.customerCompany.update({
         where: { id: matches[0].id },
-        data: data as any,
+        data: {
+          ...data,
+          assignedTo: matches[0].assignedToId ? undefined : { connect: { id: ownerId } },
+          rawData: {
+            ...(typeof matches[0].rawData === "object" && matches[0].rawData !== null && !Array.isArray(matches[0].rawData)
+              ? matches[0].rawData as Record<string, unknown>
+              : {}),
+            ...rawData,
+            ...(typeof matches[0].rawData === "object" && matches[0].rawData !== null && !Array.isArray(matches[0].rawData) && "Created By" in (matches[0].rawData as Record<string, unknown>)
+              ? { "Created By": (matches[0].rawData as Record<string, unknown>)["Created By"] }
+              : {}),
+            ...(typeof matches[0].rawData === "object" && matches[0].rawData !== null && !Array.isArray(matches[0].rawData) && "Created By Role" in (matches[0].rawData as Record<string, unknown>)
+              ? { "Created By Role": (matches[0].rawData as Record<string, unknown>)["Created By Role"] }
+              : {}),
+            ...(typeof matches[0].rawData === "object" && matches[0].rawData !== null && !Array.isArray(matches[0].rawData) && "Created At" in (matches[0].rawData as Record<string, unknown>)
+              ? { "Created At": (matches[0].rawData as Record<string, unknown>)["Created At"] }
+              : {}),
+          },
+        } as any,
       });
 
       return NextResponse.json({ success: true, action: "updated", customer: updated });
     }
 
+    rawData["Created By"] = rawData["Created By"] || auth.user.name || auth.user.mobile;
+    rawData["Created By Role"] = rawData["Created By Role"] || auth.user.role;
+    rawData["Created At"] = rawData["Created At"] || new Date().toISOString();
+
     const created = await prisma.customerCompany.create({
-      data: data as any,
+      data: {
+        ...data,
+        assignedTo: { connect: { id: ownerId } },
+        rawData,
+      } as any,
     });
 
     return NextResponse.json({ success: true, action: "created", customer: created });

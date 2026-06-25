@@ -1,9 +1,9 @@
 import { FollowUpStatus, Priority, TaskStatus } from "@prisma/client";
-import { format } from "date-fns";
 import { buildCustomerScopeWhere, hasCustomerAccess } from "@/lib/customer-ownership";
+import { formatCrmDate, getCrmDayWindow, startOfCrmDay } from "@/lib/crm-time";
 import { getPrisma } from "@/lib/prisma";
 import { normalizeTaskReminderValue } from "@/lib/task-reminders";
-import type { Role } from "@/lib/utils";
+import { rolePath, type Role } from "@/lib/utils";
 
 export type TaskActor = {
   id: string;
@@ -198,15 +198,11 @@ export class TaskInputError extends Error {
 }
 
 function startOfToday() {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return today;
+  return startOfCrmDay(new Date());
 }
 
 function startOfTomorrow() {
-  const tomorrow = startOfToday();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  return tomorrow;
+  return getCrmDayWindow(new Date()).to;
 }
 
 function normalizeText(value: string) {
@@ -214,19 +210,21 @@ function normalizeText(value: string) {
 }
 
 function formatDate(date: Date | null | undefined) {
-  return date ? format(date, "dd MMM yyyy") : "-";
+  return formatCrmDate(date, "dd MMM yyyy");
 }
 
 function formatDateTime(date: Date | null | undefined) {
-  return date ? format(date, "dd MMM yyyy hh:mm a") : "-";
+  return formatCrmDate(date, "dd MMM yyyy hh:mm a");
+}
+
+function hasExplicitTime(date: Date | null | undefined) {
+  if (!date) return false;
+  return date.getHours() !== 0 || date.getMinutes() !== 0 || date.getSeconds() !== 0 || date.getMilliseconds() !== 0;
 }
 
 function formatTime(date: Date | null | undefined) {
-  if (!date) return "All day";
-  if (date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0) {
-    return "All day";
-  }
-  return format(date, "hh:mm a");
+  if (!hasExplicitTime(date)) return "";
+  return formatCrmDate(date, "hh:mm a");
 }
 
 function toPriorityLabel(priority: Priority): TaskListItem["priority"] {
@@ -260,9 +258,7 @@ function getEffectiveTaskDateTime(task: Pick<TaskQueryRecord, "taskTime" | "task
 }
 
 function startOfDay(date: Date) {
-  const value = new Date(date);
-  value.setHours(0, 0, 0, 0);
-  return value;
+  return startOfCrmDay(date);
 }
 
 function effectiveTaskDate(task: Pick<TaskQueryRecord, "taskDate" | "dueDate" | "createdAt" | "taskTime">) {
@@ -334,7 +330,13 @@ function inferTaskMethod(title: string | null | undefined, description: string |
   return "Task";
 }
 
-function mapTaskRecord(task: TaskQueryRecord): TaskListItem {
+function dashboardReturnHref(role: Role, baseHref?: string | null) {
+  if (!baseHref) return null;
+  const joiner = baseHref.includes("?") ? "&" : "?";
+  return `${baseHref}${joiner}returnTo=${encodeURIComponent(rolePath(role, "dashboard"))}`;
+}
+
+function mapTaskRecord(task: TaskQueryRecord, role: Role): TaskListItem {
   const today = startOfToday();
   const baseDate = effectiveTaskDate(task);
   const isPrevious = task.status !== "COMPLETED" && (task.isPrevious || baseDate < today);
@@ -345,7 +347,7 @@ function mapTaskRecord(task: TaskQueryRecord): TaskListItem {
     companyName: companyDisplayName(task),
     companyId: task.companyId,
     productId: task.productId,
-    companyHref: task.companyId ? `/customers/${task.companyId}` : null,
+    companyHref: dashboardReturnHref(role, task.companyId ? `/customers/${task.companyId}` : null),
     description: task.description ?? "-",
     notes: task.notes ?? "-",
     reminder: task.reminder ?? "-",
@@ -363,7 +365,7 @@ function mapTaskRecord(task: TaskQueryRecord): TaskListItem {
     statusKey: taskStatusKey(task.status),
     taskDateIso: baseDate.toISOString(),
     taskDateLabel: formatDate(baseDate),
-    timeLabel: formatTime(task.taskTime ?? baseDate),
+    timeLabel: formatTime(task.taskTime),
     isPrevious,
     completedAtIso: task.updatedAt.toISOString(),
     completedAtLabel: formatDateTime(task.updatedAt),
@@ -397,8 +399,8 @@ export function parseTaskDateTimeInput(value: string) {
 
 function isTaskVisibleInTodayList(task: TaskQueryRecord, now = new Date()) {
   if (task.status === "COMPLETED") return false;
-  if (task.isPrevious) return true;
-  return getEffectiveTaskDateTime(task).getTime() <= now.getTime();
+  if (effectiveTaskDate(task).getTime() < startOfDay(now).getTime()) return true;
+  return Boolean(task.taskTime);
 }
 
 async function getTaskScopeUserIds(prisma: ReturnType<typeof getPrisma>, actor: TaskActor) {
@@ -632,10 +634,9 @@ async function resolveTaskCompanyRecord(
 
 export async function getTodayTasks(actor: TaskActor, filters: TaskFilters = {}) {
   const prisma = getPrisma();
-  await syncPreviousTaskFlags();
 
-  const tomorrow = startOfTomorrow();
-    const where: Record<string, unknown> = {
+  const { to: tomorrow } = getCrmDayWindow(new Date());
+  const where: Record<string, unknown> = {
     AND: [
       await scopedTaskWhere(prisma, actor),
       { status: "PENDING" },
@@ -649,7 +650,6 @@ export async function getTodayTasks(actor: TaskActor, filters: TaskFilters = {})
     where,
     include: taskQueryInclude,
     orderBy: [
-      { isPrevious: "desc" },
       { taskDate: "asc" },
       { taskTime: "asc" },
       { updatedAt: "desc" },
@@ -657,16 +657,13 @@ export async function getTodayTasks(actor: TaskActor, filters: TaskFilters = {})
   });
 
   const now = new Date();
-  return tasks.filter((task) => isTaskVisibleInTodayList(task, now)).map(mapTaskRecord);
+  return tasks.filter((task) => isTaskVisibleInTodayList(task, now)).map((task) => mapTaskRecord(task, actor.role));
 }
 
 export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters = {}) {
   const prisma = getPrisma();
-  await syncPreviousTaskFlags();
 
-  const today = startOfToday();
-  const tomorrow = startOfTomorrow();
-  const now = new Date();
+  const { from: today, to: tomorrow } = getCrmDayWindow(new Date());
   const priorityFilter = filters.priority ? toPrismaPriority(filters.priority) : undefined;
   const companyQuery = filters.company?.trim().toLowerCase() ?? "";
 
@@ -682,7 +679,6 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
       },
       include: taskQueryInclude,
       orderBy: [
-        { isPrevious: "desc" },
         { taskDate: "asc" },
         { taskTime: "asc" },
         { updatedAt: "desc" },
@@ -719,16 +715,20 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
   const mappedTasks: TodayWorkQueueItem[] = taskRows
     .filter((task) => task.status !== "COMPLETED")
     .map((task) => {
-      const mapped = mapTaskRecord(task);
+      const mapped = mapTaskRecord(task, actor.role);
       const baseDate = new Date(mapped.taskDateIso);
+      const pipelineStep = normalizePipelineStep(task.title);
       const isCarryForward = baseDate.getTime() < today.getTime();
+      const isDueFollowUpTask = pipelineStep === "Follow-up" && !isCarryForward;
+      const queueType: TodayWorkQueueType = isCarryForward ? "CARRY_FORWARD" : isDueFollowUpTask ? "DUE_FOLLOW_UP" : "TASK";
+      const queueLabel: TodayWorkQueueItem["queueLabel"] = isCarryForward ? "Carry Forward" : isDueFollowUpTask ? "Follow-up" : "Task";
 
       return {
         id: `task-${mapped.id}`,
         sourceId: mapped.id,
         sourceType: "TASK",
-        queueType: isCarryForward ? "CARRY_FORWARD" : "TASK",
-        queueLabel: isCarryForward ? "Carry Forward" : "Task",
+        queueType,
+        queueLabel,
         title: mapped.title,
         companyName: mapped.companyName,
         companyPrimaryPhone: normalizeQueuePhone(task.company?.phone),
@@ -758,14 +758,20 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
         timeLabel: mapped.timeLabel,
         isPrevious: isCarryForward,
         isOverdue: isCarryForward,
-        isDueFollowUp: false,
+        isDueFollowUp: isDueFollowUpTask,
         completedAtIso: null,
         completedAtLabel: "",
         completedBy: "-",
       };
     });
 
-  const mappedFollowUps: TodayWorkQueueItem[] = followUpRows.map((followUp) => {
+  const mappedFollowUps: TodayWorkQueueItem[] = followUpRows
+    .filter((followUp) => {
+      const followUpDate = followUp.followUpDate;
+      if (followUpDate.getTime() < today.getTime()) return true;
+      return hasExplicitTime(followUpDate);
+    })
+    .map((followUp) => {
     const followUpDate = followUp.followUpDate;
     const isOverdue = followUp.status === "OVERDUE" || followUpDate.getTime() < today.getTime();
     const company = followUp.company ?? followUp.lead?.company ?? null;
@@ -796,7 +802,7 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
       companyName,
       companyPrimaryPhone,
       companyId,
-      companyHref: companyId ? `/customers/${companyId}` : followUp.leadId ? `/leads/${followUp.leadId}` : null,
+      companyHref: companyId ? dashboardReturnHref(actor.role, `/customers/${companyId}`) : followUp.leadId ? `/leads/${followUp.leadId}` : null,
       leadId: followUp.leadId,
       leadName: leadName || null,
       description,
@@ -850,7 +856,6 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
 
 export async function getCompletedTasks(actor: TaskActor, filters: TaskFilters = {}) {
   const prisma = getPrisma();
-  await syncPreviousTaskFlags();
 
   const where: Record<string, unknown> = {
     AND: [
@@ -870,12 +875,11 @@ export async function getCompletedTasks(actor: TaskActor, filters: TaskFilters =
     ],
   });
 
-  return tasks.map(mapTaskRecord);
+  return tasks.map((task) => mapTaskRecord(task, actor.role));
 }
 
 export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilters = {}) {
   const prisma = getPrisma();
-  await syncPreviousTaskFlags();
 
   const priorityFilter = filters.priority ? toPrismaPriority(filters.priority) : undefined;
   const companyQuery = filters.company?.trim().toLowerCase() ?? "";
@@ -937,7 +941,7 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
   ]);
 
   const taskItems: CompletedWorkItem[] = tasks.map((task) => {
-    const mapped = mapTaskRecord(task);
+    const mapped = mapTaskRecord(task, actor.role);
     return {
       id: `task-${mapped.id}`,
       sourceId: mapped.id,
@@ -1002,7 +1006,7 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
       companyName,
       companyId,
       productId: null,
-      companyHref: companyId ? `/customers/${companyId}` : followUp.leadId ? `/leads/${followUp.leadId}` : null,
+      companyHref: companyId ? dashboardReturnHref(actor.role, `/customers/${companyId}`) : followUp.leadId ? `/leads/${followUp.leadId}` : null,
       leadId: followUp.leadId,
       leadName,
       description,
@@ -1065,7 +1069,7 @@ export async function createTaskEntry(actor: TaskActor, input: {
   const today = startOfToday();
   const normalizedTitle = normalizeText(input.title);
   const taskDateTime = new Date(input.taskDateTime);
-  const taskDate = startOfDay(taskDateTime);
+  const taskDate = startOfCrmDay(taskDateTime);
   const assignedToId = await resolveAssignedTaskUser(prisma, actor, input.assignedToId);
   const companyRecord = await resolveTaskCompanyRecord(prisma, actor, assignedToId, {
     title: normalizedTitle,
@@ -1148,7 +1152,7 @@ export async function createTaskEntry(actor: TaskActor, input: {
     });
   }
 
-  return mapTaskRecord(task);
+  return mapTaskRecord(task, actor.role);
 }
 
 export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
@@ -1188,7 +1192,7 @@ export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
   }
 
   const taskDateTime = new Date(input.taskDateTime);
-  const taskDate = startOfDay(taskDateTime);
+  const taskDate = startOfCrmDay(taskDateTime);
   const assignedToId = await resolveAssignedTaskUser(prisma, actor, input.assignedToId || existing.assignedToId || undefined);
   const requestedCompanyName = input.companyName?.trim();
   const companyRecord = await resolveTaskCompanyRecord(prisma, actor, assignedToId, {
@@ -1228,7 +1232,7 @@ export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
       taskTime: taskDateTime,
       dueDate: taskDateTime,
       reminder: reminder || null,
-      isPrevious: taskDate < startOfToday(),
+      isPrevious: taskDate < startOfCrmDay(new Date()),
       assignedTo: { connect: { id: assignedToId } },
       ...(companyId ? { company: { connect: { id: companyId } } } : { company: { disconnect: true } }),
       ...(productId ? { product: { connect: { id: productId } } } : { product: { disconnect: true } }),
@@ -1258,7 +1262,7 @@ export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
     });
   }
 
-  return mapTaskRecord(updated);
+  return mapTaskRecord(updated, actor.role);
 }
 
 export async function deleteTaskEntry(actor: TaskActor, taskId: string) {
@@ -1352,5 +1356,5 @@ export async function completeTaskEntry(actor: TaskActor, taskId: string) {
     });
   }
 
-  return mapTaskRecord(updated);
+  return mapTaskRecord(updated, actor.role);
 }

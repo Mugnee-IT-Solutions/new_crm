@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import * as React from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
-import { gsap } from "gsap";
 import { ChevronLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { AppHeader } from "@/components/app/app-header";
 import { AppSidebar } from "@/components/app/app-sidebar";
@@ -260,7 +259,6 @@ export function AppShell({
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const pathname = usePathname();
-  const contentRef = React.useRef<HTMLDivElement | null>(null);
   const shellUser = user ?? fallbackUser(role);
   const liveSyncEnabled = role !== "MARKETER";
   const refreshNotifications = notificationCenter.refreshNotifications;
@@ -283,20 +281,6 @@ export function AppShell({
       tasks: taskCount,
     };
   }, [leadCount, sidebarCounts, taskCount]);
-
-  React.useEffect(() => {
-    if (!contentRef.current) return;
-
-    const context = gsap.context(() => {
-      gsap.fromTo(
-        contentRef.current,
-        { autoAlpha: 0, y: 10 },
-        { autoAlpha: 1, y: 0, duration: 0.35, ease: "power2.out", clearProps: "opacity,transform,visibility" },
-      );
-    }, contentRef);
-
-    return () => context.revert();
-  }, [pathname]);
 
   const performLiveSync = React.useCallback((reason: "focus" | "interval" | "visible") => {
     window.dispatchEvent(new CustomEvent(CRM_LIVE_SYNC_EVENT, { detail: { reason, at: Date.now() } }));
@@ -404,16 +388,11 @@ export function AppShell({
 
         <div className={cn("transition-[padding] duration-300", collapsed ? "lg:pl-[82px]" : "lg:pl-[248px]")}>
           <AppHeader role={role} user={shellUser} unreadCount={notificationCenter.unreadCount} onOpenSidebar={() => setMobileOpen(true)} />
-          <motion.main
-            key={pathname}
-            ref={contentRef}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.22, ease: "easeOut" }}
+          <main
             className="w-full min-w-0 max-w-none space-y-5 px-4 py-5 md:px-5 lg:px-6 lg:py-6 xl:px-8 2xl:px-10"
           >
             {children}
-          </motion.main>
+          </main>
         </div>
       </div>
       </NotificationCenterContext.Provider>

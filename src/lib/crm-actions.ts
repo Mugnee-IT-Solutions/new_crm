@@ -11,8 +11,8 @@ import type { EmployeeRow } from "@/lib/crm-data";
 import { createSetupToken, hashPassword, verifyPassword } from "@/lib/password-auth";
 import { getPrisma } from "@/lib/prisma";
 import { normalizeTaskReminderValue } from "@/lib/task-reminders";
-import { hasCustomerAccess, resolveCustomerOwnerId } from "@/lib/customer-ownership";
-import { hasLeadAccess } from "@/lib/lead-ownership";
+import { buildCustomerScopeWhere, hasCustomerAccess, resolveCustomerOwnerId } from "@/lib/customer-ownership";
+import { hasLeadAccess, resolveLeadOwnerId } from "@/lib/lead-ownership";
 import { roleHome, type Role } from "@/lib/utils";
 
 const DEFAULT_ADMIN_EMAIL = "admin@crm.com";
@@ -124,6 +124,35 @@ function dateTimeWithClientOffset(formData: FormData, key: string, offsetKey: st
 
   if (offsetMinutes === undefined || !match) {
     return parseDateTimeInput(formData, key);
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6] ?? "0");
+
+  return validDate(new Date(Date.UTC(year, month, day, hour, minute, second) + offsetMinutes * 60 * 1000));
+}
+
+function dateTimeFromDateAndTimeWithClientOffset(formData: FormData, dateKey: string, timeKey: string, offsetKey: string) {
+  const date = text(formData, dateKey);
+  if (!date) return undefined;
+
+  const time = text(formData, timeKey);
+  if (!time) {
+    return validDate(new Date(`${date}T00:00:00`));
+  }
+
+  const offsetRaw = Number(formData.get(offsetKey));
+  const offsetMinutes = Number.isFinite(offsetRaw) ? offsetRaw : undefined;
+  const datetime = `${date}T${time}`;
+  const isoLike = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/;
+  const match = datetime.match(isoLike);
+
+  if (offsetMinutes === undefined || !match) {
+    return validDate(new Date(datetime));
   }
 
   const year = Number(match[1]);
@@ -351,6 +380,19 @@ function normalizePhoneCandidate(value: unknown) {
 function normalizeEmailCandidate(value: unknown) {
   const text = typeof value === "string" ? value.trim() : "";
   return text.includes("@") ? text : "";
+}
+
+function dedupeTextValues(values: Array<string | null | undefined>) {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))));
+}
+
+function normalizeCompanyNameKey(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function normalizeRawCustomerJson(value: Prisma.Prisma.JsonValue | undefined | null) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {} as Record<string, unknown>;
+  return value as Record<string, unknown>;
 }
 
 function startOfCurrentDay() {
@@ -1114,10 +1156,186 @@ export async function createLeadAction(formData: FormData) {
   return { ok: true, id: lead.id };
 }
 
+export async function assignProductCompaniesAction(formData: FormData) {
+  const user = await actionUser();
+  if (!canManage(user.role as Role)) {
+    return { ok: false, message: "Only admin or supervisor can assign companies from product view." };
+  }
+
+  const prisma = getPrisma();
+  const productId = text(formData, "productId");
+  const assignedToIdInput = text(formData, "assignedToId");
+  const companyIdsRaw = text(formData, "companyIdsJson");
+
+  if (!productId) return { ok: false, message: "Product is required." };
+  if (!assignedToIdInput) return { ok: false, message: "Select a marketer first." };
+  if (!companyIdsRaw) return { ok: false, message: "Select at least one company." };
+
+  const requestedCompanyIds = safeJsonParse(companyIdsRaw);
+  const companyIds = Array.isArray(requestedCompanyIds)
+    ? requestedCompanyIds.map((value) => String(value ?? "").trim()).filter(Boolean)
+    : [];
+
+  if (!companyIds.length) {
+    return { ok: false, message: "Select at least one company." };
+  }
+
+  const assignedToId = await resolveLeadOwnerId(prisma, { id: user.id, role: user.role as Role }, assignedToIdInput);
+  if (!assignedToId) {
+    return { ok: false, message: "Selected marketer is not available for this assignment." };
+  }
+  const product = await prisma.productService.findUnique({
+    where: { id: productId },
+    select: { id: true, name: true },
+  });
+  if (!product) {
+    return { ok: false, message: "Product was not found." };
+  }
+
+  const customerScopeWhere = await buildCustomerScopeWhere(prisma, { id: user.id, role: user.role as Role });
+  const companies = await prisma.customerCompany.findMany({
+    where: {
+      AND: [
+        customerScopeWhere,
+        { id: { in: companyIds } },
+      ],
+    },
+    include: {
+      contacts: { orderBy: { createdAt: "asc" } },
+      phoneNumbers: { orderBy: { createdAt: "asc" } },
+    },
+  });
+
+  if (!companies.length) {
+    return { ok: false, message: "No accessible companies were selected." };
+  }
+
+  const existingLeads = await prisma.lead.findMany({
+    where: {
+      companyId: { in: companies.map((company) => company.id) },
+      productInterestId: product.id,
+    },
+    orderBy: { updatedAt: "desc" },
+    select: {
+      id: true,
+      companyId: true,
+      assignedToId: true,
+      phone: true,
+      email: true,
+      customerName: true,
+    },
+  });
+  const existingLeadByCompanyId = new Map<string, (typeof existingLeads)[number]>();
+  for (const lead of existingLeads) {
+    if (!lead.companyId || existingLeadByCompanyId.has(lead.companyId)) continue;
+    existingLeadByCompanyId.set(lead.companyId, lead);
+  }
+
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  for (const company of companies) {
+    const raw = normalizeRawCustomerJson(company.rawData);
+    const phoneValues = dedupeTextValues([
+      company.phone,
+      company.phone2,
+      ...company.phoneNumbers.map((item) => item.number),
+      ...company.contacts.map((item) => item.mobile),
+      typeof raw["Primary Phone"] === "string" ? raw["Primary Phone"] : undefined,
+      typeof raw["Phone 2"] === "string" ? raw["Phone 2"] : undefined,
+    ]);
+    const emailValues = dedupeTextValues([
+      ...company.contacts.map((item) => item.email),
+      typeof raw["Primary Email"] === "string" ? raw["Primary Email"] : undefined,
+      typeof raw["Email 1"] === "string" ? raw["Email 1"] : undefined,
+      typeof raw["Email 2"] === "string" ? raw["Email 2"] : undefined,
+    ]);
+
+    const existingLead = existingLeadByCompanyId.get(company.id);
+    if (existingLead) {
+      await prisma.lead.update({
+        where: { id: existingLead.id },
+        data: {
+          assignedToId,
+          customerName: existingLead.customerName || company.name,
+          phone: existingLead.phone || phoneValues.join(" | "),
+          email: existingLead.email || (emailValues.join(" | ") || undefined),
+          companyId: company.id,
+          productInterestId: product.id,
+        },
+      });
+      updated += 1;
+      continue;
+    }
+
+    if (!phoneValues.length && !emailValues.length) {
+      skipped += 1;
+      continue;
+    }
+
+    const createdLead = await prisma.lead.create({
+      data: {
+        title: `${product.name} - ${company.name}`,
+        customerName: company.name,
+        phone: phoneValues.join(" | "),
+        email: emailValues.join(" | ") || undefined,
+        companyId: company.id,
+        productInterestId: product.id,
+        assignedToId,
+        createdById: user.id,
+        status: "NEW_LEAD",
+        priority: "MEDIUM",
+        score: 0,
+        purchaseProbability: 0,
+        notes: `Assigned from product ${product.name}`,
+      },
+    });
+
+    await addTimeline({
+      title: "Lead Created",
+      description: createdLead.title,
+      entity: "Lead",
+      entityId: createdLead.id,
+      userId: user.id,
+      companyId: company.id,
+      leadId: createdLead.id,
+    });
+    created += 1;
+  }
+
+  if (assignedToId !== user.id && created + updated > 0) {
+    await prisma.notification.create({
+      data: {
+        recipientId: assignedToId,
+        title: "Product Contact List Assigned",
+        message: `${created + updated} company record${created + updated === 1 ? "" : "s"} have been assigned to you for ${product.name}.`,
+        type: "NEW_LEAD_ASSIGNED",
+        entity: "ProductService",
+        entityId: product.id,
+      },
+    });
+  }
+
+  revalidateProductViews(product.id);
+  revalidatePath("/");
+  return {
+    ok: true,
+    created,
+    updated,
+    skipped,
+    message: `${created} created, ${updated} updated, ${skipped} skipped.`,
+  };
+}
+
 export async function createCustomerAction(formData: FormData) {
   const user = await actionUser();
   const prisma = getPrisma();
   const rawData = buildCustomerTemplateRaw(formData);
+  const rawDataMeta = rawData as unknown as Record<string, unknown>;
+  rawDataMeta["Created By"] = user.name?.trim() || user.mobile || "Unknown User";
+  rawDataMeta["Created By Role"] = user.role;
+  rawDataMeta["Created At"] = new Date().toISOString();
   const assignedToId = await resolveCustomerOwnerId(prisma, { id: user.id, role: user.role as Role }, text(formData, "assignedToId"), {
     requireSelectionForElevated: true,
   });
@@ -1174,31 +1392,90 @@ export async function createCustomerAction(formData: FormData) {
 
   const contactPerson = rawData["Contact Person 1 Name"] || contacts[0]?.name || null;
   const phone = phoneFromRaw || "";
-  const company = await prisma.customerCompany.create({
-    data: {
-      name: companyName,
-      industry: rawData["Industry"] || "",
-      contactPerson,
-      phone,
-      totalLeads: 0,
-      address: rawData["Address"] || undefined,
-      website: rawData["Website"] || undefined,
-      notes: rawData["Note"] || undefined,
-      rawData,
-      assignedToId,
-      contacts: contacts.length ? { create: contacts.map((contact) => ({ ...contact, whatsapp: undefined })) } : undefined,
-      phoneNumbers: phoneNumbers.length ? { create: phoneNumbers } : undefined,
-    } as any,
+  const existingCompany = await prisma.customerCompany.findFirst({
+    where: {
+      name: {
+        equals: companyName,
+        mode: "insensitive",
+      },
+    },
+    include: {
+      contacts: { orderBy: { createdAt: "asc" } },
+      phoneNumbers: { orderBy: { createdAt: "asc" } },
+    },
   });
 
+  const mergedRawData = (() => {
+    if (!existingCompany) return rawData as Prisma.Prisma.JsonValue;
+    const base = normalizeRawCustomerJson(existingCompany.rawData);
+    const merged: Record<string, unknown> = { ...base };
+    for (const [key, value] of Object.entries(rawDataMeta)) {
+      if (key === "SL") continue;
+      if (["Created By", "Created By Role", "Created At"].includes(key) && base[key]) continue;
+      merged[key] = value;
+    }
+    return merged as Prisma.Prisma.JsonValue;
+  })();
+
+  const contactCreates = existingCompany
+    ? contacts
+      .filter((contact) => {
+        const signature = `${(contact.name ?? "").trim().toLowerCase()}|${(contact.email ?? "").trim().toLowerCase()}|${(contact.mobile ?? "").trim()}`;
+        const existingSignatures = new Set(existingCompany.contacts.map((item) => `${(item.name ?? "").trim().toLowerCase()}|${(item.email ?? "").trim().toLowerCase()}|${(item.mobile ?? "").trim()}`));
+        return signature !== "||" && !existingSignatures.has(signature);
+      })
+      .map((contact) => ({ ...contact, whatsapp: undefined }))
+    : contacts.map((contact) => ({ ...contact, whatsapp: undefined }));
+
+  const phoneCreates = existingCompany
+    ? phoneNumbers.filter((item) => {
+      const existingNumbers = new Set(existingCompany.phoneNumbers.map((phoneNumber) => normalizeCompanyNameKey(phoneNumber.number)));
+      return !existingNumbers.has(normalizeCompanyNameKey(item.number));
+    })
+    : phoneNumbers;
+
+  const company = existingCompany
+    ? await prisma.customerCompany.update({
+      where: { id: existingCompany.id },
+      data: {
+        industry: rawData["Industry"] || existingCompany.industry || "",
+        contactPerson: contactPerson ?? existingCompany.contactPerson,
+        phone: phone || existingCompany.phone,
+        address: rawData["Address"] || existingCompany.address || undefined,
+        website: rawData["Website"] || existingCompany.website || undefined,
+        notes: rawData["Note"] || existingCompany.notes || undefined,
+        rawData: mergedRawData,
+        assignedToId: existingCompany.assignedToId ?? assignedToId,
+        contacts: contactCreates.length ? { create: contactCreates } : undefined,
+        phoneNumbers: phoneCreates.length ? { create: phoneCreates } : undefined,
+      } as any,
+    })
+    : await prisma.customerCompany.create({
+      data: {
+        name: companyName,
+        industry: rawData["Industry"] || "",
+        contactPerson,
+        phone,
+        totalLeads: 0,
+        address: rawData["Address"] || undefined,
+        website: rawData["Website"] || undefined,
+        notes: rawData["Note"] || undefined,
+        rawData,
+        assignedToId,
+        contacts: contactCreates.length ? { create: contactCreates } : undefined,
+        phoneNumbers: phoneCreates.length ? { create: phoneCreates } : undefined,
+      } as any,
+    });
+
   await addTimeline({
-    title: "Customer Created",
+    title: existingCompany ? "Customer Updated" : "Customer Created",
     description: company.name,
     entity: "CustomerCompany",
     entityId: company.id,
     userId: user.id,
     companyId: company.id,
   });
+  revalidateCustomerViews(company.id);
   revalidatePath("/");
   return { ok: true, id: company.id };
 }
@@ -1402,16 +1679,11 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
   const productDiscussed = text(formData, "productDiscussed");
   const outcome = text(formData, "outcome");
   const notes = text(formData, "notes");
-  const nextFollowUpDate = dateTimeWithClientOffset(formData, "nextFollowUpDate", "nextFollowUpDateTzOffset");
+  const nextFollowUpDate = dateTimeFromDateAndTimeWithClientOffset(formData, "nextFollowUpDate", "nextFollowUpTime", "nextFollowUpDateTzOffset");
   const rating = formData.has("rating") ? clampEngagementRating(formData.get("rating")) : undefined;
-  const followUpDone = text(formData, "followUpDone") ?? (nextFollowUpDate ? "NO" : "YES");
 
   if (!id) {
     return { ok: false, message: "Task reference is missing." };
-  }
-
-  if (!followUpDone || !["YES", "NO"].includes(followUpDone)) {
-    return { ok: false, message: "Please confirm whether follow-up is done." };
   }
 
   if (!conversationSummary) {
@@ -1472,8 +1744,8 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
   ]);
 
   const completedAt = new Date();
-  const shouldCreateFollowUp = followUpDone === "NO" || Boolean(nextFollowUpDate);
-  const scheduledFollowUpDate = nextFollowUpDate ?? completedAt;
+  const shouldCreateFollowUp = Boolean(nextFollowUpDate);
+  const scheduledFollowUpDate = nextFollowUpDate;
 
   const result = await prisma.$transaction(async (tx) => {
     const updatedTask = await tx.task.update({
@@ -1499,7 +1771,7 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
         communicationAt: completedAt,
         outcome,
         ...(typeof rating === "number" ? { rating } : {}),
-        nextFollowUpDate,
+        ...(nextFollowUpDate ? { nextFollowUpDate } : {}),
         followUpNote: notes,
       },
     });
@@ -1515,8 +1787,8 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
         note: conversationSummary,
         nextDiscussionPlan: notes ?? discussionTopic,
         priority: "MEDIUM",
-        followUpDate: scheduledFollowUpDate,
-        status: followUpStatusForDate(scheduledFollowUpDate),
+        followUpDate: scheduledFollowUpDate!,
+        status: followUpStatusForDate(scheduledFollowUpDate!),
             ...(typeof rating === "number" ? { rating } : {}),
           },
         })
@@ -1592,7 +1864,7 @@ export async function completeFollowUpWithCommunicationAction(formData: FormData
   const productDiscussed = text(formData, "productDiscussed");
   const outcome = text(formData, "outcome");
   const notes = text(formData, "notes");
-  const nextFollowUpDate = dateTimeWithClientOffset(formData, "nextFollowUpDate", "nextFollowUpDateTzOffset");
+  const nextFollowUpDate = dateTimeFromDateAndTimeWithClientOffset(formData, "nextFollowUpDate", "nextFollowUpTime", "nextFollowUpDateTzOffset");
   const rating = formData.has("rating") ? clampEngagementRating(formData.get("rating")) : undefined;
 
   if (!id) {
@@ -1654,7 +1926,7 @@ export async function completeFollowUpWithCommunicationAction(formData: FormData
         communicationAt: completedAt,
         outcome,
         ...(typeof rating === "number" ? { rating } : {}),
-        nextFollowUpDate,
+        ...(nextFollowUpDate ? { nextFollowUpDate } : {}),
         followUpNote: notes,
       },
     });
@@ -1816,9 +2088,13 @@ export async function createFollowUpAction(formData: FormData) {
     });
     if (linkedTask?.assignedToId) requestedAssignedToId = linkedTask.assignedToId;
   }
-  const followUpDate = dateTimeWithClientOffset(formData, "followUpDate", "followUpDateTzOffset");
-  if (!followUpDate) {
-    return { ok: false, message: "A valid follow-up date is required." };
+  const followUpDate = text(formData, "followUpDate");
+  const followUpTime = text(formData, "followUpTime");
+  const followUpDateTime = followUpDate && followUpTime
+    ? dateTimeFromDateAndTimeWithClientOffset(formData, "followUpDate", "followUpTime", "followUpDateTzOffset")
+    : undefined;
+  if (!followUpDateTime) {
+    return { ok: true, skipped: true };
   }
 
   const method = text(formData, "method") ?? "Phone Call";
@@ -1854,7 +2130,7 @@ export async function createFollowUpAction(formData: FormData) {
       description: note || nextDiscussionPlan || `${method} ${taskTitle}`,
       notes: nextDiscussionPlan || undefined,
       priority: "HIGH",
-      taskDateTime: followUpDate,
+      taskDateTime: followUpDateTime,
       assignedToId: requestedAssignedToId ?? undefined,
     },
   );
@@ -1934,7 +2210,7 @@ export async function createCommunicationAction(formData: FormData) {
   if (leadId && !(await hasLeadAccess(prisma, { id: user.id, role: user.role as Role }, leadId))) {
     return { ok: false, message: "You are not allowed to use this lead record." };
   }
-  const nextFollowUpDate = dateValue(formData, "nextFollowUpDate");
+  const nextFollowUpDate = dateTimeFromDateAndTimeWithClientOffset(formData, "nextFollowUpDate", "nextFollowUpTime", "nextFollowUpDateTzOffset");
   const taskId = text(formData, "taskId");
   if (taskId && !(await hasTaskAccess(prisma, user, taskId))) {
     return { ok: false, message: "You are not allowed to use this task record." };

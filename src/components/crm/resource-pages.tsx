@@ -58,6 +58,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { StatCard } from "@/components/shared/stat-card";
 import { CRM_LIVE_SYNC_EVENT, useTaskCounterContext } from "@/components/app/app-shell";
 import {
+  assignProductCompaniesAction,
   completeFollowUpWithCommunicationAction,
   completeTaskWithFollowUpAction,
   createCommunicationAction,
@@ -93,11 +94,35 @@ import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
 import { TASK_REMINDER_OPTIONS, normalizeTaskReminderValue, taskReminderLabel, type TaskReminderValue } from "@/lib/task-reminders";
 import { getCrmPeriodWindow } from "@/lib/crm-time";
 import { type ReportFormat } from "@/lib/report-definitions";
-import { cn, formatCurrency, initials, rolePath, type Role } from "@/lib/utils";
+import { cn, formatCurrency, initials, rolePath, type Role, type ShellUser } from "@/lib/utils";
 
 type ActionResult = { ok?: boolean; message?: string; [key: string]: unknown } | unknown;
 
 type ServerAction = (formData: FormData) => Promise<ActionResult>;
+
+type TaskWorkspaceUser = Pick<ShellUser, "id" | "name" | "email" | "mobile" | "role" | "designation">;
+
+type TaskWorkspaceEmployee = {
+  id: string;
+  name: string;
+  role: string;
+  roleKey: Role;
+  status: string;
+  statusKey: "ACTIVE" | "INACTIVE";
+  designation: string;
+  supervisorId?: string | null;
+};
+
+type TaskWorkspaceProduct = {
+  id: string;
+  name: string;
+};
+
+type TaskWorkspaceData = {
+  user: TaskWorkspaceUser;
+  employees: TaskWorkspaceEmployee[];
+  products: TaskWorkspaceProduct[];
+};
 
 function pageActions(items: { label: string; icon: typeof Plus; variant?: "default" | "outline"; onClick?: () => void; href?: string }[]) {
   return items.map(({ label, icon: Icon, variant = "outline", onClick, href }) => {
@@ -193,6 +218,11 @@ function mapSearchRows(scope: SearchableScope, rows: unknown[]) {
     .filter((item): item is SearchableOption => Boolean(item));
 }
 
+function optionInputLabel(scope: SearchableScope | undefined, label: string) {
+  if (scope !== "companies") return label;
+  return label.replace(/\s+\([^)]*\)\s*$/, "").trim() || label;
+}
+
 function SearchableEntitySelect({
   label,
   name,
@@ -221,6 +251,7 @@ function SearchableEntitySelect({
   compact?: boolean;
 }) {
   const isControlled = onValueChange !== undefined;
+  const normalizedSearchScope = searchScope ?? "";
   const [query, setQuery] = React.useState("");
   const [internalValue, setInternalValue] = React.useState(defaultValue);
   const selectedValue = isControlled ? (value ?? "") : internalValue;
@@ -245,10 +276,11 @@ function SearchableEntitySelect({
   React.useEffect(() => {
     if (isControlled) {
       const baseLabel = sourceOptions.find((item) => item.value === selectedValue)?.label ?? defaultLabel ?? "";
+      if (open) return;
       if (selectedValue) {
-        setQuery(baseLabel);
+        setQuery(optionInputLabel(searchScope, baseLabel));
       } else if (typeof defaultLabel === "string") {
-        setQuery(defaultLabel);
+        setQuery(optionInputLabel(searchScope, defaultLabel));
       } else if (!open) {
         setQuery("");
       }
@@ -258,13 +290,15 @@ function SearchableEntitySelect({
     if (defaultValue) {
       const baseLabel = sourceOptions.find((item) => item.value === defaultValue)?.label ?? defaultLabel ?? "";
       setInternalValue(defaultValue);
-      setQuery(baseLabel);
+      if (!open) {
+        setQuery(optionInputLabel(searchScope, baseLabel));
+      }
       return;
     }
 
     setInternalValue("");
     setQuery("");
-  }, [defaultValue, defaultLabel, isControlled, open, selectedValue, sourceOptions]);
+  }, [defaultValue, defaultLabel, isControlled, open, normalizedSearchScope, selectedValue, sourceOptions]);
 
   const companyCreateOption = React.useMemo(() => {
     if (searchScope !== "companies") return null;
@@ -303,7 +337,7 @@ function SearchableEntitySelect({
           params.set(key, value);
         }
       }
-      params.set("limit", "20");
+      params.set("limit", searchScope === "companies" ? "1000" : "100");
 
       try {
         const response = await fetch(`${endpoint}?${params.toString()}`, {
@@ -370,7 +404,7 @@ function SearchableEntitySelect({
     } else {
       setInternalValue(option.value);
     }
-    setQuery(option.label);
+    setQuery(optionInputLabel(searchScope, option.label));
     setOpen(false);
   }, [isControlled, normalizedQuery, onValueChange, searchScope]);
 
@@ -1828,7 +1862,9 @@ function CommunicationForm({ workspace, onDone }: { workspace: CrmWorkspace; onD
       <div className="grid gap-3 sm:grid-cols-2">
         <TextField label="Outcome" name="outcome" />
         <TextField label="Rating / Lead Score" name="rating" type="number" />
-        <TextField label="Next Follow-up Date" name="nextFollowUpDate" type="datetime-local" />
+        <TextField label="Next Follow-up Date" name="nextFollowUpDate" type="date" />
+        <TextField label="Next Follow-up Time" name="nextFollowUpTime" type="time" />
+        <input type="hidden" name="nextFollowUpDateTzOffset" value={new Date().getTimezoneOffset().toString()} />
       </div>
       <TextAreaField label="Next Follow-up Note" name="followUpNote" />
     </ActionForm>
@@ -1848,7 +1884,9 @@ function FollowUpForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
         />
         <SelectBox label="Method" name="method"><option>Phone Call</option><option>WhatsApp</option><option>Email</option><option>Physical Visit</option><option>Meeting</option></SelectBox>
       </div>
-      <TextField label="Follow-up Date" name="followUpDate" type="datetime-local" />
+      <TextField label="Follow-up Date" name="followUpDate" type="date" />
+      <TextField label="Follow-up Time" name="followUpTime" type="time" />
+      <input type="hidden" name="followUpDateTzOffset" value={new Date().getTimezoneOffset().toString()} />
       <TextAreaField label="Follow-up Note" name="note" />
     </ActionForm>
   );
@@ -2009,6 +2047,15 @@ function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
     next[index] = value;
     return next;
   }, []);
+  const removeContactAt = React.useCallback((index: number) => {
+    setContacts((current) => {
+      if (current.length <= 1) {
+        setShowContacts(false);
+        return [createEmptyCustomerContact()];
+      }
+      return current.filter((_, idx) => idx !== index);
+    });
+  }, []);
   const hasContactDetails = React.useMemo(
     () => contacts.some((contact) => (
       Boolean(contact.name.trim())
@@ -2166,17 +2213,16 @@ function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
                   <div>
                     <p className="text-sm font-black text-slate-950">{index === 0 ? "Primary Contact" : `Contact ${index + 1}`}</p>
                   </div>
-                  {index > 0 ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setContacts((current) => current.filter((_, idx) => idx !== index))}
-                      className="text-slate-600 hover:bg-red-50 hover:text-red-700"
-                    >
-                      Remove
-                    </Button>
-                  ) : null}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => removeContactAt(index)}
+                    className="text-slate-600 hover:bg-red-50 hover:text-red-700"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    {contacts.length <= 1 ? "Clear" : "Delete"}
+                  </Button>
                 </div>
 
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -2484,6 +2530,31 @@ function CustomerRowActions({
   );
 }
 
+function customerActivityToneClasses(tone?: CompanyRow["activityTone"]) {
+  if (tone === "blue") return "text-blue-600";
+  if (tone === "green") return "text-emerald-600";
+  if (tone === "amber") return "text-amber-600";
+  return "text-slate-500";
+}
+
+function customerActivityBadgeClasses(tone?: CompanyRow["activityTone"]) {
+  if (tone === "blue") return "border-blue-200 bg-blue-50 text-blue-700";
+  if (tone === "green") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (tone === "amber") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function customerActivityTooltip(customer: CompanyRow) {
+  const rows = [
+    customer.activityLabel ? `Status: ${customer.activityLabel}` : null,
+    `Added by: ${customer.createdBy || customer.assignedTo || "-"}`,
+    `Owner: ${customer.assignedTo || "-"}`,
+    `Last contact: ${customer.lastCommunication || "-"}`,
+  ].filter(Boolean);
+
+  return rows.join("\n");
+}
+
 function CustomerViewModal({
   customer,
   open,
@@ -2498,6 +2569,8 @@ function CustomerViewModal({
   return (
     <FormModal open={open} title={customer.name || "Customer"} onClose={onClose} panelClassName="max-w-2xl">
       <dl className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <DetailRow label="Added By" value={customer.createdBy || customer.assignedTo || "-"} />
+        <DetailRow label="Added On" value={customer.createdAtLabel || "-"} />
         <DetailRow label="Contact Person" value={customer.contactPerson || "-"} />
         <DetailRow label="Phone" value={customer.phone || "-"} />
         <DetailRow label="WhatsApp" value={customer.whatsapp || "-"} />
@@ -2907,24 +2980,17 @@ function ProductForm({
       onSubmit={(event) => {
         event.preventDefault();
         const form = event.currentTarget;
-        const formData = new FormData(form);
-        const payload = {
-          name: String(formData.get("name") ?? "").trim(),
-          category: String(formData.get("category") ?? "").trim(),
-          brand: String(formData.get("brand") ?? "").trim(),
-          price: Number(formData.get("price")),
-          imageUrl: String(formData.get("imageUrl") ?? "").trim(),
-          description: String(formData.get("description") ?? "").trim(),
-          specification: String(formData.get("specification") ?? "").trim(),
-        };
+        const payload = new FormData(form);
+        payload.set("category", product?.category || "General");
+        payload.set("brand", product && product.brand !== "-" ? product.brand : "");
+        payload.set("existingImageUrl", product?.imageUrl ?? "");
 
         startTransition(async () => {
           setMessage("");
           try {
             const response = await fetch(product ? `/api/products/${product.id}` : "/api/products", {
               method: product ? "PATCH" : "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
+              body: payload,
             });
             const result = await response.json();
             if (!response.ok || !result.success || !result.row) {
@@ -2945,16 +3011,17 @@ function ProductForm({
     >
       <TextField label="Product / Service Name" name="name" required defaultValue={product?.name ?? ""} />
       <div className="grid gap-3 sm:grid-cols-2">
-        <TextField label="Category" name="category" required defaultValue={product?.category ?? ""} />
-        <TextField label="Brand" name="brand" defaultValue={product && product.brand !== "-" ? product.brand : ""} />
         <TextField label="Price" name="price" type="number" defaultValue={product ? product.price : 0} required />
-        <TextField label="Image URL" name="imageUrl" defaultValue={product?.imageUrl ?? ""} />
+        <label className="space-y-1.5">
+          <span className="text-sm font-semibold text-slate-700">Product Image</span>
+          <Input type="file" name="image" accept="image/*" className="h-10 bg-white text-sm" />
+          {product?.imageUrl ? <p className="truncate text-xs font-semibold text-blue-700">Current: {product.imageUrl}</p> : null}
+        </label>
       </div>
-      <TextAreaField label="Description" name="description" defaultValue={product && product.description !== "-" ? product.description : ""} />
       <TextAreaField label="Specification" name="specification" defaultValue={product && product.specification !== "-" ? product.specification : ""} />
       {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
-      <div>
-        <Button className="w-full" disabled={pending} type="submit">
+      <div className="flex justify-end">
+        <Button className="min-w-36 rounded-xl px-5" disabled={pending} type="submit">
           {pending ? "Saving..." : product ? "Update Product" : "Save Product"}
         </Button>
       </div>
@@ -3769,7 +3836,7 @@ function CustomerSpreadsheetImportModal({
                   {overflowRows > 0
                     ? `Assigned ${assignedTotal} rows, but only ${preview.totalRows} rows are available. Reduce ${overflowRows} rows.`
                     : remainingRows > 0
-                      ? `Assigned ${assignedTotal} of ${preview.totalRows} rows. Remaining ${remainingRows} rows will stay in your list so you can assign them later.`
+                      ? `Assigned ${assignedTotal} of ${preview.totalRows} rows. The remaining ${remainingRows} rows will stay in your list for later assignment.`
                       : `Assigned all ${preview.totalRows} rows.`}
                 </div>
               </div>
@@ -4079,7 +4146,7 @@ function CustomerPdfImportModal({
                   {overflowRows > 0
                     ? `Assigned ${assignedTotal} rows, but only ${preview.totalRows} rows are available. Reduce ${overflowRows} rows.`
                     : remainingRows > 0
-                      ? `Assigned ${assignedTotal} of ${preview.totalRows} rows. Remaining ${remainingRows} rows will stay in your list so you can assign them later.`
+                      ? `Assigned ${assignedTotal} of ${preview.totalRows} rows. The remaining ${remainingRows} rows will stay in your list for later assignment.`
                       : `Assigned all ${preview.totalRows} rows.`}
                 </div>
               </div>
@@ -4272,6 +4339,7 @@ function BulkCustomerAssignModal({
 
 export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
   const router = useRouter();
+  const skippedInitialRefreshRef = React.useRef(false);
   const [open, setOpen] = React.useState(false);
   const [spreadsheetImportOpen, setSpreadsheetImportOpen] = React.useState(false);
   const [pdfImportOpen, setPdfImportOpen] = React.useState(false);
@@ -4288,6 +4356,8 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   const [exportMenuOpen, setExportMenuOpen] = React.useState(false);
   const [feedback, setFeedback] = React.useState<{ type: "success" | "error"; title: string; message: string } | null>(null);
   const [selectedCustomerIds, setSelectedCustomerIds] = React.useState<string[]>([]);
+  const [tableSearch, setTableSearch] = React.useState("");
+  const [visibleCustomers, setVisibleCustomers] = React.useState<CompanyRow[]>(() => workspace.companies);
   const [filters, setFilters] = React.useState({
     search: "",
     city: "",
@@ -4367,11 +4437,34 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
               ),
             } satisfies ColumnDef<CompanyRow>]
           : []),
-        { accessorKey: "name", header: "Company Name", cell: ({ row }) => <EntityLink href={`/customers/${row.original.id}`} className="font-bold">{row.original.name}</EntityLink> },
-        { accessorKey: "contactPerson", header: "Contact Person" },
+        {
+          accessorKey: "name",
+          header: "Company Name",
+          cell: ({ row }) => (
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <EntityLink href={`/customers/${row.original.id}`} className="font-bold">
+                  {row.original.name}
+                </EntityLink>
+                {row.original.activityLabel ? (
+                  <span
+                    title={customerActivityTooltip(row.original)}
+                    className={cn(
+                      "inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-black uppercase tracking-[0.14em]",
+                      customerActivityBadgeClasses(row.original.activityTone),
+                    )}
+                  >
+                    {row.original.activityLabel}
+                  </span>
+                ) : null}
+              </div>
+              <p className="text-xs text-slate-500">
+                Added by {row.original.createdBy || row.original.assignedTo || "-"}
+              </p>
+            </div>
+          ),
+        },
         { accessorKey: "phone", header: "Primary Phone" },
-        { accessorKey: "phone2", header: "Phone 2" },
-        { accessorKey: "email", header: "Primary Email" },
         { accessorKey: "cityOrZilla", header: "City / Zilla" },
         { accessorKey: "address", header: "Address" },
         { accessorKey: "industry", header: "Industry" },
@@ -4402,13 +4495,28 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   React.useEffect(() => {
     setCustomers(workspace.companies);
     setFilteredCount(workspace.companies.length);
+    setVisibleCustomers(workspace.companies);
   }, [workspace.companies]);
 
   React.useEffect(() => {
+    const isDefaultFilterState =
+      !filters.search.trim()
+      && !filters.city.trim()
+      && !filters.industry.trim()
+      && filters.assignedToId === "all";
+    const needsInitialSync = workspace.sidebarCounts?.customers !== undefined
+      && workspace.companies.length !== workspace.sidebarCounts.customers;
+
+    if (!skippedInitialRefreshRef.current && isDefaultFilterState && !needsInitialSync) {
+      skippedInitialRefreshRef.current = true;
+      return;
+    }
+
+    skippedInitialRefreshRef.current = true;
     void refreshCustomers().catch(() => {
       // Keep the server-rendered workspace snapshot if the live refresh fails.
     });
-  }, [refreshCustomers]);
+  }, [filters.assignedToId, filters.city, filters.industry, filters.search, refreshCustomers, workspace.companies.length, workspace.sidebarCounts?.customers]);
 
   React.useEffect(() => {
     if (!feedback) return undefined;
@@ -4416,6 +4524,10 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
     const timeout = window.setTimeout(() => setFeedback(null), 5000);
     return () => window.clearTimeout(timeout);
   }, [feedback]);
+
+  React.useEffect(() => {
+    setSelectedCustomerIds((current) => current.filter((id) => visibleCustomers.some((customer) => customer.id === id)));
+  }, [visibleCustomers]);
 
   React.useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -4676,7 +4788,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
           <div>
             <p className="text-sm font-black text-slate-950">Manual marketer assignment</p>
             <p className="mt-1 text-xs font-semibold text-slate-500">
-              Import without assign korle ekhane checkbox diye exact customer select kore marketer-er kache pathate parben.
+              District, industry, marketer, and search filter use kore visible customer select kore marketer-er kache pathate parben.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -4687,10 +4799,10 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
               type="button"
               variant="outline"
               size="sm"
-              disabled={!customers.length}
-              onClick={() => setSelectedCustomerIds(customers.map((customer) => customer.id))}
+              disabled={!visibleCustomers.length}
+              onClick={() => setSelectedCustomerIds(visibleCustomers.map((customer) => customer.id))}
             >
-              Select All Loaded
+              Select Visible Results
             </Button>
             <Button
               type="button"
@@ -4713,7 +4825,14 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
           </div>
         </div>
       ) : null}
-      <DataTable data={customers} columns={columns} searchPlaceholder="Search customer..." />
+      <DataTable
+        data={customers}
+        columns={columns}
+        searchPlaceholder="Refine visible customers..."
+        globalFilterValue={tableSearch}
+        onGlobalFilterValueChange={setTableSearch}
+        onVisibleRowsChange={setVisibleCustomers}
+      />
       <FormModal open={open} title="Create Customer / Company" onClose={() => setOpen(false)}>
         <CustomerForm workspace={workspace} onDone={handleCreateDone} />
       </FormModal>
@@ -4793,12 +4912,14 @@ export function CustomerProfilePage({
   customer,
   history,
   journey,
+  backHref,
 }: {
   role: Role;
   workspace: CrmWorkspace;
   customer?: CompanyRow;
   history: CustomerHistory;
   journey: CustomerJourneySummary;
+  backHref?: string;
 }) {
   const active = customer;
   const [historyState, setHistoryState] = React.useState(history);
@@ -4930,7 +5051,7 @@ export function CustomerProfilePage({
   return (
     <>
       <FloatingFeedback feedback={feedback} />
-      <Link href={rolePath(role, "customers")} className="inline-flex items-center gap-2 text-sm font-bold text-blue-700">
+      <Link href={backHref || rolePath(role, "customers")} className="inline-flex items-center gap-2 text-sm font-bold text-blue-700">
         <ArrowLeft className="h-4 w-4" />
         Back
       </Link>
@@ -5171,7 +5292,7 @@ export function CustomerProfilePage({
   );
 }
 
-export function TodaysPlanPage({ workspace }: { workspace: CrmWorkspace }) {
+export function TodaysPlanPage({ workspace }: { workspace: TaskWorkspaceData }) {
   return <TodayTasksExecutionView role="MARKETER" workspace={workspace} />;
 }
 
@@ -5211,25 +5332,40 @@ export type TodayTaskApiRow = {
 
 export function sortTodayWorkQueue(rows: TodayWorkQueueItem[]) {
   return [...rows].sort((left, right) => {
-    const rank = (item: TodayWorkQueueItem) => {
-      if (item.queueType === "OVERDUE" || item.queueType === "CARRY_FORWARD") return 4;
-      if (item.priorityKey === "IMPORTANT") return 3;
-      if (item.priorityKey === "HIGH") return 2;
-      if (item.priorityKey === "MEDIUM") return 1;
-      return 0;
+    const queueRank = (item: TodayWorkQueueItem) => {
+      if (item.queueType === "OVERDUE" || item.queueType === "CARRY_FORWARD") return 3;
+      if (item.queueType === "DUE_FOLLOW_UP") return 2;
+      return 1;
     };
-    const priorityDiff = rank(right) - rank(left);
-    if (priorityDiff !== 0) return priorityDiff;
+    const priorityRank = (item: TodayWorkQueueItem) => {
+      if (item.priorityKey === "IMPORTANT") return 4;
+      if (item.priorityKey === "HIGH") return 3;
+      if (item.priorityKey === "MEDIUM") return 2;
+      return 1;
+    };
+    const queueDiff = queueRank(right) - queueRank(left);
+    if (queueDiff !== 0) return queueDiff;
 
-    const leftAssigned = new Date(left.assignedAtIso).getTime();
-    const rightAssigned = new Date(right.assignedAtIso).getTime();
-    if (leftAssigned !== rightAssigned) return rightAssigned - leftAssigned;
+    const priorityDiff = priorityRank(right) - priorityRank(left);
+    if (priorityDiff !== 0) return priorityDiff;
 
     const leftTime = new Date(left.taskDateIso).getTime();
     const rightTime = new Date(right.taskDateIso).getTime();
-    if (leftTime !== rightTime) return rightTime - leftTime;
+    if (leftTime !== rightTime) return leftTime - rightTime;
+
+    const leftAssigned = new Date(left.assignedAtIso).getTime();
+    const rightAssigned = new Date(right.assignedAtIso).getTime();
+    if (leftAssigned !== rightAssigned) return leftAssigned - rightAssigned;
+
     return left.title.localeCompare(right.title);
   });
+}
+
+function toEditableTaskRow(task: TodayWorkQueueItem): TodayTaskApiRow {
+  return {
+    ...task,
+    id: task.sourceId,
+  } as TodayTaskApiRow;
 }
 
 export function todayWorkCounts(rows: TodayWorkQueueItem[]) {
@@ -5397,7 +5533,7 @@ export function TaskCreateModal({
   onCreated: (row: TodayTaskApiRow) => void;
   onDeleted?: (taskId: string) => void;
   role: Role;
-  workspace: CrmWorkspace;
+  workspace: TaskWorkspaceData;
   initialTask?: TodayTaskApiRow | null;
 }) {
   const [title, setTitle] = React.useState("Call");
@@ -5415,6 +5551,7 @@ export function TaskCreateModal({
   const [pending, setPending] = React.useState(false);
   const [message, setMessage] = React.useState("");
   const isEditing = Boolean(initialTask?.id);
+  const needsScheduledDateTime = title === "Follow-up";
   const taskTitleOptions = ["Call", "Follow-up", "Quotation", "Sale"];
   const assignableMembers = React.useMemo(() => {
     if (role === "MARKETER") return [];
@@ -5482,6 +5619,18 @@ export function TaskCreateModal({
       return;
     }
 
+    if (needsScheduledDateTime && !taskDateTime) {
+      setMessage("Follow-up task er jonno date and time select korte hobe.");
+      setPending(false);
+      return;
+    }
+
+    const effectiveTaskDateTime = needsScheduledDateTime
+      ? taskDateTime
+      : isEditing && initialTask?.taskDateIso
+        ? dateTimeLocalValue(new Date(initialTask.taskDateIso))
+        : dateTimeLocalValue();
+
     try {
       const response = await fetch(isEditing ? `/api/tasks/${initialTask?.id}` : "/api/tasks", {
         method: isEditing ? "PATCH" : "POST",
@@ -5494,8 +5643,9 @@ export function TaskCreateModal({
           productId,
           assignedToId,
           priority,
-          taskDateTime,
-          reminder,
+          taskDateTime: effectiveTaskDateTime,
+          taskDateTimeTzOffset: new Date().getTimezoneOffset(),
+          reminder: role === "MARKETER" ? "" : reminder,
           customerContactPerson,
           customerPhone,
           customerCity,
@@ -5647,7 +5797,7 @@ export function TaskCreateModal({
             className="min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
           />
         </label>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className={cn("grid gap-3", role === "MARKETER" ? "sm:grid-cols-2" : "sm:grid-cols-2 xl:grid-cols-3")}>
           <label className="space-y-1.5">
             <span className="text-sm font-semibold text-slate-700">Priority</span>
             <select
@@ -5661,27 +5811,37 @@ export function TaskCreateModal({
               <option value="IMPORTANT">Important</option>
             </select>
           </label>
-          <label className="space-y-1.5">
-            <span className="text-sm font-semibold text-slate-700">Date & Time</span>
-            <Input
-              type="datetime-local"
-              value={taskDateTime}
-              onChange={(event) => setTaskDateTime(event.target.value)}
-              required
-            />
-          </label>
-          <label className="space-y-1.5">
-            <span className="text-sm font-semibold text-slate-700">Reminder</span>
-            <select
-              value={reminder}
-              onChange={(event) => setReminder(event.target.value as TaskReminderValue)}
-              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-            >
-              {TASK_REMINDER_OPTIONS.map((option) => (
-                <option key={option.value || "none"} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
+          {needsScheduledDateTime ? (
+            <label className="space-y-1.5">
+              <span className="text-sm font-semibold text-slate-700">Date & Time</span>
+              <Input
+                type="datetime-local"
+                value={taskDateTime}
+                onChange={(event) => {
+                  const input = event.currentTarget;
+                  setTaskDateTime(event.target.value);
+                  window.requestAnimationFrame(() => {
+                    input.blur();
+                  });
+                }}
+                required
+              />
+            </label>
+          ) : null}
+          {role !== "MARKETER" ? (
+            <label className="space-y-1.5">
+              <span className="text-sm font-semibold text-slate-700">Reminder</span>
+              <select
+                value={reminder}
+                onChange={(event) => setReminder(event.target.value as TaskReminderValue)}
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+              >
+                {TASK_REMINDER_OPTIONS.map((option) => (
+                  <option key={option.value || "none"} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         </div>
         {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
         <div className="flex flex-wrap gap-2">
@@ -5741,7 +5901,6 @@ export function TaskCompleteConfirmModal({
 
 export function TaskFollowUpModal({
   task,
-  workspace,
   onClose,
   onSaved,
 }: {
@@ -5756,7 +5915,6 @@ export function TaskFollowUpModal({
     defaultStep?: CrmPipelineStep;
     defaultMethod?: string;
   } | null;
-  workspace: CrmWorkspace;
   onClose: () => void;
   onSaved: (result?: ActionResult) => void;
 }) {
@@ -5822,8 +5980,9 @@ export function TaskFollowUpModal({
               </select>
             </label>
           </div>
-          <TextField label="Follow-up Date" name="followUpDate" type="datetime-local" defaultValue={dateTimeLocalValue()} required />
-          <TextAreaField label="Follow-up Note" name="note" required />
+          <TextField label="Follow-up Date" name="followUpDate" type="date" defaultValue={dateTimeLocalValue().slice(0, 10)} />
+          <TextField label="Follow-up Time" name="followUpTime" type="time" />
+          <TextAreaField label="Follow-up Note" name="note" />
         </ActionForm>
       ) : null}
     </FormModal>
@@ -5842,7 +6001,8 @@ export function FollowUpEditModal({
   onDeleted: (result?: ActionResult) => void;
 }) {
   const [method, setMethod] = React.useState("Phone Call");
-  const [followUpDate, setFollowUpDate] = React.useState(dateTimeLocalValue());
+  const [followUpDate, setFollowUpDate] = React.useState(dateTimeLocalValue().slice(0, 10));
+  const [followUpTime, setFollowUpTime] = React.useState("");
   const [note, setNote] = React.useState("");
   const [nextDiscussionPlan, setNextDiscussionPlan] = React.useState("");
   const [pending, setPending] = React.useState(false);
@@ -5851,14 +6011,18 @@ export function FollowUpEditModal({
   React.useEffect(() => {
     if (!item || item.sourceType !== "FOLLOW_UP") {
       setMethod("Phone Call");
-      setFollowUpDate(dateTimeLocalValue());
+      setFollowUpDate(dateTimeLocalValue().slice(0, 10));
+      setFollowUpTime("");
       setNote("");
       setNextDiscussionPlan("");
       setMessage("");
       return;
     }
     setMethod(item.method || "Phone Call");
-    setFollowUpDate(dateTimeLocalValue(new Date(item.taskDateIso)));
+    const baseDate = new Date(item.taskDateIso);
+    setFollowUpDate(dateTimeLocalValue(baseDate).slice(0, 10));
+    const hasTime = baseDate.getHours() !== 0 || baseDate.getMinutes() !== 0 || baseDate.getSeconds() !== 0 || baseDate.getMilliseconds() !== 0;
+    setFollowUpTime(hasTime ? dateTimeLocalValue(baseDate).slice(11, 16) : "");
     setNote(item.description !== "-" ? item.description : "");
     setNextDiscussionPlan(item.notes !== "-" ? item.notes : "");
     setMessage("");
@@ -5870,12 +6034,13 @@ export function FollowUpEditModal({
     setPending(true);
     setMessage("");
     try {
+      const followUpDateValue = followUpDate && followUpTime ? `${followUpDate}T${followUpTime}` : followUpDate;
       const response = await fetch(`/api/follow-ups/${item.sourceId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           method,
-          followUpDate,
+          followUpDate: followUpDateValue,
           note,
           nextDiscussionPlan,
         }),
@@ -5937,7 +6102,11 @@ export function FollowUpEditModal({
             </label>
             <label className="space-y-1.5">
               <span className="text-sm font-semibold text-slate-700">Follow-up Date</span>
-              <Input type="datetime-local" value={followUpDate} onChange={(event) => setFollowUpDate(event.target.value)} required />
+              <Input type="date" value={followUpDate} onChange={(event) => setFollowUpDate(event.target.value)} required />
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-sm font-semibold text-slate-700">Follow-up Time</span>
+              <Input type="time" value={followUpTime} onChange={(event) => setFollowUpTime(event.target.value)} />
             </label>
           </div>
           <label className="block space-y-1.5">
@@ -5973,12 +6142,10 @@ export function FollowUpEditModal({
 
 export function WorkCompletionModal({
   item,
-  workspace,
   onClose,
   onSaved,
 }: {
   item: TodayWorkQueueItem | null;
-  workspace: CrmWorkspace;
   onClose: () => void;
   onSaved: (result?: ActionResult) => void;
 }) {
@@ -6054,7 +6221,8 @@ export function WorkCompletionModal({
                 <option>Lead Lost</option>
               </select>
             </label>
-            <TextField label="Next Follow-up Date" name="nextFollowUpDate" type="datetime-local" />
+            <TextField label="Next Follow-up Date" name="nextFollowUpDate" type="date" />
+            <TextField label="Next Follow-up Time" name="nextFollowUpTime" type="time" />
             <input type="hidden" name="nextFollowUpDateTzOffset" value={new Date().getTimezoneOffset().toString()} />
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -6166,7 +6334,22 @@ export function TodayWorkQueueList({
   return (
     <div className={cn("space-y-2.5 overflow-y-auto pr-1", maxHeightClassName)}>
       <AnimatePresence initial={false}>
-        {rows.map((task) => (
+        {rows.map((task) => {
+          const crmStep = normalizeCrmPipelineStep(task.title) ?? (task.sourceType === "FOLLOW_UP" ? "Follow-up" : null);
+          const taskTimestamp = new Date(task.taskDateIso).getTime();
+          const isLiveFollowUp = task.sourceType === "FOLLOW_UP" && task.queueType === "DUE_FOLLOW_UP" && Number.isFinite(taskTimestamp) && taskTimestamp <= Date.now();
+          const isUpcomingFollowUp = task.sourceType === "FOLLOW_UP" && task.queueType === "DUE_FOLLOW_UP" && Number.isFinite(taskTimestamp) && taskTimestamp > Date.now();
+          const isFollowUpStep = crmStep === "Follow-up" || task.sourceType === "FOLLOW_UP" || task.isDueFollowUp;
+          const showScheduledTime = viewerRole !== "MARKETER" || isFollowUpStep;
+          const stageBadgeTone = crmStep === "Follow-up"
+            ? isLiveFollowUp
+              ? "border-orange-300 bg-orange-100 text-orange-800 shadow-sm"
+              : "border-amber-200 bg-amber-50 text-amber-700"
+            : crmStep === "Call"
+              ? "border-sky-200 bg-sky-50 text-sky-700"
+              : "border-slate-200 bg-slate-50 text-slate-700";
+
+          return (
           <motion.div
             key={task.id}
             layout
@@ -6189,6 +6372,8 @@ export function TodayWorkQueueList({
               onOpen && "cursor-pointer",
               task.queueType === "OVERDUE" || task.queueType === "CARRY_FORWARD"
                 ? "border-rose-200 bg-gradient-to-br from-rose-50 to-white ring-1 ring-rose-100"
+                : isLiveFollowUp
+                  ? "border-orange-300 bg-gradient-to-br from-orange-50 via-amber-50 to-white ring-2 ring-orange-100"
                 : task.queueType === "DUE_FOLLOW_UP"
                   ? "border-amber-200 bg-gradient-to-br from-amber-50 to-white ring-1 ring-amber-100"
                   : task.priorityKey === "IMPORTANT"
@@ -6207,17 +6392,31 @@ export function TodayWorkQueueList({
               />
               <MiniAvatar label={task.companyName || task.title} />
               <div className="min-w-0 flex-1">
-                {(() => {
-                  const crmStep = normalizeCrmPipelineStep(task.title) ?? (task.sourceType === "FOLLOW_UP" ? "Follow-up" : null);
-                  return crmStep ? (
-                    <div className="mb-3">
-                      <CrmPipelineStrip
-                        activeStep={crmStep}
-                        highlight={task.queueType === "DUE_FOLLOW_UP" || task.queueType === "OVERDUE" || task.priorityKey === "IMPORTANT"}
-                      />
+                {crmStep ? (
+                  <div className="mb-3 space-y-2">
+                    <CrmPipelineStrip
+                      activeStep={crmStep}
+                      highlight={task.queueType === "DUE_FOLLOW_UP" || task.queueType === "OVERDUE" || task.priorityKey === "IMPORTANT"}
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-[11px] font-black", stageBadgeTone)}>
+                        Current step: {crmStep}
+                      </span>
+                      {isLiveFollowUp ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-orange-300 bg-orange-100 px-2.5 py-1 text-[11px] font-black text-orange-800 shadow-sm">
+                          <Clock3 className="h-3.5 w-3.5" />
+                          Live follow-up now
+                        </span>
+                      ) : null}
+                      {isUpcomingFollowUp ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-white px-2.5 py-1 text-[11px] font-bold text-amber-700">
+                          <Clock3 className="h-3.5 w-3.5" />
+                          Upcoming follow-up
+                        </span>
+                      ) : null}
                     </div>
-                  ) : null;
-                })()}
+                  </div>
+                ) : null}
                 <div className="space-y-1">
                   <div className="flex min-w-0 items-start justify-between gap-3">
                     <button type="button" onClick={(event) => {
@@ -6226,10 +6425,22 @@ export function TodayWorkQueueList({
                     }} className="truncate text-left text-lg font-black text-slate-900 hover:text-blue-700">
                       {task.title}
                     </button>
-                    <div className="shrink-0 text-right">
-                      <p className="text-sm font-bold text-slate-700">{task.timeLabel}</p>
-                      <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{task.taskDateLabel}</p>
-                    </div>
+                    {showScheduledTime ? (
+                      <div className={cn(
+                        "shrink-0 rounded-2xl border px-3 py-2 text-right",
+                        isLiveFollowUp
+                          ? "border-orange-300 bg-orange-100 text-orange-900 shadow-sm"
+                          : task.queueType === "OVERDUE"
+                            ? "border-rose-200 bg-rose-50 text-rose-800"
+                            : task.queueType === "DUE_FOLLOW_UP"
+                              ? "border-amber-200 bg-white text-amber-800"
+                              : "border-slate-200 bg-slate-50 text-slate-700",
+                      )}>
+                        {task.timeLabel ? <p className="text-sm font-black">{task.timeLabel}</p> : null}
+                        <p className={cn(task.timeLabel ? "mt-0.5" : "mt-0", "text-[11px] font-semibold", isLiveFollowUp ? "text-orange-700" : "text-slate-500")}>{task.taskDateLabel}</p>
+                        {isLiveFollowUp ? <p className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-orange-700">Due now</p> : null}
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex min-w-0 items-center justify-between gap-3">
                     <div className="min-w-0 flex items-center gap-3">
@@ -6277,13 +6488,13 @@ export function TodayWorkQueueList({
                   <>
                     <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={(event) => {
                       event.stopPropagation();
-                      onEdit?.(task as TodayTaskApiRow);
+                      onEdit?.(toEditableTaskRow(task));
                     }}>
                       Edit
                     </Button>
                     <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs text-red-600" onClick={(event) => {
                       event.stopPropagation();
-                      onDelete?.(task as TodayTaskApiRow);
+                      onDelete?.(toEditableTaskRow(task));
                     }}>
                       Delete
                     </Button>
@@ -6307,7 +6518,7 @@ export function TodayWorkQueueList({
               </div>
             </div>
           </motion.div>
-        ))}
+        )})}
       </AnimatePresence>
     </div>
   );
@@ -6390,7 +6601,7 @@ export function CompletedWorkList({
                     <p className="mt-0.5 truncate text-base font-bold text-slate-700">
                       <EntityLink href={task.companyHref} className="text-base font-bold text-slate-800" stopPropagation>{task.companyName}</EntityLink>
                     </p>
-                    <p className="mt-1 text-xs font-semibold text-slate-500">Scheduled: {task.taskDateLabel} {task.timeLabel}</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Scheduled: {task.taskDateLabel}{task.timeLabel ? ` ${task.timeLabel}` : ""}</p>
                   </div>
                   <button
                     type="button"
@@ -6460,7 +6671,7 @@ function MarketerTaskBoards({
   onDeleteFollowUp,
   onAddFollowUp,
 }: {
-  employees: CrmWorkspace["employees"];
+  employees: TaskWorkspaceEmployee[];
   pendingRows: TodayWorkQueueItem[];
   completedRows: CompletedWorkItem[];
   loading: boolean;
@@ -6557,7 +6768,7 @@ function MarketerTaskBoards({
   );
 }
 
-function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
+function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: TaskWorkspaceData }) {
   const [open, setOpen] = React.useState(false);
   const [editingTask, setEditingTask] = React.useState<TodayTaskApiRow | null>(null);
   const [editingFollowUp, setEditingFollowUp] = React.useState<TodayWorkQueueItem | null>(null);
@@ -6808,7 +7019,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
     setActionError("");
     if (role !== "MARKETER" && task.sourceType === "TASK" && task.assignedToId === workspace.user.id) {
       setConfirmMessage("");
-      setConfirmTask(task as TodayTaskApiRow);
+      setConfirmTask(toEditableTaskRow(task));
       return;
     }
     setCompletionItem(task);
@@ -7034,7 +7245,6 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
       />
       <WorkCompletionModal
         item={completionItem}
-        workspace={workspace}
         onClose={() => {
           setCompletionItem(null);
           setActionError("");
@@ -7044,7 +7254,6 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
       <TaskFollowUpModal
         key={followUpTask ? `${followUpTask.id}:${followUpTask.defaultStep ?? "Follow-up"}:${followUpTask.defaultMethod ?? "Phone Call"}` : "follow-up-empty"}
         task={followUpTask}
-        workspace={workspace}
         onClose={() => setFollowUpTask(null)}
         onSaved={handleFollowUpSaved}
       />
@@ -7094,14 +7303,14 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: C
                 <Button
                   type="button"
                   onClick={() => {
-                    setEditingTask(detailItem as TodayTaskApiRow);
+                    setEditingTask(toEditableTaskRow(detailItem as TodayWorkQueueItem));
                     setDetailItem(null);
                     setOpen(true);
                   }}
                 >
                   Edit Task
                 </Button>
-                <Button type="button" variant="destructive" onClick={() => void handleTaskDelete(detailItem as TodayTaskApiRow)}>
+                <Button type="button" variant="destructive" onClick={() => void handleTaskDelete(toEditableTaskRow(detailItem as TodayWorkQueueItem))}>
                   Delete Task
                 </Button>
               </div>
@@ -7132,10 +7341,31 @@ export function TasksPage({ role, workspace }: { role: Role; workspace: CrmWorks
   return <TodayTasksExecutionView role={role} workspace={workspace} />;
 }
 
+function fallbackFollowUpPageData(workspace: CrmWorkspace): FollowUpPageData {
+  const pageSize = 10;
+  const total = workspace.followUps.length;
+
+  return {
+    rows: workspace.followUps.slice(0, pageSize),
+    total,
+    page: 1,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    filters: {
+      search: undefined,
+      dateFilter: "all",
+      from: undefined,
+      to: undefined,
+    },
+    summary: workspace.followUpSummary,
+  };
+}
+
 export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorkspace; followUpPage: FollowUpPageData }) {
   const [open, setOpen] = React.useState(false);
   const [selected, setSelected] = React.useState<FollowUpRow | null>(null);
-  const filters = followUpPage.filters;
+  const resolvedFollowUpPage = followUpPage ?? fallbackFollowUpPageData(workspace);
+  const filters = resolvedFollowUpPage.filters;
   const pageHref = (page: number) => {
     const params = new URLSearchParams();
     if (filters.search) params.set("search", filters.search);
@@ -7143,7 +7373,7 @@ export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorks
     if (filters.from) params.set("from", filters.from);
     if (filters.to) params.set("to", filters.to);
     params.set("page", String(page));
-    params.set("pageSize", String(followUpPage.pageSize));
+    params.set("pageSize", String(resolvedFollowUpPage.pageSize));
     return `?${params.toString()}`;
   };
   const columns = ["Follow-up Date", "Company / Customer", "Lead", "Assigned Marketer", "Follow-up Note", "Last Communication", "Priority", "Status", "Next Action", "Created By", "Action"];
@@ -7180,7 +7410,7 @@ export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorks
           <TextField label="To" name="to" type="date" defaultValue={filters.to} />
           <div className="flex flex-wrap gap-2">
             <input type="hidden" name="page" value="1" />
-            <input type="hidden" name="pageSize" value={followUpPage.pageSize} />
+            <input type="hidden" name="pageSize" value={resolvedFollowUpPage.pageSize} />
             <Button type="submit" className="h-10">Apply</Button>
             <Link href="?" className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">Reset</Link>
           </div>
@@ -7194,7 +7424,7 @@ export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorks
               <tr>{columns.map((heading) => <th key={heading} className="px-4 py-3 font-bold">{heading}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {followUpPage.rows.length ? followUpPage.rows.map((item) => (
+              {resolvedFollowUpPage.rows.length ? resolvedFollowUpPage.rows.map((item) => (
                 <tr
                   key={item.id}
                   className="cursor-pointer transition hover:bg-blue-50/50"
@@ -7240,7 +7470,7 @@ export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorks
       </Card>
 
       <div className="space-y-3 2xl:hidden">
-        {followUpPage.rows.length ? followUpPage.rows.map((item) => (
+        {resolvedFollowUpPage.rows.length ? resolvedFollowUpPage.rows.map((item) => (
           <div
             key={item.id}
             role="button"
@@ -7274,20 +7504,20 @@ export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorks
       </div>
 
       <div className="flex flex-col gap-3 text-sm text-slate-500 md:flex-row md:items-center md:justify-between">
-        <span>Showing {followUpPage.rows.length} of {followUpPage.total} follow-ups</span>
+        <span>Showing {resolvedFollowUpPage.rows.length} of {resolvedFollowUpPage.total} follow-ups</span>
         <div className="flex items-center gap-2">
           <Link
-            aria-disabled={followUpPage.page <= 1}
-            className={cn("inline-flex h-9 items-center rounded-lg border border-slate-200 px-3 font-semibold transition", followUpPage.page <= 1 ? "pointer-events-none bg-slate-100 text-slate-400" : "bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700")}
-            href={pageHref(Math.max(1, followUpPage.page - 1))}
+            aria-disabled={resolvedFollowUpPage.page <= 1}
+            className={cn("inline-flex h-9 items-center rounded-lg border border-slate-200 px-3 font-semibold transition", resolvedFollowUpPage.page <= 1 ? "pointer-events-none bg-slate-100 text-slate-400" : "bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700")}
+            href={pageHref(Math.max(1, resolvedFollowUpPage.page - 1))}
           >
             Previous
           </Link>
-          <span className="font-semibold text-slate-700">Page {followUpPage.page} of {followUpPage.totalPages}</span>
+          <span className="font-semibold text-slate-700">Page {resolvedFollowUpPage.page} of {resolvedFollowUpPage.totalPages}</span>
           <Link
-            aria-disabled={followUpPage.page >= followUpPage.totalPages}
-            className={cn("inline-flex h-9 items-center rounded-lg border border-slate-200 px-3 font-semibold transition", followUpPage.page >= followUpPage.totalPages ? "pointer-events-none bg-slate-100 text-slate-400" : "bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700")}
-            href={pageHref(Math.min(followUpPage.totalPages, followUpPage.page + 1))}
+            aria-disabled={resolvedFollowUpPage.page >= resolvedFollowUpPage.totalPages}
+            className={cn("inline-flex h-9 items-center rounded-lg border border-slate-200 px-3 font-semibold transition", resolvedFollowUpPage.page >= resolvedFollowUpPage.totalPages ? "pointer-events-none bg-slate-100 text-slate-400" : "bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700")}
+            href={pageHref(Math.min(resolvedFollowUpPage.totalPages, resolvedFollowUpPage.page + 1))}
           >
             Next
           </Link>
@@ -7424,34 +7654,6 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
     setProducts(workspace.products);
   }, [workspace.products]);
 
-  const productAssignments = React.useMemo(() => {
-    const normalize = (value: string) => value.trim().toLowerCase();
-    const summary = new Map<string, { assignedMarketers: string[]; assignedCount: number; leadCount: number }>();
-
-    for (const product of products) {
-      const matchedLeads = workspace.leads.filter((lead) => {
-        if (lead.productInterestId && lead.productInterestId === product.id) return true;
-        return Boolean(lead.productInterest) && normalize(lead.productInterest) === normalize(product.name);
-      });
-
-      const assignedMarketers = Array.from(
-        new Map(
-          matchedLeads
-            .filter((lead) => lead.assignedTo && lead.assignedTo !== "-")
-            .map((lead) => [lead.assignedToId ?? lead.assignedTo, lead.assignedTo]),
-        ).values(),
-      );
-
-      summary.set(product.id, {
-        assignedMarketers,
-        assignedCount: assignedMarketers.length,
-        leadCount: matchedLeads.length,
-      });
-    }
-
-    return summary;
-  }, [products, workspace.leads]);
-
   return (
     <>
       <PageHeader
@@ -7498,18 +7700,31 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {products.map((product) => {
           const tone = productAccentTone(product.name);
-          const assignedSnapshot = productAssignments.get(product.id) ?? { assignedMarketers: [], assignedCount: 0, leadCount: 0 };
-          const previewAssignees = assignedSnapshot.assignedMarketers.slice(0, 3);
-          const hiddenAssigneeCount = assignedSnapshot.assignedCount - previewAssignees.length;
+          const previewAssignees = product.assignedMarketers.slice(0, 3);
+          const hiddenAssigneeCount = product.assignedCount - previewAssignees.length;
 
           return (
             <div key={product.id} className="group rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_18px_38px_rgba(15,23,42,0.07)] transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_24px_48px_rgba(37,99,235,0.14)]">
+              <Link href={`/products/${product.id}`} className="mb-4 block">
+                <div className={cn("relative overflow-hidden rounded-[24px] border border-slate-200 bg-gradient-to-br shadow-sm", tone.surface)}>
+                  {product.imageUrl ? (
+                    <img
+                      src={product.imageUrl}
+                      alt={product.name}
+                      className="h-40 w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-40 items-center justify-center">
+                      <span className={cn("inline-flex h-24 w-24 items-center justify-center rounded-[28px] bg-gradient-to-br text-2xl font-black text-white shadow-lg", tone.avatar)}>
+                        {initials(product.name || "PR")}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </Link>
               <div className="flex items-start justify-between gap-3">
                 <Link href={`/products/${product.id}`} className="min-w-0 flex-1">
                   <div className="flex items-start gap-4">
-                    <span className={cn("inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br text-sm font-black text-white shadow-lg", tone.avatar)}>
-                      {initials(product.name || "PR")}
-                    </span>
                     <div className="min-w-0">
                       <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-slate-400">{product.category || "Product"}</p>
                       <h3 className="truncate text-lg font-black text-slate-950">{product.name}</h3>
@@ -7581,30 +7796,30 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
                   <span className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
                     <Target className="h-3.5 w-3.5 text-blue-600" />
-                    Interested
+                    Target Companies
                   </span>
-                  <span className="text-sm font-black text-slate-950">{product.interestedCustomers}</span>
+                  <span className="text-sm font-black text-slate-950">{product.targetCompanies}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
                   <span className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
                     <UserPlus className="h-3.5 w-3.5 text-violet-600" />
                     Assigned
                   </span>
-                  <span className="text-sm font-black text-slate-950">{assignedSnapshot.assignedCount}</span>
+                  <span className="text-sm font-black text-slate-950">{product.assignedCount}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
                   <span className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
                     <MessageSquare className="h-3.5 w-3.5 text-emerald-600" />
-                    Calls & Comms
+                    Contacted
                   </span>
-                  <span className="text-sm font-black text-slate-950">{product.communicationCount}</span>
+                  <span className="text-sm font-black text-slate-950">{product.contactedCompanies}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
                   <span className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
                     <CalendarClock className="h-3.5 w-3.5 text-amber-600" />
-                    Follow-ups
+                    Remaining
                   </span>
-                  <span className="text-sm font-black text-slate-950">{product.followUpCount}</span>
+                  <span className="text-sm font-black text-slate-950">{product.remainingCompanies}</span>
                 </div>
               </div>
 
@@ -7626,7 +7841,7 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
               <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4 text-xs font-semibold text-slate-500">
                 <span className="inline-flex items-center gap-2">
                   <Building2 className="h-3.5 w-3.5 text-slate-400" />
-                  {assignedSnapshot.leadCount} live lead record{assignedSnapshot.leadCount === 1 ? "" : "s"}
+                  {product.interestedCustomers} live product record{product.interestedCustomers === 1 ? "" : "s"}
                 </span>
                 <Link href={`/products/${product.id}`} className="inline-flex items-center gap-1.5 text-sm font-bold text-blue-700 transition hover:text-blue-800">
                   Open product
@@ -7728,6 +7943,16 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
 }
 
 export function ProductDetailsPage({ role, workspace, product, productEngagement }: { role: Role; workspace: CrmWorkspace; product?: ProductRow; productEngagement?: ProductEngagementData }) {
+  const router = useRouter();
+  const companySectionRef = React.useRef<HTMLDivElement | null>(null);
+  const [feedback, setFeedback] = React.useState<UserFeedback>(null);
+  const [selectedMarketerName, setSelectedMarketerName] = React.useState<string | null>(null);
+  const [selectedCompanyBucket, setSelectedCompanyBucket] = React.useState<"total" | "shortlist" | "contacted" | "not-contacted" | "rest">("shortlist");
+  const [selectedCompanyIds, setSelectedCompanyIds] = React.useState<string[]>([]);
+  const [assignModalOpen, setAssignModalOpen] = React.useState(false);
+  const [assignMarketerId, setAssignMarketerId] = React.useState("");
+  const [assignMessage, setAssignMessage] = React.useState("");
+  const [assignPending, startAssign] = React.useTransition();
   const active = product;
   if (!active) return <EmptyState title="Product not found" description="The requested product is not available." />;
   const engagement = productEngagement ?? {
@@ -7735,6 +7960,13 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
       totalCompaniesContacted: 0,
       totalLeadsInterested: 0,
       totalCommunicationCount: 0,
+      totalShortlistedCompanies: 0,
+      contactedCompanies: 0,
+      notContactedCompanies: 0,
+      totalCallCount: 0,
+      totalWhatsAppCount: 0,
+      totalEmailCount: 0,
+      totalMeetingCount: 0,
       followUpCount: 0,
       quotationSentCount: 0,
       salesCount: 0,
@@ -7791,17 +8023,34 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
       lastContactDisplay: row.lastContactDate !== "-" ? row.lastContactDate : relatedLead?.createdAt || "-",
     };
   });
+  const productLeadIds = new Set(productLeads.map((lead) => lead.id));
+  const productCompanyIds = new Set(
+    [
+      ...productLeads.map((lead) => lead.companyId),
+      ...customerInsightRows.map((row) => row.companyId),
+    ].filter((value): value is string => Boolean(value)),
+  );
+  const hasKeyword = (keyword: string, ...values: (string | null | undefined)[]) => values.some((value) => value?.toLowerCase().includes(keyword.toLowerCase()));
+  const isDemoActivityRow = (row: (typeof customerInsightRows)[number]) => hasKeyword("demo", row.stage, row.discussionTopic, row.summary);
+  const isMeetingActivityRow = (row: (typeof customerInsightRows)[number]) => hasKeyword("meeting", row.communicationType, row.discussionTopic, row.summary);
+  const productFollowUps = workspace.followUps.filter((item) => (item.leadId && productLeadIds.has(item.leadId)) || (item.companyId && productCompanyIds.has(item.companyId)));
+  const productQuotations = workspace.quotations.filter((item) => {
+    const normalizedProduct = item.product.trim().toLowerCase();
+    const normalizedActive = active.name.trim().toLowerCase();
+    return (item.leadId && productLeadIds.has(item.leadId)) || (item.companyId && productCompanyIds.has(item.companyId)) || normalizedProduct.includes(normalizedActive);
+  });
+  const demoActivityCount = customerInsightRows.filter((row) => isDemoActivityRow(row) || isMeetingActivityRow(row)).length;
   const recentConversations = customerInsightRows.slice(0, 4);
-  const opportunities = customerInsightRows.slice(0, 8);
+  const visibleCustomerRows = customerInsightRows.slice(0, 6);
   const descriptionText = active.description && active.description !== "-" ? active.description : "No product summary saved yet.";
   const specificationText = active.specification && active.specification !== "-" ? active.specification : "No specification saved yet.";
-  const averageScore = productLeads.length
-    ? Math.round(productLeads.reduce((sum, lead) => sum + lead.score, 0) / productLeads.length)
-    : 0;
+  const marketerOptions = React.useMemo(
+    () => workspace.employees.filter((employee) => employee.roleKey === "MARKETER").map((employee) => ({ id: employee.id, name: employee.name })),
+    [workspace.employees],
+  );
   const averageProbability = productLeads.length
     ? Math.round(productLeads.reduce((sum, lead) => sum + lead.purchaseProbability, 0) / productLeads.length)
     : 0;
-  const averageRating = productRatingFromScore(averageScore);
   const stageOrder = ["Interested", "Follow-up", "Demo", "Quotation", "Negotiation", "Won", "Lost"];
   const stageSummaryMap = new Map<string, number>();
   for (const row of customerInsightRows) {
@@ -7826,14 +8075,18 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
         leadCount: 0,
         communicationCount: 0,
         followUpCount: 0,
+        demoCount: 0,
+        quotationCount: 0,
       };
       entry.customers.add(row.customerName);
       entry.leadCount += row.leadId ? 1 : 0;
       entry.communicationCount += row.communicationCount;
       entry.followUpCount += row.followUpCount;
+      entry.demoCount += isDemoActivityRow(row) || isMeetingActivityRow(row) ? 1 : 0;
+      entry.quotationCount += row.quotationCount;
       map.set(row.assignedOwner, entry);
       return map;
-    }, new Map<string, { name: string; customers: Set<string>; leadCount: number; communicationCount: number; followUpCount: number }>()),
+    }, new Map<string, { name: string; customers: Set<string>; leadCount: number; communicationCount: number; followUpCount: number; demoCount: number; quotationCount: number }>()),
   )
     .map(([name, entry]) => ({
       name,
@@ -7841,22 +8094,207 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
       leadCount: entry.leadCount,
       communicationCount: entry.communicationCount,
       followUpCount: entry.followUpCount,
+      demoCount: entry.demoCount,
+      quotationCount: entry.quotationCount,
     }))
     .sort((left, right) => right.communicationCount - left.communicationCount || right.customerCount - left.customerCount);
-  const productCommandTitle =
-    role === "MARKETER"
-      ? "Your product activity workspace"
-      : role === "SUPERVISOR"
-        ? "Easy product overview for supervisor"
-        : "Easy product overview for admin";
+  const marketerDetails = assignedTeam.map((member) => {
+    const rows = customerInsightRows.filter((row) => row.assignedOwner === member.name);
+    const followUps = productFollowUps.filter((item) => item.assignedTo === member.name);
+    const quotations = productQuotations.filter((item) => item.createdBy === member.name);
+
+    return {
+      ...member,
+      rows,
+      followUps,
+      quotations,
+      latestNotes: rows
+        .map((row) => ({
+          id: row.id,
+          companyName: row.customerName,
+          leadName: row.leadDisplayName,
+          stage: row.stage,
+          summary: row.summary,
+          discussionTopic: row.discussionTopic,
+          lastContact: row.lastContactDisplay,
+          nextFollowUp: row.nextFollowUpDisplay,
+          calls: row.communicationCount,
+          followUps: row.followUpCount,
+        }))
+        .slice(0, 6),
+    };
+  });
+  const selectedMarketer = selectedMarketerName ? marketerDetails.find((member) => member.name === selectedMarketerName) ?? null : null;
+  const workspaceCompanyById = React.useMemo(() => new Map(workspace.companies.map((company) => [company.id, company])), [workspace.companies]);
+  const workspaceCompanyByName = React.useMemo(
+    () => new Map(workspace.companies.map((company) => [company.name.trim().toLowerCase(), company])),
+    [workspace.companies],
+  );
+  const shortlistCompanyRows = React.useMemo(() => {
+    const rows = new Map<string, {
+      id: string;
+      name: string;
+      marketer: string;
+      stage: string;
+      communications: number;
+      followUps: number;
+      quotations: number;
+      lastContact: string;
+      nextFollowUp: string;
+      city: string;
+      phone: string;
+    }>();
+
+    for (const row of customerInsightRows) {
+      const baseCompany = row.companyId
+        ? workspaceCompanyById.get(row.companyId)
+        : workspaceCompanyByName.get(row.customerName.trim().toLowerCase());
+      const key = row.companyId ?? baseCompany?.id ?? row.customerName.trim().toLowerCase();
+      const existing = rows.get(key) ?? {
+        id: baseCompany?.id ?? row.companyId ?? key,
+        name: row.customerName,
+        marketer: row.assignedOwner !== "-" ? row.assignedOwner : baseCompany?.assignedTo || "-",
+        stage: row.stage,
+        communications: 0,
+        followUps: 0,
+        quotations: 0,
+        lastContact: row.lastContactDisplay,
+        nextFollowUp: row.nextFollowUpDisplay,
+        city: baseCompany?.cityOrZilla ?? "-",
+        phone: baseCompany?.phone ?? "-",
+      };
+
+      existing.communications += row.communicationCount;
+      existing.followUps += row.followUpCount;
+      existing.quotations += row.quotationCount;
+      if (existing.stage === "-" || existing.stage === "Interested") {
+        existing.stage = row.stage;
+      }
+      if (existing.lastContact === "-" || row.lastContactDisplay !== "-") {
+        existing.lastContact = row.lastContactDisplay;
+      }
+      if (existing.nextFollowUp === "-" || row.nextFollowUpDisplay !== "-") {
+        existing.nextFollowUp = row.nextFollowUpDisplay;
+      }
+      rows.set(key, existing);
+    }
+
+    return Array.from(rows.values()).sort((left, right) => right.communications - left.communications || left.name.localeCompare(right.name));
+  }, [customerInsightRows, workspaceCompanyById, workspaceCompanyByName]);
+  const shortlistedIds = new Set(shortlistCompanyRows.map((row) => row.id));
+  const restCompanyRows = React.useMemo(
+    () => workspace.companies
+      .filter((company) => !shortlistedIds.has(company.id))
+      .map((company) => ({
+        id: company.id,
+        name: company.name,
+        marketer: company.assignedTo || "-",
+        stage: "Not Contacted Yet",
+        communications: 0,
+        followUps: 0,
+        quotations: 0,
+        lastContact: company.lastCommunication || "-",
+        nextFollowUp: "-",
+        city: company.cityOrZilla,
+        phone: company.phone,
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name)),
+    [shortlistedIds, workspace.companies],
+  );
+  const totalCompanyRows = React.useMemo(() => [...shortlistCompanyRows, ...restCompanyRows], [restCompanyRows, shortlistCompanyRows]);
+  const contactedCompanyRows = React.useMemo(() => shortlistCompanyRows.filter((row) => row.communications > 0), [shortlistCompanyRows]);
+  const notContactedCompanyRows = React.useMemo(() => shortlistCompanyRows.filter((row) => row.communications === 0), [shortlistCompanyRows]);
+  const bucketedCompanyRows = selectedCompanyBucket === "total"
+    ? totalCompanyRows
+    : selectedCompanyBucket === "contacted"
+      ? contactedCompanyRows
+      : selectedCompanyBucket === "not-contacted"
+        ? notContactedCompanyRows
+        : selectedCompanyBucket === "rest"
+          ? restCompanyRows
+          : shortlistCompanyRows;
+  const selectedCompanyRows = React.useMemo(
+    () => totalCompanyRows.filter((row) => selectedCompanyIds.includes(row.id)),
+    [selectedCompanyIds, totalCompanyRows],
+  );
+  const totalCompaniesCount = workspace.companies.length;
+  const shortlistedCount = engagement.summary.totalShortlistedCompanies || shortlistCompanyRows.length;
+  const contactedCount = engagement.summary.contactedCompanies || contactedCompanyRows.length;
+  const notContactedCount = engagement.summary.notContactedCompanies || notContactedCompanyRows.length;
+  const restCount = Math.max(totalCompaniesCount - shortlistedCount, 0);
+  const productCommandTitle = role === "MARKETER" ? "Your product activity summary" : "Product activity summary";
   const productCommandDescription =
     role === "MARKETER"
-      ? "Only your scoped customers, calls, follow-ups, quotations, and product activity are shown here."
-      : "Interested customers, assigned owners, call count, pipeline stage, and CRM rating are all shown here from saved leads, communications, quotations, and follow-ups.";
+      ? "See your companies, latest calls, follow-ups, and current stages for this product in one clean view."
+      : "See which marketer is working on this product, how many calls and follow-ups happened, and which stage each company is in.";
   const assignmentCardTitle = role === "MARKETER" ? "Your visible ownership" : "Who is handling this product";
+  const openCompanyBucket = React.useCallback((bucket: "total" | "shortlist" | "contacted" | "not-contacted" | "rest") => {
+    setSelectedCompanyBucket(bucket);
+    window.setTimeout(() => companySectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+  }, []);
+
+  React.useEffect(() => {
+    if (!feedback) return undefined;
+    const timer = window.setTimeout(() => setFeedback(null), 4500);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
+
+  React.useEffect(() => {
+    setSelectedCompanyIds((current) => {
+      const next = current.filter((id) => bucketedCompanyRows.some((row) => row.id === id));
+      return next.length === current.length && next.every((id, index) => id === current[index]) ? current : next;
+    });
+  }, [bucketedCompanyRows]);
+
+  React.useEffect(() => {
+    if (!assignModalOpen) return;
+    setAssignMarketerId((current) => current || marketerOptions[0]?.id || "");
+    setAssignMessage("");
+  }, [assignModalOpen, marketerOptions]);
+
+  const handleAssignSelectedCompanies = React.useCallback((event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!assignMarketerId) {
+      setAssignMessage("Select a marketer first.");
+      return;
+    }
+    if (!selectedCompanyIds.length) {
+      setAssignMessage("Select at least one company.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.set("productId", active.id);
+    formData.set("assignedToId", assignMarketerId);
+    formData.set("companyIdsJson", JSON.stringify(selectedCompanyIds));
+
+    startAssign(async () => {
+      try {
+        const result = await assignProductCompaniesAction(formData);
+        if (typeof result === "object" && result && "ok" in result && result.ok === false) {
+          const message = "message" in result && typeof result.message === "string" ? result.message : "Assignment failed.";
+          setAssignMessage(message);
+          return;
+        }
+
+        const successMessage =
+          typeof result === "object" && result && "message" in result && typeof result.message === "string"
+            ? result.message
+            : "Selected companies have been assigned.";
+        setFeedback({ type: "success", message: successMessage });
+        setAssignModalOpen(false);
+        setAssignMessage("");
+        setSelectedCompanyIds([]);
+        router.refresh();
+      } catch (error) {
+        setAssignMessage(error instanceof Error ? error.message : "Assignment failed.");
+      }
+    });
+  }, [active.id, assignMarketerId, router, selectedCompanyIds]);
 
   return (
     <div className="space-y-5">
+      <FloatingFeedback feedback={feedback} />
       <Link href={rolePath(role, "products")} className="inline-flex items-center gap-2 text-sm font-bold text-blue-700">
         <ArrowLeft className="h-4 w-4" />
         Back to products
@@ -7901,19 +8339,23 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
                 <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Assigned Team</p>
                 <h2 className="mt-1 text-lg font-black text-slate-950">{assignmentCardTitle}</h2>
               </div>
-              <Badge variant="neutral">{assignedTeam.length} owners</Badge>
+              <Badge variant="neutral">{assignedTeam.length} marketers</Badge>
             </div>
             <div className="mt-4 space-y-3">
               {assignedTeam.length ? assignedTeam.map((member) => (
                 <div key={member.name} className="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
                   <div className="flex items-center justify-between gap-3">
-                    <p className="font-black text-slate-950">{member.name}</p>
+                    <button type="button" className="text-left font-black text-blue-700 transition hover:text-blue-800 hover:underline" onClick={() => setSelectedMarketerName(member.name)}>
+                      {member.name}
+                    </button>
                     <Badge variant="default">{member.customerCount} customers</Badge>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold text-slate-500">
                     <span>{member.leadCount} leads</span>
                     <span>{member.communicationCount} communications</span>
                     <span>{member.followUpCount} follow-ups</span>
+                    <span>{member.demoCount} demo activity</span>
+                    <span>{member.quotationCount} quotations</span>
                   </div>
                 </div>
               )) : (
@@ -7926,7 +8368,7 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
           <Card className="overflow-hidden border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-blue-50/70 p-5 shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div>
-                <p className="text-[11px] font-black uppercase tracking-[0.22em] text-blue-600">Product Command Center</p>
+                <p className="text-[11px] font-black uppercase tracking-[0.22em] text-blue-600">Product Activity</p>
                 <h2 className="mt-1 text-2xl font-black text-slate-950">{productCommandTitle}</h2>
                 <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">{productCommandDescription}</p>
               </div>
@@ -7938,19 +8380,134 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
               </div>
             </div>
           </Card>
-          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-5">
-            <StatCard title="Interested Customers" value={String(engagement.summary.totalCompaniesContacted)} helper="Companies or leads linked to this product" icon={Building2} tone="bg-blue-100 text-blue-700" />
-            <StatCard title="Assigned Marketers" value={String(assignedTeam.length)} helper={assignedTeam[0] ? `${assignedTeam[0].name} currently leading` : "No owner assigned yet"} icon={UserPlus} tone="bg-emerald-100 text-emerald-700" />
-            <StatCard title="Calls / Communications" value={String(engagement.summary.totalCommunicationCount)} helper="Phone, WhatsApp, email, and meetings" icon={PhoneCall} tone="bg-indigo-100 text-indigo-700" />
-            <StatCard title="Open Follow-ups" value={String(engagement.summary.followUpCount)} helper="Saved next steps for this product" icon={CalendarClock} tone="bg-amber-100 text-amber-700" />
-            <StatCard title="Average CRM Rating" value={averageScore ? `${averageScore}/100` : "0"} helper={averageScore ? averageRating.label : "No rating yet"} icon={Star} tone="bg-rose-100 text-rose-700" />
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            {[
+              { key: "total" as const, title: "Total Companies", value: totalCompaniesCount, helper: "All visible companies", tone: "bg-slate-100 text-slate-700" },
+              { key: "shortlist" as const, title: "Shortlist", value: shortlistedCount, helper: "Already linked to this product", tone: "bg-blue-100 text-blue-700" },
+              { key: "contacted" as const, title: "Contacted", value: contactedCount, helper: "At least one communication done", tone: "bg-emerald-100 text-emerald-700" },
+              { key: "not-contacted" as const, title: "Not Contacted Yet", value: notContactedCount, helper: "Shortlisted but no communication", tone: "bg-amber-100 text-amber-700" },
+              { key: "rest" as const, title: "Rest Companies", value: restCount, helper: "Available to assign for this product", tone: "bg-violet-100 text-violet-700" },
+            ].map((card) => (
+              <button
+                key={card.key}
+                type="button"
+                onClick={() => openCompanyBucket(card.key)}
+                className={cn(
+                  "rounded-[22px] border p-4 text-left shadow-[0_8px_24px_rgba(15,23,42,0.05)] transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_14px_30px_rgba(37,99,235,0.10)]",
+                  selectedCompanyBucket === card.key ? "border-blue-300 bg-blue-50/70" : "border-slate-200 bg-white",
+                )}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">{card.title}</p>
+                    <p className="mt-2 text-3xl font-black text-slate-950">{card.value}</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-500">{card.helper}</p>
+                  </div>
+                  <div className={cn("inline-flex h-12 w-12 items-center justify-center rounded-2xl", card.tone)}>
+                    <Building2 className="h-5 w-5" />
+                  </div>
+                </div>
+              </button>
+            ))}
           </div>
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.9fr)]">
-            <div className="contents">
-              <DashboardCard title="Interested Customers">
-                <div className="grid gap-3 lg:grid-cols-2">
-                  {customerInsightRows.length ? customerInsightRows.slice(0, 6).map((row) => (
-                    <div key={`customer-${row.id}`} className="rounded-[22px] border border-slate-200 bg-slate-50/85 p-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <StatCard title="Assigned Marketers" value={String(assignedTeam.length)} helper={assignedTeam[0] ? `${assignedTeam[0].name} currently leading` : "No owner assigned yet"} icon={UserPlus} tone="bg-emerald-100 text-emerald-700" />
+            <StatCard title="Phone Calls" value={String(engagement.summary.totalCallCount)} helper="Call activity count" icon={PhoneCall} tone="bg-indigo-100 text-indigo-700" />
+            <StatCard title="WhatsApp / Email" value={String(engagement.summary.totalWhatsAppCount + engagement.summary.totalEmailCount)} helper={`${engagement.summary.totalWhatsAppCount} WhatsApp, ${engagement.summary.totalEmailCount} Email`} icon={MessageSquare} tone="bg-cyan-100 text-cyan-700" />
+            <StatCard title="Meetings / Follow-ups" value={String(engagement.summary.totalMeetingCount + engagement.summary.followUpCount)} helper={`${engagement.summary.totalMeetingCount} meetings, ${engagement.summary.followUpCount} open follow-ups`} icon={CalendarClock} tone="bg-amber-100 text-amber-700" />
+          </div>
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+            <DashboardCard title="Company Desk">
+              <div ref={companySectionRef} className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { key: "total" as const, label: "Total" },
+                      { key: "shortlist" as const, label: "Shortlist" },
+                      { key: "contacted" as const, label: "Contacted" },
+                      { key: "not-contacted" as const, label: "Not Contacted" },
+                      { key: "rest" as const, label: "Rest" },
+                    ].map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setSelectedCompanyBucket(item.key)}
+                        className={cn(
+                          "rounded-full border px-3 py-1.5 text-xs font-bold uppercase tracking-[0.14em] transition",
+                          selectedCompanyBucket === item.key
+                            ? "border-blue-200 bg-blue-50 text-blue-700"
+                            : "border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-700",
+                        )}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                  {role !== "MARKETER" ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="neutral">{selectedCompanyIds.length} selected</Badge>
+                      <Button type="button" size="sm" onClick={() => setAssignModalOpen(true)} disabled={!selectedCompanyIds.length || !marketerOptions.length}>
+                        <UserPlus className="h-4 w-4" />
+                        Assign Selected
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+                <p className="text-sm text-slate-500">
+                  Product-wise company list, current contact stage, and remaining companies are shown here first.
+                </p>
+              </div>
+              <div className="space-y-3">
+                {bucketedCompanyRows.length ? bucketedCompanyRows.map((row) => {
+                  const hasCustomerRecord = workspaceCompanyById.has(row.id);
+
+                  return (
+                    <div key={`company-desk-${row.id}`} className="rounded-[22px] border border-slate-200 bg-slate-50/85 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-start gap-3">
+                          {role !== "MARKETER" && hasCustomerRecord ? (
+                            <input
+                              type="checkbox"
+                              checked={selectedCompanyIds.includes(row.id)}
+                              onChange={(event) => setSelectedCompanyIds((current) => event.target.checked ? Array.from(new Set([...current, row.id])) : current.filter((item) => item !== row.id))}
+                              className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                              aria-label={`Select ${row.name}`}
+                            />
+                          ) : null}
+                          <div className="min-w-0">
+                            <p className="text-sm font-black text-slate-950">
+                              <EntityLink href={hasCustomerRecord ? `/customers/${row.id}` : undefined} className="font-black">{row.name}</EntityLink>
+                            </p>
+                            <p className="mt-1 text-xs font-semibold text-slate-500">{row.city} / {row.phone}</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {row.stage ? <Badge variant={productStageBadgeVariant(row.stage)}>{row.stage}</Badge> : null}
+                          {row.marketer !== "-" ? <Badge variant="neutral">{row.marketer}</Badge> : null}
+                          {!hasCustomerRecord ? <Badge variant="warning">Lead Only</Badge> : null}
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs font-semibold text-slate-600">
+                        <span>Calls / touches: {row.communications}</span>
+                        <span>Follow-ups: {row.followUps}</span>
+                        <span>Quotations: {row.quotations}</span>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs font-semibold text-slate-500">
+                        <span>Last contact: {row.lastContact}</span>
+                        {row.nextFollowUp !== "-" ? <span>Next follow-up: {row.nextFollowUp}</span> : null}
+                      </div>
+                    </div>
+                  );
+                }) : (
+                  <p className="text-sm font-semibold text-slate-500">No company record matched this bucket yet.</p>
+                )}
+              </div>
+            </DashboardCard>
+            <div className="space-y-5">
+              <DashboardCard title="Latest Product Conversations">
+                <div className="space-y-3">
+                  {visibleCustomerRows.length ? visibleCustomerRows.map((row) => (
+                    <div key={`customer-activity-${row.id}`} className="rounded-[22px] border border-slate-200 bg-slate-50/85 p-4">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0">
                           <p className="text-sm font-black text-slate-950">
@@ -7960,227 +8517,268 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
                             {row.leadId ? <EntityLink href={`/leads/${row.leadId}`} className="font-semibold">{row.leadDisplayName}</EntityLink> : row.leadDisplayName}
                           </p>
                         </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Badge variant={productStageBadgeVariant(row.stage)}>{row.stage}</Badge>
-                          {row.assignedOwner !== "-" ? <Badge variant="neutral">{row.assignedOwner}</Badge> : null}
-                        </div>
+                        <Badge variant={productStageBadgeVariant(row.stage)}>{row.stage}</Badge>
                       </div>
-                      <div className="mt-3 flex items-center gap-1">
-                        {Array.from({ length: 5 }).map((_, index) => (
-                          <Star key={`${row.id}-star-${index}`} className={cn("h-3.5 w-3.5", index < row.ratingStars ? `${row.ratingTone} fill-current` : "text-slate-200")} />
-                        ))}
-                        <span className="ml-1 text-xs font-bold text-slate-500">{row.ratingScore ? `${row.ratingScore}/100 ${row.ratingLabel}` : "No rating yet"}</span>
+                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs font-semibold text-slate-600">
+                        <span>
+                          Marketer:{" "}
+                          {row.assignedOwner !== "-" ? (
+                            <button type="button" className="text-blue-700 transition hover:text-blue-800 hover:underline" onClick={() => setSelectedMarketerName(row.assignedOwner)}>
+                              {row.assignedOwner}
+                            </button>
+                          ) : (
+                            "Unassigned"
+                          )}
+                        </span>
+                        <span>Calls: {row.communicationCount}</span>
+                        <span>Follow-ups: {row.followUpCount}</span>
+                        <span>Quotations: {row.quotationCount}</span>
                       </div>
-                      <div className="mt-3 flex flex-wrap gap-3 text-xs font-semibold text-slate-500">
-                        <span>{row.communicationCount} communications</span>
-                        <span>{row.followUpCount} follow-ups</span>
-                        <span>{row.quotationCount} quotations</span>
-                        <span>{row.probability}% probability</span>
-                      </div>
-                      <div className="mt-3 space-y-1 text-xs text-slate-500">
-                        <p>Last contact: {row.lastContactDisplay}</p>
-                        <p>{row.nextFollowUpDisplay !== "-" ? `Next follow-up: ${row.nextFollowUpDisplay}` : "No upcoming follow-up"}</p>
+                      <p className="mt-3 text-sm leading-6 text-slate-600">{row.summary !== "-" ? row.summary : "No discussion note saved yet."}</p>
+                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs font-semibold text-slate-500">
+                        <span>Last contact: {row.lastContactDisplay}</span>
+                        {row.nextFollowUpDisplay !== "-" ? <span>Next follow-up: {row.nextFollowUpDisplay}</span> : null}
                       </div>
                     </div>
                   )) : (
-                    <p className="text-sm font-semibold text-slate-500">No customer interest or pipeline activity has been saved for this product yet.</p>
+                    <p className="text-sm font-semibold text-slate-500">No customer activity has been saved for this product yet.</p>
                   )}
                 </div>
               </DashboardCard>
-              <div className="space-y-5">
-                <DashboardCard title="Customer Stage Snapshot">
-                  <div className="space-y-3">
-                    <div className="rounded-[22px] border border-blue-100 bg-blue-50/70 p-4">
-                      <p className="text-[11px] font-black uppercase tracking-[0.18em] text-blue-600">Pipeline Health</p>
-                      <p className="mt-2 text-lg font-black text-slate-950">{stageSummary.length ? `${stageSummary[0]?.name} is the busiest stage` : "No stage activity yet"}</p>
-                      <p className="mt-1 text-sm text-slate-600">
-                        {stageSummary.length ? `${stageSummary[0]?.leads ?? 0} active customer records are currently sitting in the top stage bucket.` : "Once calls, follow-ups, or leads are created, the live stage mix will appear here."}
-                      </p>
-                    </div>
+              <DashboardCard title="Stage Overview">
+                <div className="space-y-4">
+                  <div className="rounded-[22px] border border-blue-100 bg-blue-50/70 p-4">
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-blue-600">Current picture</p>
+                    <p className="mt-2 text-lg font-black text-slate-950">{stageSummary.length ? `${stageSummary[0]?.name} has the most activity` : "No stage activity yet"}</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      {stageSummary.length ? `${stageSummary[0]?.leads ?? 0} company records are currently in this stage.` : "Once calls or follow-ups are saved, the stage summary will appear here."}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
                     {stageSummary.length ? stageSummary.map((stage) => (
-                      <div key={stage.name} className="rounded-[20px] border border-slate-200 bg-white p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2">
-                            <Badge variant={productStageBadgeVariant(stage.name)}>{stage.name}</Badge>
-                            <span className="text-sm font-semibold text-slate-600">{stage.leads} customers</span>
-                          </div>
-                          <span className="text-sm font-black text-slate-950">
-                            {customerInsightRows.length ? Math.round((stage.leads / customerInsightRows.length) * 100) : 0}%
-                          </span>
-                        </div>
+                      <div key={stage.name} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+                        <Badge variant={productStageBadgeVariant(stage.name)}>{stage.name}</Badge>
+                        <span>{stage.leads}</span>
                       </div>
                     )) : (
                       <p className="text-sm font-semibold text-slate-500">No stage distribution available yet.</p>
                     )}
                   </div>
-                </DashboardCard>
-                <DashboardCard title="Recent Product Conversations">
-              <div className="space-y-3">
-                {recentConversations.length ? recentConversations.map((row) => (
-                  <div key={`conversation-${row.id}`} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-black text-slate-950">
-                          <EntityLink href={row.companyId ? `/customers/${row.companyId}` : undefined} className="font-black">{row.customerName}</EntityLink>
-                        </p>
-                        <p className="text-xs font-semibold text-slate-500">
-                          {row.leadId ? <EntityLink href={`/leads/${row.leadId}`} className="font-semibold">{row.leadDisplayName}</EntityLink> : row.leadDisplayName}
-                          {row.assignedOwner !== "-" ? <span> / {row.assignedOwner}</span> : null}
-                        </p>
+                </div>
+              </DashboardCard>
+              <DashboardCard title="Recent Updates">
+                <div className="space-y-3">
+                  {recentConversations.length ? recentConversations.map((row) => (
+                    <div key={`conversation-${row.id}`} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-black text-slate-950">
+                            <EntityLink href={row.companyId ? `/customers/${row.companyId}` : undefined} className="font-black">{row.customerName}</EntityLink>
+                          </p>
+                          <p className="text-xs font-semibold text-slate-500">
+                            {row.assignedOwner !== "-" ? (
+                              <button type="button" className="text-blue-700 transition hover:text-blue-800 hover:underline" onClick={() => setSelectedMarketerName(row.assignedOwner)}>
+                                {row.assignedOwner}
+                              </button>
+                            ) : (
+                              "No marketer assigned"
+                            )}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <StatusBadge value={row.communicationType} />
+                          <Badge variant={productStageBadgeVariant(row.stage)}>{row.stage}</Badge>
+                        </div>
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        <StatusBadge value={row.communicationType} />
-                        <Badge variant={productStageBadgeVariant(row.stage)}>{row.stage}</Badge>
+                      <p className="mt-3 text-sm leading-6 text-slate-600">{row.summary !== "-" ? row.summary : "No discussion summary recorded yet."}</p>
+                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs font-semibold text-slate-500">
+                        <span>{row.lastContactDisplay}</span>
+                        <span>Calls: {row.communicationCount}</span>
+                        <span>Follow-ups: {row.followUpCount}</span>
                       </div>
                     </div>
-                    {row.discussionTopic !== "-" ? <p className="mt-3 text-xs font-bold uppercase text-slate-500">Topic: <span className="normal-case text-slate-700">{row.discussionTopic}</span></p> : null}
-                    <p className="mt-2 text-sm leading-6 text-slate-600">{row.summary !== "-" ? row.summary : "No discussion summary recorded yet."}</p>
-                    <div className="mt-3 flex flex-wrap gap-4 text-xs font-semibold text-slate-500">
-                      <span>Last Contact: {row.lastContactDisplay}</span>
-                      <span>Calls: {row.communicationCount}</span>
-                      <span>Follow-ups: {row.followUpCount}</span>
-                      {row.nextFollowUpDisplay !== "-" ? <span>Next Follow-up: {row.nextFollowUpDisplay}</span> : null}
-                    </div>
-                  </div>
-                )) : <p className="text-sm font-semibold text-slate-500">No saved communication history for this product yet.</p>}
-              </div>
-                </DashboardCard>
-              </div>
+                  )) : (
+                    <p className="text-sm font-semibold text-slate-500">No recent updates are available for this product yet.</p>
+                  )}
+                </div>
+              </DashboardCard>
             </div>
           </div>
-          <Card className="p-5">
-            <Tabs
-              defaultValue="overview"
-              tabs={[
-                { label: "Overview", value: "overview" },
-                { label: "Product Engagement", value: "engagement" },
-              ]}
-            >
-              {(value) => value === "overview" ? (
-                <div className="grid gap-5">
-                  <ChartCard title="Opportunity Stage Mix">
-                    {stageSummary.length ? (
-                      <ProductBarChart data={stageSummary.map((item) => ({ name: item.name, leads: item.leads }))} />
-                    ) : (
-                      <div className="rounded-[22px] border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm font-semibold text-slate-500">
-                        No live stage data is available for this product yet.
-                      </div>
-                    )}
-                  </ChartCard>
-                  <DashboardCard title="Customer Opportunity Table">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
-                          <tr>{["Customer", "Assigned", "Stage", "Calls", "Rating", "Probability"].map((heading) => <th key={heading} className="px-4 py-3 font-bold">{heading}</th>)}</tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {opportunities.length ? opportunities.map((row) => (
-                            <tr key={row.id}>
-                              <td className="px-4 py-3">
-                                <div className="min-w-[220px]">
-                                  <EntityLink href={row.companyId ? `/customers/${row.companyId}` : undefined} className="font-bold">{row.customerName}</EntityLink>
-                                  <p className="mt-1 text-xs font-semibold text-slate-500">
-                                    {row.leadId ? <EntityLink href={`/leads/${row.leadId}`} className="font-semibold">{row.leadDisplayName}</EntityLink> : row.leadDisplayName}
-                                  </p>
-                                </div>
-                              </td>
-                              <td className="px-4 py-3 font-semibold text-slate-700">{row.assignedOwner}</td>
-                              <td className="px-4 py-3"><Badge variant={productStageBadgeVariant(row.stage)}>{row.stage}</Badge></td>
-                              <td className="px-4 py-3 font-semibold text-slate-700">{row.communicationCount}</td>
-                              <td className="px-4 py-3">
-                                <div className="flex items-center gap-1">
-                                  {Array.from({ length: 5 }).map((_, index) => (
-                                    <Star key={`${row.id}-table-star-${index}`} className={cn("h-3.5 w-3.5", index < row.ratingStars ? `${row.ratingTone} fill-current` : "text-slate-200")} />
-                                  ))}
-                                </div>
-                              </td>
-                              <td className="px-4 py-3 font-bold text-slate-900">{row.probability}%</td>
-                            </tr>
-                          )) : (
-                            <tr><td colSpan={6} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">No saved opportunities for this product yet.</td></tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </DashboardCard>
+          <FormModal
+            open={assignModalOpen}
+            onClose={() => {
+              setAssignModalOpen(false);
+              setAssignMessage("");
+            }}
+            title="Assign Product Contact Companies"
+            panelClassName="max-w-[640px]"
+          >
+            <form className="space-y-4" onSubmit={handleAssignSelectedCompanies}>
+              <div className="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Product</p>
+                <p className="mt-2 text-lg font-black text-slate-950">{active.name}</p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  {selectedCompanyRows.length} selected compan{selectedCompanyRows.length === 1 ? "y" : "ies"} will be linked to this product and assigned for contact.
+                </p>
+                {selectedCompanyRows.length ? (
+                  <p className="mt-3 text-xs font-semibold text-slate-500">
+                    {selectedCompanyRows.slice(0, 4).map((row) => row.name).join(", ")}
+                    {selectedCompanyRows.length > 4 ? ` +${selectedCompanyRows.length - 4} more` : ""}
+                  </p>
+                ) : null}
+              </div>
+              <div className="space-y-2">
+                <label className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500" htmlFor="assign-product-marketer">
+                  Marketer
+                </label>
+                <select
+                  id="assign-product-marketer"
+                  value={assignMarketerId}
+                  onChange={(event) => setAssignMarketerId(event.target.value)}
+                  className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                >
+                  <option value="">Select marketer</option>
+                  {marketerOptions.map((employee) => (
+                    <option key={employee.id} value={employee.id}>{employee.name}</option>
+                  ))}
+                </select>
+              </div>
+              {assignMessage ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+                  {assignMessage}
                 </div>
-              ) : (
-                <div className="grid gap-5">
-                  <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-6">
-                    <StatCard title="Companies Contacted" value={String(engagement.summary.totalCompaniesContacted)} helper="For this product" icon={WalletCards} tone="bg-blue-100 text-blue-700" />
-                    <StatCard title="Leads Interested" value={String(engagement.summary.totalLeadsInterested)} helper="Product leads" icon={Target} tone="bg-emerald-100 text-emerald-700" />
-                    <StatCard title="Total Communication Count" value={String(engagement.summary.totalCommunicationCount)} helper="Calls, meetings, emails, WhatsApp" icon={MessageSquare} tone="bg-indigo-100 text-indigo-700" />
-                    <StatCard title="Follow-ups" value={String(engagement.summary.followUpCount)} helper="Related records" icon={CalendarClock} tone="bg-amber-100 text-amber-700" />
-                    <StatCard title="Quotation Sent Count" value={String(engagement.summary.quotationSentCount)} helper="Non-draft quotes" icon={FileText} tone="bg-cyan-100 text-cyan-700" />
-                    <StatCard title="Conversion" value={`${engagement.summary.conversionRate}%`} helper="Leads to sales" icon={Check} tone="bg-violet-100 text-violet-700" />
+              ) : null}
+              <div className="flex flex-wrap justify-end gap-3">
+                <Button type="button" variant="outline" onClick={() => setAssignModalOpen(false)} disabled={assignPending}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={assignPending || !selectedCompanyIds.length || !assignMarketerId}>
+                  <UserPlus className="h-4 w-4" />
+                  {assignPending ? "Assigning..." : "Assign Companies"}
+                </Button>
+              </div>
+            </form>
+          </FormModal>
+          <FormModal
+            open={Boolean(selectedMarketer)}
+            onClose={() => setSelectedMarketerName(null)}
+            title={selectedMarketer ? `${selectedMarketer.name} - Product Activity` : "Product Activity"}
+            panelClassName="max-w-[860px]"
+          >
+            {selectedMarketer ? (
+              <div className="space-y-5">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <div className="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Companies</p>
+                    <p className="mt-2 text-2xl font-black text-slate-950">{selectedMarketer.customerCount}</p>
                   </div>
-
-                  <form method="get" className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 md:grid-cols-2 xl:grid-cols-6">
-                    <TextField label="From" name="from" type="date" defaultValue={engagement.filters.from} />
-                    <TextField label="To" name="to" type="date" defaultValue={engagement.filters.to} />
-                    <SelectBox label="Status" name="status" defaultValue={engagement.filters.status ?? "all"}>
-                      <option value="all">All Status</option>
-                      <option value="Interested">Interested</option>
-                      <option value="Negotiation">Negotiation</option>
-                      <option value="Won">Won</option>
-                      <option value="Lost">Lost</option>
-                    </SelectBox>
-                    <SelectBox label="Communication" name="communicationType" defaultValue={engagement.filters.communicationType ?? "all"}>
-                      <option value="all">All Types</option>
-                      {engagement.filterOptions.communicationTypes.map((type) => <option key={type} value={type}>{type}</option>)}
-                    </SelectBox>
-                    <SelectBox label="Assigned User" name="assignedUserId" defaultValue={engagement.filters.assignedUserId ?? "all"}>
-                      <option value="all">All Users</option>
-                      {engagement.filterOptions.assignedUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
-                    </SelectBox>
-                    <div className="flex items-end gap-2">
-                      <Button type="submit" className="h-10 flex-1">Filter</Button>
-                      <Link href={`/products/${active.id}`} className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-blue-50">Reset</Link>
-                    </div>
-                  </form>
-
-                  <DashboardCard title="Product Engagement Table">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
-                          <tr>{["Company Name", "Lead Name", "What Was Discussed", "Communication Type", "Last Contact Date", "Follow-ups", "Status", "Assigned Marketer"].map((heading) => <th key={heading} className="px-4 py-3 font-bold">{heading}</th>)}</tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {engagement.rows.length ? engagement.rows.map((row) => (
-                            <tr key={row.id}>
-                              <td className="px-4 py-3">
-                                <EntityLink href={row.companyId ? `/customers/${row.companyId}` : undefined} className="font-bold">{row.companyName}</EntityLink>
-                              </td>
-                              <td className="px-4 py-3">
-                                <EntityLink href={row.leadId ? `/leads/${row.leadId}` : undefined} className="font-bold">{row.leadName}</EntityLink>
-                              </td>
-                              <td className="px-4 py-3">
-                                <div className="min-w-[220px]">
-                                  <p className="font-semibold text-slate-800">{row.discussionTopic !== "-" ? row.discussionTopic : "General discussion"}</p>
-                                  <p className="mt-1 text-xs leading-5 text-slate-500">{row.summary !== "-" ? row.summary : "No detailed note saved yet."}</p>
-                                  {row.nextFollowUpDate !== "-" ? <p className="mt-1 text-[11px] font-semibold text-blue-700">Next follow-up: {row.nextFollowUpDate}</p> : null}
-                                </div>
-                              </td>
-                              <td className="px-4 py-3 font-semibold text-slate-700">{row.communicationType}</td>
-                              <td className="px-4 py-3 font-semibold text-slate-600">{row.lastContactDate}</td>
-                              <td className="px-4 py-3 font-semibold text-slate-700">{row.followUpCount}</td>
-                              <td className="px-4 py-3"><StatusBadge value={row.status} /></td>
-                              <td className="px-4 py-3 font-semibold text-slate-700">{row.assignedMarketer}</td>
-                            </tr>
-                          )) : (
-                            <tr><td colSpan={8} className="px-4 py-6 text-center text-sm font-semibold text-slate-500">No product communication records match the selected filters.</td></tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </DashboardCard>
+                  <div className="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Calls</p>
+                    <p className="mt-2 text-2xl font-black text-slate-950">{selectedMarketer.communicationCount}</p>
+                  </div>
+                  <div className="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Follow-ups</p>
+                    <p className="mt-2 text-2xl font-black text-slate-950">{selectedMarketer.followUpCount}</p>
+                  </div>
+                  <div className="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Demo Activity</p>
+                    <p className="mt-2 text-2xl font-black text-slate-950">{selectedMarketer.demoCount}</p>
+                  </div>
+                  <div className="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Quotations</p>
+                    <p className="mt-2 text-2xl font-black text-slate-950">{selectedMarketer.quotations.length || selectedMarketer.quotationCount}</p>
+                  </div>
                 </div>
-              )}
-            </Tabs>
-          </Card>
+
+                <div className="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
+                  <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Handled Companies</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selectedMarketer.rows.length ? selectedMarketer.rows.map((row) => (
+                      <div key={`${selectedMarketer.name}-${row.id}`} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+                        <EntityLink href={row.companyId ? `/customers/${row.companyId}` : undefined} className="font-semibold">{row.customerName}</EntityLink>
+                        <Badge variant={productStageBadgeVariant(row.stage)}>{row.stage}</Badge>
+                      </div>
+                    )) : <p className="text-sm font-semibold text-slate-500">No company has been assigned under this product yet.</p>}
+                  </div>
+                </div>
+
+                <div className="rounded-[22px] border border-slate-200 bg-white p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Latest Notes</p>
+                      <p className="mt-1 text-sm text-slate-500">Notes, calls, and next steps for this marketer on this product.</p>
+                    </div>
+                    <Badge variant="neutral">{selectedMarketer.latestNotes.length} records</Badge>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {selectedMarketer.latestNotes.length ? selectedMarketer.latestNotes.map((item) => (
+                      <div key={`${selectedMarketer.name}-note-${item.id}`} className="rounded-[20px] border border-slate-200 bg-slate-50/80 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="font-black text-slate-950">{item.companyName}</p>
+                            <p className="text-xs font-semibold text-slate-500">{item.leadName}</p>
+                          </div>
+                          <Badge variant={productStageBadgeVariant(item.stage)}>{item.stage}</Badge>
+                        </div>
+                        {item.discussionTopic !== "-" ? <p className="mt-3 text-xs font-bold uppercase text-slate-500">Topic: <span className="normal-case text-slate-700">{item.discussionTopic}</span></p> : null}
+                        <p className="mt-2 text-sm leading-6 text-slate-600">{item.summary !== "-" ? item.summary : "No saved note for this activity."}</p>
+                        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs font-semibold text-slate-500">
+                          <span>Last contact: {item.lastContact}</span>
+                          <span>Calls: {item.calls}</span>
+                          <span>Follow-ups: {item.followUps}</span>
+                          {item.nextFollowUp !== "-" ? <span>Next follow-up: {item.nextFollowUp}</span> : null}
+                        </div>
+                      </div>
+                    )) : <p className="text-sm font-semibold text-slate-500">No note or communication summary is available for this marketer on this product yet.</p>}
+                  </div>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-[22px] border border-slate-200 bg-white p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Follow-up Records</p>
+                      <Badge variant="neutral">{selectedMarketer.followUps.length}</Badge>
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      {selectedMarketer.followUps.slice(0, 5).length ? selectedMarketer.followUps.slice(0, 5).map((item) => (
+                        <div key={`${selectedMarketer.name}-followup-${item.id}`} className="rounded-[18px] border border-slate-200 bg-slate-50/80 p-3">
+                          <p className="font-semibold text-slate-900">{item.customer}</p>
+                          <p className="mt-1 text-sm text-slate-600">{item.note !== "-" ? item.note : item.nextDiscussionPlan}</p>
+                          <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold text-slate-500">
+                            <span>{item.method}</span>
+                            <span>{item.status}</span>
+                            <span>{item.followUpDate}</span>
+                          </div>
+                        </div>
+                      )) : <p className="text-sm font-semibold text-slate-500">No follow-up record found for this marketer under this product.</p>}
+                    </div>
+                  </div>
+                  <div className="rounded-[22px] border border-slate-200 bg-white p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Quotation Records</p>
+                      <Badge variant="neutral">{selectedMarketer.quotations.length || selectedMarketer.quotationCount}</Badge>
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      {selectedMarketer.quotations.slice(0, 5).length ? selectedMarketer.quotations.slice(0, 5).map((item) => (
+                        <div key={`${selectedMarketer.name}-quotation-${item.id}`} className="rounded-[18px] border border-slate-200 bg-slate-50/80 p-3">
+                          <p className="font-semibold text-slate-900">{item.customer}</p>
+                          <p className="mt-1 text-sm text-slate-600">{item.quoteNumber} / {item.product}</p>
+                          <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold text-slate-500">
+                            <span>{formatCurrency(item.amount)}</span>
+                            <span>{item.status}</span>
+                            <span>{item.date}</span>
+                          </div>
+                        </div>
+                      )) : <p className="text-sm font-semibold text-slate-500">No quotation record found for this marketer under this product.</p>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </FormModal>
+        </div>
       </div>
     </div>
-  </div>
   );
 }
 
@@ -9016,13 +9614,23 @@ const REPORT_LEAD_STATUS_OPTIONS = [
 ] as const;
 
 function reportFormatLabel(format: ReportFormat) {
-  return format === "xlsx" ? "XLSX" : format === "csv" ? "CSV" : format === "print" ? "PRINT" : "PDF";
+  return format === "xlsx" ? "XLSX" : format === "csv" ? "CSV" : format === "print" ? "Print" : "PDF";
+}
+
+const reportPeriodOptions = [
+  { value: "today", label: "Today" },
+  { value: "week", label: "Weekly" },
+  { value: "month", label: "Monthly" },
+] as const;
+
+function reportPeriodLabel(period: (typeof reportPeriodOptions)[number]["value"]) {
+  return reportPeriodOptions.find((option) => option.value === period)?.label ?? "Today";
 }
 
 export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
   const [feedback, setFeedback] = React.useState<UserFeedback>(null);
   const [activeExport, setActiveExport] = React.useState<string | null>(null);
-  const [period, setPeriod] = React.useState<"today" | "week">("today");
+  const [period, setPeriod] = React.useState<"today" | "week" | "month">("today");
   const [userId, setUserId] = React.useState("");
   const [customerId, setCustomerId] = React.useState("");
   const [customerLabel, setCustomerLabel] = React.useState("");
@@ -9093,7 +9701,7 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
     if (customerLabel.trim() && !customerId) {
       setFeedback({
         type: "error",
-        message: "Company wise report nite hole list theke company select korte hobe.",
+        message: "Please select a company from the list before exporting a company-specific report.",
       });
       return;
     }
@@ -9136,7 +9744,7 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
 
       setFeedback({
         type: "success",
-        message: format === "print" ? "Printable report khule geche." : "Report download ready.",
+        message: format === "print" ? "Printable report opened successfully." : "Report download is ready.",
       });
     } catch (error) {
       setFeedback({
@@ -9151,22 +9759,22 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
   return (
     <>
       <FloatingFeedback feedback={feedback} />
-      <PageHeader title="Easy Reports" description="Ajker ba weekly marketer communication report ekhanei simple vabe filter kore export korun." />
+      <PageHeader title="Reports" description="Download filtered marketer communication reports for today, weekly activity, or monthly activity." />
 
       <Card className="rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div className="max-w-2xl">
             <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-blue-700">
               <FileText className="h-3.5 w-3.5" />
-              Simple Communication Report
+              Communication Report
             </div>
-            <h2 className="mt-3 text-xl font-black text-slate-950">Marketer ke, kake, kivabe kotha bolse seta sohoje export korun</h2>
-            <p className="mt-1 text-sm text-slate-500">Extra report card, modal, ar onek filter bad deya hoyeche. Ekhon just period, marketer, ar company select kore PDF, XLSX, CSV ba print nite parben.</p>
+            <h2 className="mt-3 text-xl font-black text-slate-950">Export marketer communication activity in a clean format</h2>
+            <p className="mt-1 text-sm text-slate-500">Select a period, marketer, and company to download the report as PDF, XLSX, CSV, or a printable view.</p>
           </div>
           <div className="grid w-full gap-3 sm:grid-cols-2 xl:max-w-[420px]">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Selected Period</p>
-              <p className="mt-2 text-lg font-black text-slate-950">{period === "today" ? "Today" : "Weekly"}</p>
+              <p className="mt-2 text-lg font-black text-slate-950">{reportPeriodLabel(period)}</p>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Preview Rows</p>
@@ -9179,10 +9787,7 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
       <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
         <Card className="rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.06)]">
           <div className="flex flex-wrap items-center gap-2">
-            {([
-              { value: "today", label: "Today" },
-              { value: "week", label: "Weekly" },
-            ] as const).map((option) => (
+            {reportPeriodOptions.map((option) => (
               <button
                 key={option.value}
                 type="button"
@@ -9248,7 +9853,7 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
           <div className="mt-5 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-sm text-slate-600">
             <p className="font-bold text-slate-900">Current selection</p>
             <p className="mt-2">
-              <span className="font-semibold text-slate-700">Period:</span> {period === "today" ? "Today" : "Weekly"}
+              <span className="font-semibold text-slate-700">Period:</span> {reportPeriodLabel(period)}
             </p>
             <p className="mt-1">
               <span className="font-semibold text-slate-700">Marketer:</span> {selectedMarketer?.name ?? "All Marketers"}
@@ -9276,12 +9881,12 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
           </div>
 
           <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-sm font-bold text-slate-900">Ei report e ki thakbe?</p>
+            <p className="text-sm font-bold text-slate-900">What this report includes</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>Marketer kar sathe kotha bolse</li>
-              <li>Kivabe kotha bolse: call, WhatsApp, email, meeting</li>
-              <li>Ki niye kotha hoise / note</li>
-              <li>Selected marketer ba selected company wise filtered export</li>
+              <li>Which customer or company the marketer contacted</li>
+              <li>Communication method: call, WhatsApp, email, or meeting</li>
+              <li>Discussion summary and notes</li>
+              <li>Filtered export by selected marketer and company</li>
             </ul>
           </div>
         </Card>
@@ -9315,7 +9920,7 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
           )) : (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center">
               <p className="text-base font-black text-slate-900">No communication found</p>
-              <p className="mt-2 text-sm text-slate-500">Selected filter e kono marketer communication paoya jai nai.</p>
+              <p className="mt-2 text-sm text-slate-500">No marketer communication was found for the selected filters.</p>
             </div>
           )}
         </div>

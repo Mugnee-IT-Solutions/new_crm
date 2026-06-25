@@ -81,7 +81,7 @@ export function AppSidebar({
   const formatCount = (value: number | null | undefined) => {
     if (!shouldShowBadge(value)) return undefined;
     const normalizedValue = Math.trunc(value);
-    return normalizedValue > 99 ? "99+" : String(normalizedValue);
+    return String(normalizedValue);
   };
   const navGroups = groupSidebarItems(sidebarMenus[role]);
 

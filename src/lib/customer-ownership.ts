@@ -11,6 +11,20 @@ export type CustomerOwnerActor = {
 
 export type MarketerScopedActor = CustomerOwnerActor;
 
+async function getSupervisorFallbackMarketers(
+  prisma: ReturnType<typeof getPrisma>,
+) {
+  return prisma.user.findMany({
+    where: {
+      supervisorId: null,
+      role: "MARKETER",
+      status: "ACTIVE",
+    },
+    select: { id: true, name: true, role: true },
+    orderBy: { name: "asc" },
+  });
+}
+
 export async function getMarketerScopeUserIds(
   prisma: ReturnType<typeof getPrisma>,
   actor: MarketerScopedActor,
@@ -27,7 +41,12 @@ export async function getMarketerScopeUserIds(
     select: { id: true },
   });
 
-  return [actor.id, ...teamMembers.map((member) => member.id)];
+  if (teamMembers.length) {
+    return [actor.id, ...teamMembers.map((member) => member.id)];
+  }
+
+  const fallbackMarketers = await getSupervisorFallbackMarketers(prisma);
+  return [actor.id, ...fallbackMarketers.map((member) => member.id)];
 }
 
 export async function getAssignableMarketerOwners(
@@ -57,6 +76,9 @@ export async function getAssignableMarketerOwners(
     });
 
     if (team.length) return team;
+
+    const fallbackMarketers = await getSupervisorFallbackMarketers(prisma);
+    if (fallbackMarketers.length) return fallbackMarketers;
 
     if (options?.allowSupervisorSelfFallback) {
       const self = await prisma.user.findUnique({
@@ -205,6 +227,8 @@ export async function buildCustomerScopeWhere(
         { phone2: { contains: search, mode: "insensitive" } },
         { city: { contains: search, mode: "insensitive" } },
         { industry: { contains: search, mode: "insensitive" } },
+        { address: { contains: search, mode: "insensitive" } },
+        { website: { contains: search, mode: "insensitive" } },
       ],
     });
   }

@@ -1,7 +1,7 @@
 import type * as Prisma from "@prisma/client";
 import { addDays, isBefore } from "date-fns";
 import { formatCrmDate, getCrmDayWindow, getCrmPeriodWindow, isBeforeCrmDay, isSameCrmDay, type CrmPeriod } from "@/lib/crm-time";
-import { buildCustomerScopeWhere } from "@/lib/customer-ownership";
+import { buildCustomerScopeWhere, getMarketerScopeUserIds } from "@/lib/customer-ownership";
 import { getScopedLeadUserIds } from "@/lib/lead-ownership";
 import { getPrisma } from "@/lib/prisma";
 import { getTodayWorkQueue } from "@/lib/task-center";
@@ -52,6 +52,8 @@ export type LeadRow = {
 export type CompanyRow = {
   id: string;
   name: string;
+  activityLabel?: string;
+  activityTone?: "blue" | "green" | "amber" | "slate";
   contactPerson: string;
   email: string;
   emailOptions: string[];
@@ -64,6 +66,9 @@ export type CompanyRow = {
   website: string;
   assignedToId?: string | null;
   assignedTo: string;
+  createdBy?: string;
+  createdByRole?: string;
+  createdAtLabel?: string;
   status: string;
   totalLeads: number;
   lastCommunication: string;
@@ -198,6 +203,11 @@ export type ProductRow = {
   quotationCount: number;
   salesCount: number;
   conversionRate: number;
+  assignedCount: number;
+  assignedMarketers: string[];
+  targetCompanies: number;
+  contactedCompanies: number;
+  remainingCompanies: number;
 };
 
 export type ProductEngagementRow = {
@@ -223,6 +233,13 @@ export type ProductEngagementData = {
     totalCompaniesContacted: number;
     totalLeadsInterested: number;
     totalCommunicationCount: number;
+    totalShortlistedCompanies: number;
+    contactedCompanies: number;
+    notContactedCompanies: number;
+    totalCallCount: number;
+    totalWhatsAppCount: number;
+    totalEmailCount: number;
+    totalMeetingCount: number;
     followUpCount: number;
     quotationSentCount: number;
     salesCount: number;
@@ -1113,6 +1130,7 @@ type ActivityLogRecord = Prisma.Prisma.ActivityLogGetPayload<{ include: typeof a
 const workspaceCompanySelect = {
   id: true,
   name: true,
+  createdAt: true,
   industry: true,
   contactPerson: true,
   phone: true,
@@ -1153,7 +1171,19 @@ const workspaceCompanySelect = {
     select: {
       id: true,
       title: true,
+      status: true,
+      followUpDate: true,
     },
+  },
+  followUps: {
+    select: {
+      id: true,
+      status: true,
+      followUpDate: true,
+      completedAt: true,
+    },
+    orderBy: { followUpDate: "asc" },
+    take: 5,
   },
   communications: {
     select: {
@@ -1785,6 +1815,33 @@ function readRawCsvField(raw: Record<string, unknown>, keys: string[]) {
   return value === undefined ? "-" : value;
 }
 
+function deriveCompanyActivity(company: ExistingCustomerRecord): {
+  label: string;
+  tone: "blue" | "green" | "amber" | "slate";
+} | undefined {
+  const pendingFollowUp = company.followUps.find((followUp) => followUp.status !== "COMPLETED");
+  if (pendingFollowUp) {
+    return {
+      label: pendingFollowUp.status === "OVERDUE" ? "OVERDUE FOLLOW-UP" : "FOLLOW-UP",
+      tone: "blue",
+    };
+  }
+
+  if (company.leads.some((lead) => lead.status === "WON_SALE")) {
+    return { label: "DONE", tone: "green" };
+  }
+
+  if (company.leads.some((lead) => ["CONTACTED", "INTERESTED", "FOLLOW_UP_REQUIRED", "QUOTATION_SENT", "NEGOTIATION"].includes(lead.status))) {
+    return { label: "IN PROGRESS", tone: "amber" };
+  }
+
+  if (company.lastCommunication ?? company.communications[0]?.createdAt) {
+    return { label: "DONE", tone: "green" };
+  }
+
+  return { label: "NEW", tone: "blue" };
+}
+
 function mapCompanyRow(company: ExistingCustomerRecord): CompanyRow {
   const primaryContact = company.contacts.find((contact) => contact.isPrimary) ?? company.contacts[0];
   const whatsapp = company.phoneNumbers.find((phone) => phone.whatsapp);
@@ -1797,6 +1854,9 @@ function mapCompanyRow(company: ExistingCustomerRecord): CompanyRow {
   const rawIndustry = readRawField(raw, ["Industry"]);
   const rawCity = readRawField(raw, ["City / Zilla", "City/Zilla", "City", "Zilla"]);
   const rawAddress = readRawField(raw, ["Address"]);
+  const rawCreatedBy = readRawField(raw, ["Created By", "createdBy", "Added By", "addedBy"]);
+  const rawCreatedByRole = readRawField(raw, ["Created By Role", "createdByRole", "Added By Role", "addedByRole"]);
+  const activity = deriveCompanyActivity(company);
   const addressCity = inferCityFromAddress(company.address);
   const emailOptions = uniqueEmails([
     primaryContact?.email,
@@ -1811,6 +1871,8 @@ function mapCompanyRow(company: ExistingCustomerRecord): CompanyRow {
   return {
     id: company.id,
     name: company.name,
+    activityLabel: activity?.label,
+    activityTone: activity?.tone,
     contactPerson: company.contactPerson ?? primaryContact?.name ?? "-",
     email: primaryContact?.email ?? rawPrimaryEmail ?? "-",
     emailOptions,
@@ -1823,6 +1885,9 @@ function mapCompanyRow(company: ExistingCustomerRecord): CompanyRow {
     website: company.website ?? "-",
     assignedToId: company.assignedToId,
     assignedTo: company.assignedTo?.name ?? "-",
+    createdBy: rawCreatedBy ?? company.assignedTo?.name ?? "-",
+    createdByRole: rawCreatedByRole ?? undefined,
+    createdAtLabel: dateLabel(company.createdAt, "dd/MM/yyyy hh:mm a"),
     status: labelize(company.status),
     totalLeads: Math.max(company.totalLeads, company.leads.length),
     lastCommunication: dateLabel(company.lastCommunication ?? company.communications[0]?.createdAt),
@@ -1947,6 +2012,14 @@ function communicationMatchesFilters(communication: ProductCommunicationRecord, 
   return true;
 }
 
+function communicationMethodBucket(method: string) {
+  const normalized = method.trim().toLowerCase();
+  if (normalized.includes("whatsapp")) return "whatsapp" as const;
+  if (normalized.includes("email")) return "email" as const;
+  if (normalized.includes("meeting") || normalized.includes("visit")) return "meeting" as const;
+  return "call" as const;
+}
+
 function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[], rawQuery?: Record<string, unknown>): ProductEngagementData {
   const filters = normalizeProductEngagementQuery(rawQuery);
   const scope = scopedUserIds ? new Set(scopedUserIds) : undefined;
@@ -1955,17 +2028,28 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
   const scopedQuoteItems = product.quoteItems.filter((item) => quotationInScope(item.quotation, scope));
   const communicationIds = new Set<string>();
   const companyIds = new Set<string>();
+  const contactedCompanyIds = new Set<string>();
   const assignedUsers = new Map<string, string>();
   const communicationTypes = new Set<string>();
   const convertedLeadIds = new Set<string>();
+  const communicationMethodCounts = {
+    call: 0,
+    whatsapp: 0,
+    email: 0,
+    meeting: 0,
+  };
 
   for (const lead of scopedLeads) {
     if (lead.companyId) companyIds.add(lead.companyId);
     if (lead.assignedToId && lead.assignedTo) assignedUsers.set(lead.assignedToId, lead.assignedTo.name);
     if (lead.status === "WON_SALE") convertedLeadIds.add(lead.id);
     for (const communication of collectLeadCommunications(lead)) {
+      if (!communicationIds.has(communication.id)) {
+        communicationMethodCounts[communicationMethodBucket(communication.method)] += 1;
+      }
       communicationIds.add(communication.id);
       communicationTypes.add(communication.method);
+      if (lead.companyId) contactedCompanyIds.add(lead.companyId);
     }
   }
 
@@ -1978,8 +2062,12 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
     if (interest.company?.assignedToId && interest.company.assignedTo) assignedUsers.set(interest.company.assignedToId, interest.company.assignedTo.name);
     for (const communication of interest.company?.communications ?? []) {
       if (!interest.leadId && !communication.leadId) {
+        if (!communicationIds.has(communication.id)) {
+          communicationMethodCounts[communicationMethodBucket(communication.method)] += 1;
+        }
         communicationIds.add(communication.id);
         communicationTypes.add(communication.method);
+        if (interest.companyId) contactedCompanyIds.add(interest.companyId);
       }
     }
   }
@@ -1990,7 +2078,7 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
     }
   }
 
-  const followUpCount = scopedLeads.reduce((sum, lead) => sum + lead.followUps.filter((followUp) => followUpInScope(followUp, scope)).length, 0);
+  const followUpCount = scopedLeads.reduce((sum, lead) => sum + lead.followUps.filter((followUp) => followUpInScope(followUp, scope) && followUp.status !== "COMPLETED").length, 0);
   const quotationSentCount = new Set(
     scopedQuoteItems
       .filter((item) => item.quotation.status !== "DRAFT")
@@ -2087,6 +2175,13 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
       totalCompaniesContacted: companyIds.size,
       totalLeadsInterested: scopedLeads.length,
       totalCommunicationCount: communicationIds.size,
+      totalShortlistedCompanies: companyIds.size,
+      contactedCompanies: contactedCompanyIds.size,
+      notContactedCompanies: Math.max(companyIds.size - contactedCompanyIds.size, 0),
+      totalCallCount: communicationMethodCounts.call,
+      totalWhatsAppCount: communicationMethodCounts.whatsapp,
+      totalEmailCount: communicationMethodCounts.email,
+      totalMeetingCount: communicationMethodCounts.meeting,
       followUpCount,
       quotationSentCount,
       salesCount: convertedLeadIds.size,
@@ -2224,12 +2319,7 @@ async function getScopedUserIds(role: Role, user: ShellUser) {
   if (role === "MARKETER") return [user.id];
 
   const prisma = getPrisma();
-  const team = await prisma.user.findMany({
-    where: { supervisorId: user.id, status: "ACTIVE" },
-    select: { id: true },
-  });
-
-  return [user.id, ...team.map((member) => member.id)];
+  return getMarketerScopeUserIds(prisma, { id: user.id, role });
 }
 
 function normalizeActivitySearchText(value?: string | null) {
@@ -2743,6 +2833,11 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
     quotationCount: engagement.summary.quotationSentCount,
     salesCount: engagement.summary.salesCount,
     conversionRate: engagement.summary.conversionRate,
+    assignedCount: engagement.filterOptions.assignedUsers.length,
+    assignedMarketers: engagement.filterOptions.assignedUsers.map((user) => user.name),
+    targetCompanies: engagement.summary.totalShortlistedCompanies,
+    contactedCompanies: engagement.summary.contactedCompanies,
+    remainingCompanies: Math.max(engagement.summary.totalShortlistedCompanies - engagement.summary.contactedCompanies, 0),
   }));
   const productIntelligenceItems: ProductIntelligenceItem[] = productRows.map((product) => ({
     id: product.id,
@@ -3645,6 +3740,11 @@ export async function getProductDetail(id: string, role: Role, user: ShellUser, 
         quotationCount: productEngagement.summary.quotationSentCount,
         salesCount: productEngagement.summary.salesCount,
         conversionRate: productEngagement.summary.conversionRate,
+        assignedCount: productEngagement.filterOptions.assignedUsers.length,
+        assignedMarketers: productEngagement.filterOptions.assignedUsers.map((item) => item.name),
+        targetCompanies: productEngagement.summary.totalShortlistedCompanies,
+        contactedCompanies: productEngagement.summary.contactedCompanies,
+        remainingCompanies: Math.max(productEngagement.summary.totalShortlistedCompanies - productEngagement.summary.contactedCompanies, 0),
       }
     : undefined;
 

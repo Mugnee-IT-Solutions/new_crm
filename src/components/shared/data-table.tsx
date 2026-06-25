@@ -27,14 +27,23 @@ export function DataTable<TData extends object>({
   data,
   columns,
   searchPlaceholder = "Search...",
+  globalFilterValue,
+  onGlobalFilterValueChange,
+  onVisibleRowsChange,
 }: {
   data: TData[];
   columns: ColumnDef<TData>[];
   searchPlaceholder?: string;
+  globalFilterValue?: string;
+  onGlobalFilterValueChange?: (value: string) => void;
+  onVisibleRowsChange?: (rows: TData[]) => void;
 }) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
-  const [globalFilter, setGlobalFilter] = React.useState("");
+  const [globalFilterState, setGlobalFilterState] = React.useState("");
   const [columnVisibility, setColumnVisibility] = React.useState<Record<string, boolean>>({});
+  const lastVisibleRowsRef = React.useRef<TData[]>([]);
+  const globalFilter = globalFilterValue ?? globalFilterState;
+  const setGlobalFilter = onGlobalFilterValueChange ?? setGlobalFilterState;
 
   // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
@@ -52,6 +61,16 @@ export function DataTable<TData extends object>({
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
+  });
+
+  React.useEffect(() => {
+    if (!onVisibleRowsChange) return;
+    const nextRows = table.getFilteredRowModel().rows.map((row) => row.original);
+    const prevRows = lastVisibleRowsRef.current;
+    const changed = prevRows.length !== nextRows.length || prevRows.some((row, index) => row !== nextRows[index]);
+    if (!changed) return;
+    lastVisibleRowsRef.current = nextRows;
+    onVisibleRowsChange(nextRows);
   });
 
   return (
