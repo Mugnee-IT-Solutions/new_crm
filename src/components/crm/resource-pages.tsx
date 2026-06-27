@@ -5433,6 +5433,11 @@ function normalizeCrmPipelineStep(value?: string | null): CrmPipelineStep | null
   return null;
 }
 
+function shouldHidePipelineTitle(title?: string | null, currentStep?: CrmPipelineStep | null) {
+  if (!title || !currentStep) return false;
+  return normalizeCrmPipelineStep(title) === currentStep;
+}
+
 function defaultNextCrmPipelineStep(value?: string | null): CrmPipelineStep {
   const currentStep = normalizeCrmPipelineStep(value);
   if (currentStep === "Call") return "Follow-up";
@@ -6365,10 +6370,11 @@ export function TodayWorkQueueList({
   }
 
   return (
-    <div className={cn("space-y-2.5 overflow-y-auto pr-1", maxHeightClassName)}>
+    <div className={cn("space-y-2 overflow-y-auto pr-1", maxHeightClassName)}>
       <AnimatePresence initial={false}>
         {rows.map((task) => {
           const crmStep = normalizeCrmPipelineStep(task.title) ?? (task.sourceType === "FOLLOW_UP" ? "Follow-up" : null);
+          const hideTaskTitle = shouldHidePipelineTitle(task.title, crmStep);
           const taskTimestamp = new Date(task.taskDateIso).getTime();
           const isLiveFollowUp = task.sourceType === "FOLLOW_UP" && task.queueType === "DUE_FOLLOW_UP" && Number.isFinite(taskTimestamp) && taskTimestamp <= Date.now();
           const isUpcomingFollowUp = task.sourceType === "FOLLOW_UP" && task.queueType === "DUE_FOLLOW_UP" && Number.isFinite(taskTimestamp) && taskTimestamp > Date.now();
@@ -6401,7 +6407,7 @@ export function TodayWorkQueueList({
               }
             }}
             className={cn(
-              "rounded-[20px] border px-4 py-3.5 shadow-[0_12px_28px_rgba(15,23,42,0.05)] transition hover:shadow-[0_14px_32px_rgba(15,23,42,0.08)]",
+              "rounded-[18px] border px-3.5 py-3 shadow-[0_8px_22px_rgba(15,23,42,0.045)] transition hover:shadow-[0_12px_28px_rgba(15,23,42,0.07)]",
               onOpen && "cursor-pointer",
               task.queueType === "OVERDUE" || task.queueType === "CARRY_FORWARD"
                 ? "border-rose-200 bg-gradient-to-br from-rose-50 to-white ring-1 ring-rose-100"
@@ -6414,53 +6420,55 @@ export function TodayWorkQueueList({
                     : "border-slate-200 bg-white",
             )}
           >
-            <div className="flex min-w-0 items-start gap-3">
+            <div className="flex min-w-0 items-start gap-2.5">
               <input
                 type="checkbox"
                 checked={false}
                 onClick={(event) => event.stopPropagation()}
                 onChange={() => onComplete(task)}
-                className="mt-3 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                className="mt-2.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 aria-label={`Complete ${task.title}`}
               />
               <MiniAvatar label={task.companyName || task.title} />
               <div className="min-w-0 flex-1">
                 {crmStep ? (
-                  <div className="mb-3 space-y-2">
+                  <div className="mb-2 space-y-1.5">
                     <CrmPipelineStrip
                       activeStep={crmStep}
                       highlight={task.queueType === "DUE_FOLLOW_UP" || task.queueType === "OVERDUE" || task.priorityKey === "IMPORTANT"}
                     />
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-[11px] font-black", stageBadgeTone)}>
                         Current step: {crmStep}
                       </span>
                       {isLiveFollowUp ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-orange-300 bg-orange-100 px-2.5 py-1 text-[11px] font-black text-orange-800 shadow-sm">
-                          <Clock3 className="h-3.5 w-3.5" />
+                        <span className="inline-flex items-center gap-1 rounded-full border border-orange-300 bg-orange-100 px-2 py-0.5 text-[10px] font-black text-orange-800 shadow-sm">
+                          <Clock3 className="h-3 w-3" />
                           Live follow-up now
                         </span>
                       ) : null}
                       {isUpcomingFollowUp ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-white px-2.5 py-1 text-[11px] font-bold text-amber-700">
-                          <Clock3 className="h-3.5 w-3.5" />
+                        <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-white px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                          <Clock3 className="h-3 w-3" />
                           Upcoming follow-up
                         </span>
                       ) : null}
                     </div>
                   </div>
                 ) : null}
-                <div className="space-y-1">
+                <div className="space-y-0.5">
                   <div className="flex min-w-0 items-start justify-between gap-3">
-                    <button type="button" onClick={(event) => {
-                      event.stopPropagation();
-                      onOpen?.(task);
-                    }} className="truncate text-left text-lg font-black text-slate-900 hover:text-blue-700">
-                      {task.title}
-                    </button>
+                    {!hideTaskTitle ? (
+                      <button type="button" onClick={(event) => {
+                        event.stopPropagation();
+                        onOpen?.(task);
+                      }} className="truncate text-left text-base font-black text-slate-900 hover:text-blue-700">
+                        {task.title}
+                      </button>
+                    ) : <div />}
                     {showScheduledTime ? (
                       <div className={cn(
-                        "shrink-0 rounded-2xl border px-3 py-2 text-right",
+                        "shrink-0 rounded-xl border px-2.5 py-1.5 text-right",
                         isLiveFollowUp
                           ? "border-orange-300 bg-orange-100 text-orange-900 shadow-sm"
                           : task.queueType === "OVERDUE"
@@ -6469,46 +6477,44 @@ export function TodayWorkQueueList({
                               ? "border-amber-200 bg-white text-amber-800"
                               : "border-slate-200 bg-slate-50 text-slate-700",
                       )}>
-                        {task.timeLabel ? <p className="text-sm font-black">{task.timeLabel}</p> : null}
-                        <p className={cn(task.timeLabel ? "mt-0.5" : "mt-0", "text-[11px] font-semibold", isLiveFollowUp ? "text-orange-700" : "text-slate-500")}>{task.taskDateLabel}</p>
+                        {task.timeLabel ? <p className="text-xs font-black">{task.timeLabel}</p> : null}
+                        <p className={cn(task.timeLabel ? "mt-0.5" : "mt-0", "text-[10px] font-semibold", isLiveFollowUp ? "text-orange-700" : "text-slate-500")}>{task.taskDateLabel}</p>
                         {isLiveFollowUp ? <p className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-orange-700">Due now</p> : null}
                       </div>
                     ) : null}
                   </div>
-                  <div className="flex min-w-0 items-center justify-between gap-3">
-                    <div className="min-w-0 flex items-center gap-3">
-                      <p className="min-w-0 flex-1 truncate text-base font-bold text-slate-700">
-                        <EntityLink href={task.companyHref} className="text-base font-bold text-slate-800" stopPropagation>
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5">
+                    <p className="min-w-0 flex-1 truncate text-[15px] font-bold text-slate-700">
+                        <EntityLink href={task.companyHref} className="text-[15px] font-bold text-slate-800" stopPropagation>
                           {task.companyName}
                         </EntityLink>
-                      </p>
-                      <p className="shrink-0 whitespace-nowrap text-[15px] font-bold text-slate-700">
-                        {task.companyPrimaryPhone || "No phone number"}
-                      </p>
-                    </div>
+                    </p>
+                    <p className="shrink-0 whitespace-nowrap text-[13px] font-bold text-slate-600">
+                      {task.companyPrimaryPhone || "No phone number"}
+                    </p>
                   </div>
                 </div>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <span className="truncate text-xs font-semibold text-slate-600">{task.method}</span>
-                  {task.productName !== "-" ? <span className="truncate text-xs font-semibold text-blue-700">Product: {task.productName}</span> : null}
-                  {task.reminder !== "-" ? <span className="truncate text-xs font-semibold text-violet-700">Reminder: {taskReminderLabel(task.reminder)}</span> : null}
-                  {viewerRole !== "MARKETER" ? <span className="truncate text-xs font-semibold text-slate-500">Assigned: {task.assignedTo}</span> : null}
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <span className="truncate text-[11px] font-semibold text-slate-600">{task.method}</span>
+                  {task.productName !== "-" ? <span className="truncate text-[11px] font-semibold text-blue-700">Product: {task.productName}</span> : null}
+                  {task.reminder !== "-" ? <span className="truncate text-[11px] font-semibold text-violet-700">Reminder: {taskReminderLabel(task.reminder)}</span> : null}
+                  {viewerRole !== "MARKETER" ? <span className="truncate text-[11px] font-semibold text-slate-500">Assigned: {task.assignedTo}</span> : null}
                   <Badge
                     variant={task.queueType === "OVERDUE" ? "danger" : task.queueType === "DUE_FOLLOW_UP" ? "warning" : "default"}
-                    className="px-2 py-0.5 text-[11px] font-bold"
+                    className="px-2 py-0.5 text-[10px] font-bold"
                   >
                     {task.queueLabel}
                   </Badge>
                   <TaskPriorityBadge priority={task.priorityKey} />
                 </div>
-                <p className="mt-2 text-[15px] font-medium leading-6 text-slate-700 line-clamp-2">{task.description !== "-" ? task.description : task.method}</p>
-                {task.notes !== "-" ? <p className="mt-1.5 truncate text-sm font-medium text-slate-500"><span className="font-semibold text-slate-600">Note:</span> {task.notes}</p> : null}
+                <p className="mt-1.5 text-sm font-medium leading-5 text-slate-700 line-clamp-2">{task.description !== "-" ? task.description : task.method}</p>
+                {task.notes !== "-" ? <p className="mt-1 truncate text-xs font-medium text-slate-500"><span className="font-semibold text-slate-600">Note:</span> {task.notes}</p> : null}
               </div>
-              <div className="flex shrink-0 flex-col gap-2">
+              <div className="flex shrink-0 flex-col gap-1.5">
                 <Button
                   type="button"
                   size="sm"
-                  className="mt-1 h-8 rounded-xl px-3 text-xs shadow-sm"
+                  className="mt-0.5 h-7 rounded-lg px-2.5 text-[11px] shadow-sm"
                   disabled={Boolean(activeItemId && activeItemId === task.id)}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -6519,13 +6525,13 @@ export function TodayWorkQueueList({
                 </Button>
                 {task.sourceType === "TASK" ? (
                   <>
-                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={(event) => {
+                    <Button type="button" size="sm" variant="outline" className="h-7 rounded-lg px-2.5 text-[11px]" onClick={(event) => {
                       event.stopPropagation();
                       onEdit?.(toEditableTaskRow(task));
                     }}>
                       Edit
                     </Button>
-                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs text-red-600" onClick={(event) => {
+                    <Button type="button" size="sm" variant="outline" className="h-7 rounded-lg px-2.5 text-[11px] text-red-600" onClick={(event) => {
                       event.stopPropagation();
                       onDelete?.(toEditableTaskRow(task));
                     }}>
@@ -6534,13 +6540,13 @@ export function TodayWorkQueueList({
                   </>
                 ) : task.sourceType === "FOLLOW_UP" ? (
                   <>
-                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={(event) => {
+                    <Button type="button" size="sm" variant="outline" className="h-7 rounded-lg px-2.5 text-[11px]" onClick={(event) => {
                       event.stopPropagation();
                       onEditFollowUp?.(task);
                     }}>
                       Edit
                     </Button>
-                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs text-red-600" onClick={(event) => {
+                    <Button type="button" size="sm" variant="outline" className="h-7 rounded-lg px-2.5 text-[11px] text-red-600" onClick={(event) => {
                       event.stopPropagation();
                       onDeleteFollowUp?.(task);
                     }}>
@@ -6576,7 +6582,7 @@ export function CompletedWorkList({
 }) {
   const [expanded, setExpanded] = React.useState(false);
   const hiddenCount = previewCount ? Math.max(rows.length - previewCount, 0) : 0;
-  const compactHeightClassName = previewCount === 5 ? "max-h-[360px]" : "max-h-[420px]";
+  const compactHeightClassName = previewCount === 5 ? "max-h-[320px]" : "max-h-[360px]";
 
   if (loading) {
     return (
@@ -6592,10 +6598,12 @@ export function CompletedWorkList({
   }
 
   return (
-    <div className="space-y-3">
-      <div className={cn("space-y-2.5 pr-1", previewCount ? (expanded ? "max-h-none overflow-visible" : `${compactHeightClassName} overflow-y-auto`) : "")}>
+    <div className="space-y-2.5">
+      <div className={cn("space-y-2 pr-1", previewCount ? (expanded ? "max-h-none overflow-visible" : `${compactHeightClassName} overflow-y-auto`) : "")}>
         {rows.map((task, index) => {
           const isLatest = index === 0;
+          const crmStep = normalizeCrmPipelineStep(task.title) ?? (task.sourceType === "FOLLOW_UP" ? "Follow-up" : null);
+          const hideTaskTitle = shouldHidePipelineTitle(task.title, crmStep);
           return (
           <div
             key={task.id}
@@ -6610,35 +6618,34 @@ export function CompletedWorkList({
               }
             }}
             className={cn(
-              "rounded-[16px] border border-slate-200 bg-slate-50/90 px-3.5 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]",
+              "rounded-[14px] border border-slate-200 bg-slate-50/90 px-3 py-2.5 shadow-[0_6px_18px_rgba(15,23,42,0.04)]",
               isLatest && "border-emerald-200 bg-emerald-50/50 ring-1 ring-emerald-100",
               onOpen && "cursor-pointer transition hover:border-emerald-200 hover:bg-emerald-50/40",
             )}
           >
-            <div className="flex items-start gap-3">
+            <div className="flex items-start gap-2.5">
               <MiniAvatar label={task.companyName || task.title} />
               <div className="min-w-0 flex-1">
-                {(() => {
-                  const crmStep = normalizeCrmPipelineStep(task.title) ?? (task.sourceType === "FOLLOW_UP" ? "Follow-up" : null);
-                  return crmStep ? (
-                    <div className="mb-3">
-                      <CrmPipelineStrip activeStep={crmStep} />
-                    </div>
-                  ) : null;
-                })()}
+                {crmStep ? (
+                  <div className="mb-2">
+                    <CrmPipelineStrip activeStep={crmStep} />
+                  </div>
+                ) : null}
                 <div className="flex min-w-0 items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <button type="button" onClick={(event) => {
-                      event.stopPropagation();
-                      onOpen?.(task);
-                    }} className="truncate text-left text-lg font-black text-slate-900 hover:text-blue-700">
-                      {task.title}
-                    </button>
-                    {isLatest ? <p className="mt-1 text-[11px] font-black uppercase tracking-[0.18em] text-emerald-700">Latest completed</p> : null}
-                    <p className="mt-0.5 truncate text-base font-bold text-slate-700">
-                      <EntityLink href={task.companyHref} className="text-base font-bold text-slate-800" stopPropagation>{task.companyName}</EntityLink>
+                    {!hideTaskTitle ? (
+                      <button type="button" onClick={(event) => {
+                        event.stopPropagation();
+                        onOpen?.(task);
+                      }} className="truncate text-left text-base font-black text-slate-900 hover:text-blue-700">
+                        {task.title}
+                      </button>
+                    ) : null}
+                    {isLatest ? <p className="mt-0.5 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">Latest completed</p> : null}
+                    <p className="mt-0.5 truncate text-[15px] font-bold text-slate-700">
+                      <EntityLink href={task.companyHref} className="text-[15px] font-bold text-slate-800" stopPropagation>{task.companyName}</EntityLink>
                     </p>
-                    <p className="mt-1 text-xs font-semibold text-slate-500">Scheduled: {task.taskDateLabel}{task.timeLabel ? ` ${task.timeLabel}` : ""}</p>
+                    <p className="mt-0.5 text-[11px] font-semibold text-slate-500">Scheduled: {task.taskDateLabel}{task.timeLabel ? ` ${task.timeLabel}` : ""}</p>
                   </div>
                   <button
                     type="button"
@@ -6646,34 +6653,34 @@ export function CompletedWorkList({
                       event.stopPropagation();
                       onOpen?.(task);
                     }}
-                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 transition hover:bg-emerald-200"
+                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 transition hover:bg-emerald-200"
                     aria-label={`Open completed details for ${task.title}`}
                   >
-                    <Check className="h-4 w-4" />
+                    <Check className="h-3.5 w-3.5" />
                   </button>
                 </div>
-                <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-slate-500">
                   {task.method !== "Task" && task.method !== "-" ? <span>{task.method}</span> : null}
                   {task.productName !== "-" ? <span className="text-blue-700">Product: {task.productName}</span> : null}
                   {task.reminder !== "-" ? <span className="text-violet-700">Reminder: {taskReminderLabel(task.reminder)}</span> : null}
                   {viewerRole !== "MARKETER" ? <span>Assigned: {task.assignedTo}</span> : null}
                   <span>Completed by {task.completedBy}</span>
                 </div>
-                <p className={cn("mt-2 text-[15px] leading-6 text-slate-700", !isLatest && "line-clamp-2")}>{task.description !== "-" ? task.description : task.method}</p>
-                {task.notes !== "-" ? <p className={cn("mt-1.5 text-sm font-medium text-slate-500", !isLatest && "truncate")}><span className="font-semibold text-slate-600">Note:</span> {task.notes}</p> : null}
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-xs font-bold text-slate-500">{task.completedAtLabel}</p>
+                <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-slate-700">{task.description !== "-" ? task.description : task.method}</p>
+                {task.notes !== "-" ? <p className="mt-1 truncate text-xs font-medium text-slate-500"><span className="font-semibold text-slate-600">Note:</span> {task.notes}</p> : null}
+                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] font-bold text-slate-500">{task.completedAtLabel}</p>
                   <Button
                     type="button"
                     size="sm"
                     variant="outline"
-                    className="h-8 rounded-xl gap-1.5 px-3 text-xs"
+                    className="h-7 rounded-lg gap-1 px-2.5 text-[11px]"
                     onClick={(event) => {
                       event.stopPropagation();
                       onAddFollowUp(task);
                     }}
                   >
-                    <Plus className="h-3.5 w-3.5" />
+                    <Plus className="h-3 w-3" />
                     Add Follow-up
                   </Button>
                 </div>
@@ -7091,26 +7098,6 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
           <>
             <div className="grid gap-5 xl:grid-cols-2">
               <DashboardCard
-                title="Marketer Tasks"
-                action={<Badge variant={counts.overdue ? "warning" : "neutral"}>{marketerVisibleTasks.length} Pending</Badge>}
-                className="rounded-[16px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]"
-              >
-                <TodayWorkQueueList
-                  rows={marketerVisibleTasks}
-                  loading={loading}
-                  viewerRole={role}
-                  emptyMessage="No marketer tasks due right now."
-                  activeItemId={completionItem?.id ?? null}
-                  onOpen={setDetailItem}
-                  onEdit={setEditingTask}
-                  onDelete={(task) => void handleTaskDelete(task)}
-                  onEditFollowUp={setEditingFollowUp}
-                  onDeleteFollowUp={(task) => void handleFollowUpDelete(task)}
-                  onComplete={handleCompleteRequest}
-                />
-              </DashboardCard>
-
-              <DashboardCard
                 title="My Today's Tasks"
                 action={<Badge variant={counts.overdue ? "warning" : "neutral"}>{myVisibleTasks.length} Pending</Badge>}
                 className="rounded-[16px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]"
@@ -7129,9 +7116,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
                   onComplete={handleCompleteRequest}
                 />
               </DashboardCard>
-            </div>
 
-            <div className="grid gap-5 xl:grid-cols-2">
               <DashboardCard
                 title="My Completed Tasks"
                 action={<Badge variant="neutral">{myCompletedTasks.length} Completed</Badge>}
@@ -7145,6 +7130,28 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
                   onAddFollowUp={handleAddFollowUp}
                   onOpen={setDetailItem}
                   previewCount={5}
+                />
+              </DashboardCard>
+            </div>
+
+            <div className="grid gap-5 xl:grid-cols-2">
+              <DashboardCard
+                title="Marketer Tasks"
+                action={<Badge variant={counts.overdue ? "warning" : "neutral"}>{marketerVisibleTasks.length} Pending</Badge>}
+                className="rounded-[16px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]"
+              >
+                <TodayWorkQueueList
+                  rows={marketerVisibleTasks}
+                  loading={loading}
+                  viewerRole={role}
+                  emptyMessage="No marketer tasks due right now."
+                  activeItemId={completionItem?.id ?? null}
+                  onOpen={setDetailItem}
+                  onEdit={setEditingTask}
+                  onDelete={(task) => void handleTaskDelete(task)}
+                  onEditFollowUp={setEditingFollowUp}
+                  onDeleteFollowUp={(task) => void handleFollowUpDelete(task)}
+                  onComplete={handleCompleteRequest}
                 />
               </DashboardCard>
 

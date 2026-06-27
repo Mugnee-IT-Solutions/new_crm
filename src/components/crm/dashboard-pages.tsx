@@ -582,6 +582,7 @@ type TeamPerformanceDrilldownRow = {
   method: string;
   title: string;
   dateTime: string;
+  sortDateValue?: string | null;
   status: string;
   note: string;
 };
@@ -701,6 +702,17 @@ function normalizeDrilldownLookup(value?: string | null) {
   return (value ?? "").trim().toLowerCase();
 }
 
+function drilldownSortTime(row: TeamPerformanceDrilldownRow) {
+  const isoTime = row.sortDateValue ? Date.parse(row.sortDateValue) : Number.NaN;
+  if (!Number.isNaN(isoTime)) return isoTime;
+  const fallbackTime = Date.parse(row.dateTime);
+  return Number.isNaN(fallbackTime) ? 0 : fallbackTime;
+}
+
+function drilldownRowKey(row: TeamPerformanceDrilldownRow) {
+  return `${row.type}:${row.id}:${row.sortDateValue ?? row.dateTime}`;
+}
+
 function drilldownStatusVariant(status: string) {
   const normalized = status.trim().toUpperCase();
   if (normalized.includes("COMPLETED") || normalized.includes("WON")) return "success" as const;
@@ -755,44 +767,31 @@ function TeamPerformanceDrilldownTable({
   marketerId: string;
   marketerName: string;
 }) {
-  const pageSize = 8;
-  const [page, setPage] = React.useState(1);
   const [selectedRecordKey, setSelectedRecordKey] = React.useState<string | null>(null);
   const [activityFilter, setActivityFilter] = React.useState<DrilldownActivityFilter>("all");
+  const orderedRows = React.useMemo(() => (
+    [...rows].sort((left, right) => drilldownSortTime(right) - drilldownSortTime(left))
+  ), [rows]);
   const filteredRows = React.useMemo(() => {
-    if (activityFilter === "all") return rows;
-    return rows.filter((row) => drilldownActivityCategory(row) === activityFilter);
-  }, [activityFilter, rows]);
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const pagedRows = React.useMemo(() => filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize), [currentPage, filteredRows]);
+    if (activityFilter === "all") return orderedRows;
+    return orderedRows.filter((row) => drilldownActivityCategory(row) === activityFilter);
+  }, [activityFilter, orderedRows]);
   const selectedRecord = React.useMemo(() => (
-    filteredRows.find((row) => `${row.type}:${row.id}:${row.dateTime}` === selectedRecordKey) ?? null
+    filteredRows.find((row) => drilldownRowKey(row) === selectedRecordKey) ?? null
   ), [filteredRows, selectedRecordKey]);
 
-  React.useEffect(() => {
-    setPage(1);
-  }, [activityFilter]);
-
-  React.useEffect(() => {
-    if (!selectedRecordKey) return;
-    const exists = filteredRows.some((row) => `${row.type}:${row.id}:${row.dateTime}` === selectedRecordKey);
-    if (!exists) setSelectedRecordKey(null);
-  }, [filteredRows, selectedRecordKey]);
-
   const filterCounts = React.useMemo(() => {
-    return rows.reduce((summary, row) => {
+    return orderedRows.reduce((summary, row) => {
       const category = drilldownActivityCategory(row);
       summary.all += 1;
       if (category) summary[category] += 1;
       return summary;
     }, { all: 0, call: 0, followUp: 0, demo: 0, quotation: 0 });
-  }, [rows]);
+  }, [orderedRows]);
 
   const latestNotes = React.useMemo(() => (
     filteredRows
       .filter((row) => row.note && row.note !== "-")
-      .slice(0, 4)
   ), [filteredRows]);
 
   const selectedCompany = React.useMemo(() => {
@@ -807,13 +806,13 @@ function TeamPerformanceDrilldownTable({
   const relatedRows = React.useMemo(() => {
     if (!selectedRecord) return [];
     const selectedKey = normalizeDrilldownLookup(selectedRecord.customerOrCompany);
-    return rows
+    return orderedRows
       .filter((row) => (
         (selectedRecord.companyId && row.companyId && selectedRecord.companyId === row.companyId)
         || normalizeDrilldownLookup(row.customerOrCompany) === selectedKey
       ))
       .slice(0, 8);
-  }, [rows, selectedRecord]);
+  }, [orderedRows, selectedRecord]);
 
   const relatedActivities = React.useMemo(() => {
     if (!selectedRecord) return [];
@@ -927,14 +926,14 @@ function TeamPerformanceDrilldownTable({
           <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-black text-slate-950">Overall Notes</p>
-              <Badge variant="neutral">{latestNotes.length} latest</Badge>
+              <Badge variant="neutral">{latestNotes.length} notes</Badge>
             </div>
-            <div className="mt-3 space-y-2">
+            <div className="mt-3 max-h-[min(42vh,28rem)] space-y-2 overflow-y-auto pr-2 [scrollbar-gutter:stable]">
               {latestNotes.map((row) => (
-                <div key={`${row.type}:${row.id}:${row.dateTime}:note`} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
+                <div key={`${drilldownRowKey(row)}:note`} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <p className="text-xs font-black text-slate-900">{row.customerOrCompany} - {row.title}</p>
-                    <p className="text-[11px] font-semibold text-slate-500">{row.dateTime}</p>
+                    <p className="shrink-0 text-[11px] font-semibold text-slate-500 sm:text-right">{row.dateTime}</p>
                   </div>
                   <p className="mt-1 text-xs font-semibold text-slate-500">{row.method} - {row.status}</p>
                   <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{row.note}</p>
@@ -945,7 +944,7 @@ function TeamPerformanceDrilldownTable({
         ) : null}
       </div>
 
-      <div className="max-h-[min(56vh,540px)] max-w-full overflow-auto rounded-2xl border border-slate-200">
+      <div className="max-h-[min(58vh,40rem)] max-w-full overflow-auto rounded-2xl border border-slate-200 [scrollbar-gutter:stable_both-edges]">
         <table className="min-w-[1040px] w-full text-left text-sm">
           <thead className="sticky top-0 z-[1] border-b border-slate-100 bg-white text-xs uppercase tracking-[0.12em] text-slate-400">
             <tr>
@@ -960,46 +959,34 @@ function TeamPerformanceDrilldownTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {pagedRows.map((record) => (
-              <tr key={`${record.type}-${record.id}-${record.dateTime}`} className="align-top hover:bg-slate-50/70">
-                <td className="max-w-[180px] px-3 py-3 font-semibold text-slate-900">
+            {filteredRows.map((record) => (
+              <tr key={drilldownRowKey(record)} className="align-top hover:bg-slate-50/70">
+                <td className="max-w-[220px] px-3 py-3 font-semibold text-slate-900">
                     <button
                       type="button"
-                      onClick={() => setSelectedRecordKey(`${record.type}:${record.id}:${record.dateTime}`)}
+                      onClick={() => setSelectedRecordKey(drilldownRowKey(record))}
                       className="text-left text-blue-700 transition hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                     >
                       {record.customerOrCompany}
                   </button>
                 </td>
-                <td className="max-w-[160px] px-3 py-3 text-slate-700">{record.contactPerson}</td>
+                <td className="max-w-[180px] px-3 py-3 text-slate-700">{record.contactPerson}</td>
                 <td className="px-3 py-3 text-slate-700">{record.phone}</td>
                 <td className="px-3 py-3 text-slate-700">{record.method}</td>
-                <td className="max-w-[220px] px-3 py-3 text-slate-700">{record.title}</td>
-                <td className="px-3 py-3 text-slate-700">{record.dateTime}</td>
-                <td className="px-3 py-3 text-slate-700">{record.status}</td>
-                <td className="min-w-[320px] whitespace-pre-wrap px-3 py-3 leading-6 text-slate-800">{record.note || "-"}</td>
+                <td className="max-w-[240px] px-3 py-3 text-slate-700">{record.title}</td>
+                <td className="whitespace-nowrap px-3 py-3 text-slate-700">{record.dateTime}</td>
+                <td className="whitespace-nowrap px-3 py-3 text-slate-700">{record.status}</td>
+                <td className="min-w-[340px] whitespace-pre-wrap px-3 py-3 leading-6 text-slate-800">{record.note || "-"}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-
-      {filteredRows.length > pageSize ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-          <p className="text-sm font-semibold text-slate-600">
-            Showing {Math.min((currentPage - 1) * pageSize + 1, filteredRows.length)}-{Math.min(currentPage * pageSize, filteredRows.length)} of {filteredRows.length}
-          </p>
-          <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => setPage(Math.max(1, currentPage - 1))} disabled={currentPage === 1}>
-              Previous
-            </Button>
-            <span className="text-sm font-bold text-slate-700">Page {currentPage} / {totalPages}</span>
-            <Button type="button" variant="outline" size="sm" onClick={() => setPage(Math.min(totalPages, currentPage + 1))} disabled={currentPage === totalPages}>
-              Next
-            </Button>
-          </div>
-        </div>
-      ) : null}
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+        <p className="text-sm font-semibold text-slate-600">
+          {filteredRows.length ? `Showing all ${filteredRows.length} records. Scroll kore niche shob dekhte parben.` : "No records found for this filter."}
+        </p>
+      </div>
 
       <AnimatePresence>
         {selectedRecord ? (
@@ -2802,20 +2789,21 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
   const updatePerformancePeriod = React.useCallback((period: TeamPerformancePeriod) => {
     if (!pathname) return;
     const params = new URLSearchParams(searchParams.toString());
+    if (params.get("performancePeriod") === period) return;
     params.set("performancePeriod", period);
 
     const nextQuery = params.toString();
     const href = nextQuery ? `${pathname}?${nextQuery}` : pathname;
     React.startTransition(() => {
       router.replace(href, { scroll: false });
-      router.refresh();
     });
   }, [pathname, router, searchParams]);
 
   const handlePeriodChange = React.useCallback((period: TeamPerformancePeriod) => {
+    if (period === performancePeriod) return;
     setPerformancePeriod(period);
     updatePerformancePeriod(period);
-  }, [updatePerformancePeriod]);
+  }, [performancePeriod, updatePerformancePeriod]);
 
   const performanceFilterToolbar = (
     <div className="flex flex-wrap items-center justify-end gap-2">
@@ -2862,12 +2850,6 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
   const [drilldownPeriod, setDrilldownPeriod] = React.useState<TeamPerformancePeriod>(performancePeriod);
 
   const metricPeriodLabel = React.useCallback((period: TeamPerformancePeriod) => performancePeriodLabels[period], []);
-
-  React.useEffect(() => {
-    if (!drilldownOpen) {
-      setDrilldownPeriod(performancePeriod);
-    }
-  }, [drilldownOpen, performancePeriod]);
 
   const loadDrilldown = React.useCallback(async (
     payload: TeamPerformanceDrilldownPayload,
@@ -2920,11 +2902,12 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
 
   const closeDrilldown = React.useCallback(() => {
     setDrilldownOpen(false);
+    setDrilldownPeriod(performancePeriod);
     setDrilldownPayload(null);
     setDrilldownRows([]);
     setDrilldownCount(0);
     setDrilldownError("");
-  }, []);
+  }, [performancePeriod]);
 
   React.useEffect(() => {
     if (!dashboardRef.current) return;
@@ -3437,20 +3420,15 @@ function AdminTeamPerformancePanel({
   const [drilldownError, setDrilldownError] = React.useState("");
   const [drilldownPeriod, setDrilldownPeriod] = React.useState<TeamPerformancePeriod>(period);
 
-  React.useEffect(() => {
-    if (!drilldownOpen) {
-      setDrilldownPeriod(period);
-    }
-  }, [drilldownOpen, period]);
-
   const closeDrilldown = React.useCallback(() => {
     setDrilldownOpen(false);
+    setDrilldownPeriod(period);
     setDrilldownPayload(null);
     setDrilldownRows([]);
     setDrilldownCount(0);
     setDrilldownError("");
     setDrilldownLoading(false);
-  }, []);
+  }, [period]);
 
   const loadDrilldown = React.useCallback(async (
     payload: TeamPerformanceDrilldownPayload,
@@ -3844,19 +3822,20 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
   const updatePerformancePeriod = React.useCallback((period: TeamPerformancePeriod) => {
     if (!pathname) return;
     const params = new URLSearchParams(searchParams.toString());
+    if (params.get("performancePeriod") === period) return;
     params.set("performancePeriod", period);
     const nextQuery = params.toString();
     const href = nextQuery ? `${pathname}?${nextQuery}` : pathname;
     React.startTransition(() => {
       router.replace(href, { scroll: false });
-      router.refresh();
     });
   }, [pathname, router, searchParams]);
 
   const handlePeriodChange = React.useCallback((period: TeamPerformancePeriod) => {
+    if (period === performancePeriod) return;
     setPerformancePeriod(period);
     updatePerformancePeriod(period);
-  }, [updatePerformancePeriod]);
+  }, [performancePeriod, updatePerformancePeriod]);
 
   const performanceFilterToolbar = (
     <div className="inline-flex rounded-full border border-slate-200 bg-white p-1">

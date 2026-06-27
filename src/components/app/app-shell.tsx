@@ -2,7 +2,6 @@
 
 import type { ReactNode } from "react";
 import * as React from "react";
-import { usePathname, useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { AppHeader } from "@/components/app/app-header";
@@ -100,14 +99,6 @@ function useSidebarCounterSync(sidebarTaskCount: number | undefined, sidebarLead
     if (sidebarLeadCount === undefined) {
       void refreshLeadCount();
     }
-    const timer = window.setInterval(() => {
-      void refreshTaskCount();
-      void refreshLeadCount();
-    }, 30000);
-
-    return () => {
-      window.clearInterval(timer);
-    };
   }, [refreshLeadCount, refreshTaskCount, sidebarLeadCount, sidebarTaskCount]);
 
   return {
@@ -186,13 +177,6 @@ function useNotificationCenter(initialUnreadCount: number) {
 
   React.useEffect(() => {
     void refreshNotifications();
-    const timer = window.setInterval(() => {
-      void refreshNotifications();
-    }, 30000);
-
-    return () => {
-      window.clearInterval(timer);
-    };
   }, [refreshNotifications]);
 
   return {
@@ -253,12 +237,10 @@ export function AppShell({
   sidebarCounts?: SidebarCounts;
   children: ReactNode;
 }) {
-  const router = useRouter();
   const { taskCount, leadCount, refreshTaskCount, refreshLeadCount } = useSidebarCounterSync(sidebarCounts?.tasks, sidebarCounts?.leads);
   const notificationCenter = useNotificationCenter(unreadCount);
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
-  const pathname = usePathname();
   const shellUser = user ?? fallbackUser(role);
   const liveSyncEnabled = role !== "MARKETER";
   const refreshNotifications = notificationCenter.refreshNotifications;
@@ -282,27 +264,20 @@ export function AppShell({
     };
   }, [leadCount, sidebarCounts, taskCount]);
 
-  const performLiveSync = React.useCallback((reason: "focus" | "interval" | "visible") => {
+  const performLiveSync = React.useCallback((reason: "focus" | "visible") => {
     window.dispatchEvent(new CustomEvent(CRM_LIVE_SYNC_EVENT, { detail: { reason, at: Date.now() } }));
     void refreshTaskCount();
     void refreshLeadCount();
     void refreshNotifications();
-    React.startTransition(() => {
-      router.refresh();
-    });
-  }, [refreshLeadCount, refreshNotifications, refreshTaskCount, router]);
+  }, [refreshLeadCount, refreshNotifications, refreshTaskCount]);
 
   React.useEffect(() => {
     if (!liveSyncEnabled) return;
 
-    const syncIfVisible = (reason: "focus" | "interval" | "visible") => {
+    const syncIfVisible = (reason: "focus" | "visible") => {
       if (document.visibilityState !== "visible") return;
       window.setTimeout(() => performLiveSync(reason), 0);
     };
-
-    const timer = window.setInterval(() => {
-      syncIfVisible("interval");
-    }, 12000);
 
     const handleFocus = () => syncIfVisible("focus");
     const handleVisibilityChange = () => {
@@ -315,7 +290,6 @@ export function AppShell({
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
-      window.clearInterval(timer);
       window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };

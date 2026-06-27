@@ -98,9 +98,9 @@ export async function GET(request: Request) {
 
     const formatDisplayDate = (value: Date) => formatCrmDate(value, "dd/MM/yyyy hh:mm a");
 
-      type DrilldownDetailRow = {
+    type DrilldownDetailRow = {
       id: string;
-        type: "Lead" | "Task" | "Follow-up" | "Communication" | "Conversion" | "Sales" | "Quotation";
+      type: "Lead" | "Task" | "Follow-up" | "Communication" | "Conversion" | "Sales" | "Quotation";
       customerOrCompany: string;
       companyId?: string | null;
       companyHref?: string | null;
@@ -112,6 +112,7 @@ export async function GET(request: Request) {
       title: string;
       dateTime: string;
       sortDate: number;
+      sortDateValue: string;
       status: string;
       note: string;
     };
@@ -161,6 +162,7 @@ export async function GET(request: Request) {
         title: normalizeLeadTitle(lead.title, lead.customerName),
         dateTime: formatDisplayDate(lead.createdAt),
         sortDate: lead.createdAt.getTime(),
+        sortDateValue: lead.createdAt.toISOString(),
         status: lead.status,
         note: lead.notes ?? "-",
       }));
@@ -204,13 +206,14 @@ export async function GET(request: Request) {
             title: true,
             description: true,
             status: true,
+            dueDate: true,
             updatedAt: true,
             leadName: true,
             companyName: true,
             company: { select: { name: true, contactPerson: true, phone: true } },
             lead: { select: { id: true, title: true, customerName: true, phone: true, companyId: true } },
           },
-          orderBy: { dueDate: "asc" },
+          orderBy: { dueDate: "desc" },
         }),
         prisma.followUp.findMany({
           where: {
@@ -341,6 +344,7 @@ export async function GET(request: Request) {
           title: normalizeLeadTitle(lead.title, lead.customerName),
           dateTime: formatDisplayDate(lead.createdAt),
           sortDate: lead.createdAt.getTime(),
+          sortDateValue: lead.createdAt.toISOString(),
           status: lead.status,
           note: lead.notes ?? "-",
         });
@@ -348,6 +352,7 @@ export async function GET(request: Request) {
 
       for (const task of tasks) {
         const companyId = task.companyId ?? task.lead?.companyId ?? null;
+        const taskDate = task.dueDate ?? task.updatedAt;
         merged.push({
           id: `task-${task.id}`,
           type: "Task",
@@ -360,8 +365,9 @@ export async function GET(request: Request) {
           phone: pickPhone(task.company?.phone || task.lead?.phone),
           method: "Task",
           title: task.title,
-          dateTime: formatDisplayDate(task.updatedAt),
-          sortDate: task.updatedAt.getTime(),
+          dateTime: formatDisplayDate(taskDate),
+          sortDate: taskDate.getTime(),
+          sortDateValue: taskDate.toISOString(),
           status: task.status,
           note: task.description || "-",
         });
@@ -383,6 +389,7 @@ export async function GET(request: Request) {
           title: followUp.task?.title || followUp.nextDiscussionPlan || followUp.note || "Follow-up",
           dateTime: formatDisplayDate(followUp.followUpDate),
           sortDate: followUp.followUpDate.getTime(),
+          sortDateValue: followUp.followUpDate.toISOString(),
           status: followUp.status,
           note: followUp.note || "-",
         });
@@ -404,6 +411,7 @@ export async function GET(request: Request) {
           title: communication.task?.title || communication.discussionTopic || communication.productDiscussed || communication.followUpNote || "Communication",
           dateTime: formatDisplayDate(communication.communicationAt),
           sortDate: communication.communicationAt.getTime(),
+          sortDateValue: communication.communicationAt.toISOString(),
           status: "COMPLETED",
           note: communication.note || "-",
         });
@@ -425,6 +433,7 @@ export async function GET(request: Request) {
           title: quotation.quoteNumber || "Quotation",
           dateTime: formatDisplayDate(quotation.createdAt),
           sortDate: quotation.createdAt.getTime(),
+          sortDateValue: quotation.createdAt.toISOString(),
           status: quotation.status,
           note: quotation.notes || `Amount: ${quotation.totalAmount.toString()}`,
         });
@@ -445,6 +454,7 @@ export async function GET(request: Request) {
           title: normalizeLeadTitle(lead.title, lead.customerName),
           dateTime: formatDisplayDate(lead.updatedAt),
           sortDate: lead.updatedAt.getTime(),
+          sortDateValue: lead.updatedAt.toISOString(),
           status: lead.status,
           note: lead.notes || "-",
         });
@@ -505,6 +515,7 @@ export async function GET(request: Request) {
           title: followUp.task?.title || followUp.nextDiscussionPlan || followUp.note || "Follow-up",
           dateTime: formatDisplayDate(followUp.followUpDate),
           sortDate: followUp.followUpDate.getTime(),
+          sortDateValue: followUp.followUpDate.toISOString(),
           status: followUp.status,
           note: followUp.note || "-",
         };
@@ -524,17 +535,19 @@ export async function GET(request: Request) {
           title: true,
           description: true,
           status: true,
+          dueDate: true,
           updatedAt: true,
           leadName: true,
           companyName: true,
           company: { select: { name: true, contactPerson: true, phone: true } },
           lead: { select: { id: true, title: true, customerName: true, phone: true, companyId: true } },
         },
-        orderBy: { dueDate: "asc" },
+        orderBy: { dueDate: "desc" },
       });
 
-      rows = tasks.map((task) => {
+      rows = tasks.map((task): DrilldownDetailRow => {
         const companyId = task.companyId ?? task.lead?.companyId ?? null;
+        const taskDate = task.dueDate ?? task.updatedAt;
 
         return {
           id: task.id,
@@ -548,12 +561,13 @@ export async function GET(request: Request) {
           phone: pickPhone(task.company?.phone || task.lead?.phone),
           method: "Task",
           title: task.title,
-          dateTime: formatDisplayDate(task.updatedAt),
-          sortDate: task.updatedAt.getTime(),
+          dateTime: formatDisplayDate(taskDate),
+          sortDate: taskDate.getTime(),
+          sortDateValue: taskDate.toISOString(),
           status: task.status,
           note: task.description || "-",
         };
-      });
+      }).sort((left, right) => right.sortDate - left.sortDate);
     }
 
     if (metric === "sales" || metric === "conversion") {
@@ -597,6 +611,7 @@ export async function GET(request: Request) {
         title: normalizeLeadTitle(lead.title, lead.customerName),
         dateTime: formatDisplayDate(lead.updatedAt),
         sortDate: lead.updatedAt.getTime(),
+        sortDateValue: lead.updatedAt.toISOString(),
         status: lead.status,
         note: lead.notes || "-",
       }));
@@ -689,6 +704,7 @@ export async function GET(request: Request) {
           title: communication.task?.title || communication.discussionTopic || communication.productDiscussed || communication.followUpNote || "Communication",
           dateTime: formatDisplayDate(communication.communicationAt),
           sortDate: communication.communicationAt.getTime(),
+          sortDateValue: communication.communicationAt.toISOString(),
           status: "COMPLETED",
           note: communication.note || "-",
         });
@@ -711,6 +727,7 @@ export async function GET(request: Request) {
           title: followUp.task?.title || followUp.nextDiscussionPlan || followUp.note || "Follow-up",
           dateTime: formatDisplayDate(followUp.followUpDate),
           sortDate: followUp.followUpDate.getTime(),
+          sortDateValue: followUp.followUpDate.toISOString(),
           status: "PENDING",
           note: followUp.note || "-",
         });

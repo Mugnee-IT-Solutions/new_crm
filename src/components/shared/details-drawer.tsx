@@ -18,7 +18,14 @@ export function DetailsDrawer({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40">
+    <div
+      className="fixed inset-0 z-50 flex justify-end bg-slate-950/40"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
       <aside className="h-full w-full max-w-md overflow-y-auto bg-white p-5 shadow-2xl">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-black text-slate-950">{title}</h2>
@@ -31,4 +38,3 @@ export function DetailsDrawer({
     </div>
   );
 }
-
