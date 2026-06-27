@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -39,6 +40,7 @@ export function DashboardMetricCard({
   tone,
   iconTone,
   className,
+  href,
 }: {
   title: string;
   value: string;
@@ -47,10 +49,15 @@ export function DashboardMetricCard({
   tone: string;
   iconTone?: string;
   className?: string;
+  href?: string;
 }) {
-  return (
+  const content = (
     <Card
-      className={cn("relative h-full overflow-hidden rounded-[22px] border-0 p-0 shadow-[0_18px_36px_rgba(15,23,42,0.14)]", className)}
+      className={cn(
+        "group relative h-full overflow-hidden rounded-[22px] border-0 p-0 shadow-[0_18px_36px_rgba(15,23,42,0.14)]",
+        href ? "cursor-pointer transition duration-200 hover:shadow-[0_22px_42px_rgba(15,23,42,0.18)]" : "",
+        className,
+      )}
       style={{ background: tone }}
     >
       <div className="relative flex h-full min-h-[164px] flex-col justify-between p-5 text-white">
@@ -64,11 +71,24 @@ export function DashboardMetricCard({
         <div className="mt-8">
           <p className="text-[2rem] font-black leading-none tracking-[-0.04em] text-white">{value}</p>
           <p className="mt-2 text-sm text-white/78">{helper}</p>
+          {href ? (
+            <p className="mt-3 inline-flex items-center gap-1 text-xs font-black uppercase tracking-[0.14em] text-white/88 transition group-hover:text-white">
+              View Details
+            </p>
+          ) : null}
         </div>
       </div>
 
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.22),transparent_42%)]" />
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/10 to-transparent" />
     </Card>
+  );
+
+  if (!href) return content;
+
+  return (
+    <Link href={href} className="block h-full focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200/80 focus-visible:ring-offset-2 focus-visible:ring-offset-white rounded-[22px]">
+      {content}
+    </Link>
   );
 }

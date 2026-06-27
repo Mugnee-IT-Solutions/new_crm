@@ -93,6 +93,37 @@ function useDashboardGreeting(name: string, role: Role) {
   };
 }
 
+function dashboardMetricHref(role: Role, title: string) {
+  if (role === "ADMIN") {
+    if (title === "Total Users") return rolePath(role, "users");
+    if (title === "Total Customers") return rolePath(role, "customers");
+    if (title === "Total Leads") return rolePath(role, "leads");
+    if (title === "Total Products") return rolePath(role, "products");
+    if (title === "Follow-ups Due") return `${rolePath(role, "follow-ups")}?dateFilter=today`;
+    if (title === "Lead Conversion Rate") return rolePath(role, "reports");
+    if (title === "Total Rewards") return rolePath(role, "rewards");
+    return undefined;
+  }
+
+  if (role === "SUPERVISOR") {
+    if (title === "Total Marketers") return rolePath(role, "team");
+    if (title === "Total Leads") return rolePath(role, "leads");
+    if (title === "Follow-up Due") return `${rolePath(role, "follow-ups")}?dateFilter=today`;
+    if (title === "Overdue Follow-ups") return `${rolePath(role, "follow-ups")}?dateFilter=overdue`;
+    if (title === "Sales This Month") return rolePath(role, "quotations");
+    if (title === "Conversion Rate") return rolePath(role, "reports");
+    return undefined;
+  }
+
+  if (title === "Today's Tasks") return rolePath(role, "tasks");
+  if (title === "Pending Tasks") return rolePath(role, "tasks");
+  if (title === "Follow-ups Due") return rolePath(role, "follow-ups");
+  if (title === "New Leads") return rolePath(role, "leads");
+  if (title === "Meetings Today") return rolePath(role, "communication");
+  if (title === "Reward Points") return rolePath(role, "rewards");
+  return undefined;
+}
+
 function StatsGrid({ items }: { items: CrmWorkspace["stats"] }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
@@ -1269,6 +1300,7 @@ function SupervisorKpiGrid({ items }: { items: CrmWorkspace["stats"] }) {
               helper={config.helper || item.helper}
               icon={config.icon}
               tone={config.tone}
+              href={dashboardMetricHref("SUPERVISOR", item.title)}
             />
           </motion.div>
         );
@@ -2129,6 +2161,7 @@ function MarketerKpiGrid({ workspace, tasks }: { workspace: CrmWorkspace; tasks:
             helper={item.helper || config.helper}
             icon={config.icon}
             tone={config.tone}
+            href={dashboardMetricHref("MARKETER", item.title)}
           />
         );
       })}
@@ -3143,6 +3176,7 @@ function AdminKpiGrid({ items }: { items: { title: keyof typeof adminKpiConfig; 
               helper={item.helper || config.helper}
               icon={config.icon}
               tone={config.tone}
+              href={dashboardMetricHref("ADMIN", item.title)}
             />
           </motion.div>
         );

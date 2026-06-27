@@ -1475,6 +1475,116 @@ export async function createCustomerAction(formData: FormData) {
     userId: user.id,
     companyId: company.id,
   });
+
+  const productId = text(formData, "productId");
+  if (productId) {
+    const product = await prisma.productService.findUnique({
+      where: { id: productId },
+      select: { id: true, name: true },
+    });
+
+    if (product) {
+      const normalizedRaw = normalizeRawCustomerJson(company.rawData);
+      const contactRows = await prisma.contactPerson.findMany({
+        where: { companyId: company.id },
+        orderBy: { createdAt: "asc" },
+        select: { email: true, mobile: true },
+      });
+      const phoneRows = await prisma.phoneNumber.findMany({
+        where: { companyId: company.id },
+        orderBy: { createdAt: "asc" },
+        select: { number: true },
+      });
+
+      const phoneValues = dedupeTextValues([
+        company.phone,
+        company.phone2,
+        ...phoneRows.map((item) => item.number),
+        ...contactRows.map((item) => item.mobile),
+        typeof normalizedRaw["Primary Phone"] === "string" ? normalizedRaw["Primary Phone"] : undefined,
+        typeof normalizedRaw["Phone 2"] === "string" ? normalizedRaw["Phone 2"] : undefined,
+      ]);
+      const emailValues = dedupeTextValues([
+        ...contactRows.map((item) => item.email),
+        typeof normalizedRaw["Primary Email"] === "string" ? normalizedRaw["Primary Email"] : undefined,
+        typeof normalizedRaw["Email 1"] === "string" ? normalizedRaw["Email 1"] : undefined,
+        typeof normalizedRaw["Email 2"] === "string" ? normalizedRaw["Email 2"] : undefined,
+      ]);
+
+      const existingLead = await prisma.lead.findFirst({
+        where: {
+          companyId: company.id,
+          productInterestId: product.id,
+        },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          id: true,
+          assignedToId: true,
+          customerName: true,
+          phone: true,
+          email: true,
+        },
+      });
+
+      if (existingLead) {
+        await prisma.lead.update({
+          where: { id: existingLead.id },
+          data: {
+            assignedToId,
+            customerName: existingLead.customerName || company.name,
+            phone: existingLead.phone || phoneValues.join(" | "),
+            email: existingLead.email || (emailValues.join(" | ") || undefined),
+            companyId: company.id,
+            productInterestId: product.id,
+          },
+        });
+      } else if (phoneValues.length || emailValues.length) {
+        const createdLead = await prisma.lead.create({
+          data: {
+            title: `${product.name} - ${company.name}`,
+            customerName: company.name,
+            phone: phoneValues.join(" | "),
+            email: emailValues.join(" | ") || undefined,
+            companyId: company.id,
+            productInterestId: product.id,
+            assignedToId,
+            createdById: user.id,
+            status: "NEW_LEAD",
+            priority: "MEDIUM",
+            score: 0,
+            purchaseProbability: 0,
+            notes: `Assigned from product ${product.name}`,
+          },
+        });
+
+        await addTimeline({
+          title: "Lead Created",
+          description: createdLead.title,
+          entity: "Lead",
+          entityId: createdLead.id,
+          userId: user.id,
+          companyId: company.id,
+          leadId: createdLead.id,
+        });
+      }
+
+      if (assignedToId && assignedToId !== user.id) {
+        await prisma.notification.create({
+          data: {
+            recipientId: assignedToId,
+            title: "Product Contact Company Assigned",
+            message: `${company.name} has been assigned to you for ${product.name}.`,
+            type: "NEW_LEAD_ASSIGNED",
+            entity: "ProductService",
+            entityId: product.id,
+          },
+        });
+      }
+
+      revalidateProductViews(product.id);
+    }
+  }
+
   revalidateCustomerViews(company.id);
   revalidatePath("/");
   return { ok: true, id: company.id };

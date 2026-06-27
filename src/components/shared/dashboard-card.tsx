@@ -15,13 +15,13 @@ export function DashboardCard({
   className?: string;
 }) {
   return (
-    <motion.div whileHover={{ y: -2 }} transition={{ duration: 0.18, ease: "easeOut" }}>
-      <Card className={cn("overflow-hidden", className)}>
+    <motion.div whileHover={{ y: -2 }} transition={{ duration: 0.18, ease: "easeOut" }} className="h-full">
+      <Card className={cn("flex h-full flex-col overflow-hidden", className)}>
         <CardHeader className="flex-row items-center justify-between gap-3">
           <CardTitle>{title}</CardTitle>
           {action}
         </CardHeader>
-        <CardContent>{children}</CardContent>
+        <CardContent className="flex-1">{children}</CardContent>
       </Card>
     </motion.div>
   );

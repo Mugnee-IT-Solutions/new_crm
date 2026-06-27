@@ -2001,7 +2001,17 @@ function createEmptyCustomerContact(): CustomerContactDraft {
   };
 }
 
-function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: () => void }) {
+function CustomerForm({
+  workspace,
+  onDone,
+  productId,
+  submitLabel = "Save Customer",
+}: {
+  workspace: CrmWorkspace;
+  onDone: () => void;
+  productId?: string;
+  submitLabel?: string;
+}) {
   const ownerOptions = React.useMemo(() => getCustomerOwnerOptions(workspace, workspace.user.role), [workspace]);
   const industryListId = React.useId();
   const industryOptions = React.useMemo(() => {
@@ -2077,8 +2087,9 @@ function CustomerForm({ workspace, onDone }: { workspace: CrmWorkspace; onDone: 
         resetDynamic();
         onDone();
       }}
-      submitLabel="Save Customer"
+      submitLabel={submitLabel}
     >
+      {productId ? <input type="hidden" name="productId" value={productId} /> : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="block space-y-1.5">
           <span className="text-sm font-semibold text-slate-700">Industry</span>
@@ -6417,7 +6428,7 @@ export function TodayWorkQueueList({
                   ? "border-amber-200 bg-gradient-to-br from-amber-50 to-white ring-1 ring-amber-100"
                   : task.priorityKey === "IMPORTANT"
                     ? "border-sky-200 bg-gradient-to-br from-sky-50 to-white ring-1 ring-sky-100"
-                    : "border-slate-200 bg-white",
+                    : "border-blue-100 bg-gradient-to-br from-blue-50/80 via-white to-cyan-50/65 ring-1 ring-blue-50",
             )}
           >
             <div className="flex min-w-0 items-start gap-2.5">
@@ -6582,7 +6593,11 @@ export function CompletedWorkList({
 }) {
   const [expanded, setExpanded] = React.useState(false);
   const hiddenCount = previewCount ? Math.max(rows.length - previewCount, 0) : 0;
-  const compactHeightClassName = previewCount === 5 ? "max-h-[320px]" : "max-h-[360px]";
+  const compactHeightClassName = previewCount === 5
+    ? "max-h-[320px]"
+    : previewCount === 6
+      ? "max-h-[460px]"
+      : "max-h-[360px]";
 
   if (loading) {
     return (
@@ -6598,8 +6613,8 @@ export function CompletedWorkList({
   }
 
   return (
-    <div className="space-y-2.5">
-      <div className={cn("space-y-2 pr-1", previewCount ? (expanded ? "max-h-none overflow-visible" : `${compactHeightClassName} overflow-y-auto`) : "")}>
+    <div className="flex h-full flex-col">
+      <div className={cn("flex-1 space-y-2 pr-1", previewCount ? (expanded ? "max-h-none overflow-visible" : `${compactHeightClassName} overflow-y-auto`) : "")}>
         {rows.map((task, index) => {
           const isLatest = index === 0;
           const crmStep = normalizeCrmPipelineStep(task.title) ?? (task.sourceType === "FOLLOW_UP" ? "Follow-up" : null);
@@ -6618,9 +6633,9 @@ export function CompletedWorkList({
               }
             }}
             className={cn(
-              "rounded-[14px] border border-slate-200 bg-slate-50/90 px-3 py-2.5 shadow-[0_6px_18px_rgba(15,23,42,0.04)]",
-              isLatest && "border-emerald-200 bg-emerald-50/50 ring-1 ring-emerald-100",
-              onOpen && "cursor-pointer transition hover:border-emerald-200 hover:bg-emerald-50/40",
+              "rounded-[14px] border border-emerald-100 bg-gradient-to-br from-emerald-50/80 via-white to-teal-50/65 px-3 py-2.5 shadow-[0_6px_18px_rgba(15,23,42,0.04)]",
+              isLatest && "border-emerald-200 bg-gradient-to-br from-emerald-100/80 via-emerald-50 to-teal-50 ring-1 ring-emerald-100",
+              onOpen && "cursor-pointer transition hover:border-emerald-200 hover:bg-gradient-to-br hover:from-emerald-50 hover:via-white hover:to-teal-50",
             )}
           >
             <div className="flex items-start gap-2.5">
@@ -6691,7 +6706,7 @@ export function CompletedWorkList({
         })}
       </div>
       {previewCount && hiddenCount > 0 ? (
-        <div className="flex justify-center">
+        <div className="mt-auto flex justify-center pt-4">
           <Button type="button" variant="outline" size="sm" className="rounded-xl px-4 text-xs" onClick={() => setExpanded((value) => !value)}>
             {expanded ? "Show Less" : `View All (${hiddenCount} more)`}
           </Button>
@@ -7987,14 +8002,67 @@ export function ProductsPage({ role, workspace }: { role: Role; workspace: CrmWo
   );
 }
 
+type ProductCompanyBucket = "total" | "shortlist" | "contacted" | "not-contacted" | "rest";
+
+type ProductCompanyDeskQuery = {
+  bucket?: ProductCompanyBucket;
+  assignedUserId?: string;
+  search?: string;
+};
+
+type ProductCompanyDeskRow = {
+  id: string;
+  name: string;
+  marketer: string;
+  marketerId?: string;
+  stage: string;
+  communications: number;
+  followUps: number;
+  quotations: number;
+  lastContact: string;
+  nextFollowUp: string;
+  city: string;
+  phone: string;
+};
+
+const PRODUCT_COMPANY_BUCKET_OPTIONS: { key: ProductCompanyBucket; label: string }[] = [
+  { key: "total", label: "Total" },
+  { key: "shortlist", label: "Shortlist" },
+  { key: "contacted", label: "Contacted" },
+  { key: "not-contacted", label: "Not Contacted" },
+  { key: "rest", label: "Rest" },
+];
+
+function normalizeProductCompanyBucket(value?: string | null): ProductCompanyBucket {
+  if (value === "total" || value === "shortlist" || value === "contacted" || value === "not-contacted" || value === "rest") return value;
+  return "shortlist";
+}
+
+function buildProductCompanyDeskPath(productId: string, query?: ProductCompanyDeskQuery) {
+  const params = new URLSearchParams();
+  const bucket = normalizeProductCompanyBucket(query?.bucket);
+  if (bucket !== "shortlist") params.set("bucket", bucket);
+  if (query?.assignedUserId && query.assignedUserId !== "all") params.set("assignedUserId", query.assignedUserId);
+  if (query?.search?.trim()) params.set("search", query.search.trim());
+  const queryString = params.toString();
+  return `/products/${encodeURIComponent(productId)}/companies${queryString ? `?${queryString}` : ""}`;
+}
+
+function matchesProductCompanyDeskSearch(row: ProductCompanyDeskRow, search: string) {
+  const keyword = search.trim().toLowerCase();
+  if (!keyword) return true;
+  return [row.name, row.marketer, row.stage, row.city, row.phone, row.lastContact]
+    .some((value) => value?.toLowerCase().includes(keyword));
+}
+
 export function ProductDetailsPage({ role, workspace, product, productEngagement }: { role: Role; workspace: CrmWorkspace; product?: ProductRow; productEngagement?: ProductEngagementData }) {
   const router = useRouter();
-  const companySectionRef = React.useRef<HTMLDivElement | null>(null);
   const [feedback, setFeedback] = React.useState<UserFeedback>(null);
   const [selectedMarketerName, setSelectedMarketerName] = React.useState<string | null>(null);
-  const [selectedCompanyBucket, setSelectedCompanyBucket] = React.useState<"total" | "shortlist" | "contacted" | "not-contacted" | "rest">("shortlist");
+  const [selectedCompanyBucket, setSelectedCompanyBucket] = React.useState<ProductCompanyBucket>("shortlist");
   const [selectedCompanyIds, setSelectedCompanyIds] = React.useState<string[]>([]);
   const [assignModalOpen, setAssignModalOpen] = React.useState(false);
+  const [createCompanyOpen, setCreateCompanyOpen] = React.useState(false);
   const [assignMarketerId, setAssignMarketerId] = React.useState("");
   const [assignMessage, setAssignMessage] = React.useState("");
   const [assignPending, startAssign] = React.useTransition();
@@ -8059,6 +8127,7 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
       leadDisplayName: row.leadName !== "-" ? row.leadName : relatedLead?.title || "-",
       stage: row.status !== "-" ? row.status : relatedLead?.status || "Interested",
       assignedOwner: row.assignedMarketer !== "-" ? row.assignedMarketer : relatedLead?.assignedTo || "-",
+      assignedOwnerId: relatedLead?.assignedToId ?? undefined,
       probability: relatedLead?.purchaseProbability ?? 0,
       ratingLabel: rating.label,
       ratingTone: rating.tone,
@@ -8176,19 +8245,7 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
     [workspace.companies],
   );
   const shortlistCompanyRows = React.useMemo(() => {
-    const rows = new Map<string, {
-      id: string;
-      name: string;
-      marketer: string;
-      stage: string;
-      communications: number;
-      followUps: number;
-      quotations: number;
-      lastContact: string;
-      nextFollowUp: string;
-      city: string;
-      phone: string;
-    }>();
+    const rows = new Map<string, ProductCompanyDeskRow>();
 
     for (const row of customerInsightRows) {
       const baseCompany = row.companyId
@@ -8199,6 +8256,7 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
         id: baseCompany?.id ?? row.companyId ?? key,
         name: row.customerName,
         marketer: row.assignedOwner !== "-" ? row.assignedOwner : baseCompany?.assignedTo || "-",
+        marketerId: row.assignedOwnerId ?? baseCompany?.assignedToId ?? undefined,
         stage: row.stage,
         communications: 0,
         followUps: 0,
@@ -8234,6 +8292,7 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
         id: company.id,
         name: company.name,
         marketer: company.assignedTo || "-",
+        marketerId: company.assignedToId ?? undefined,
         stage: "Not Contacted Yet",
         communications: 0,
         followUps: 0,
@@ -8273,10 +8332,13 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
       ? "See your companies, latest calls, follow-ups, and current stages for this product in one clean view."
       : "See which marketer is working on this product, how many calls and follow-ups happened, and which stage each company is in.";
   const assignmentCardTitle = role === "MARKETER" ? "Your visible ownership" : "Who is handling this product";
-  const openCompanyBucket = React.useCallback((bucket: "total" | "shortlist" | "contacted" | "not-contacted" | "rest") => {
-    setSelectedCompanyBucket(bucket);
-    window.setTimeout(() => companySectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
-  }, []);
+  const openCompanyDeskPage = React.useCallback((bucket: ProductCompanyBucket) => {
+    router.push(buildProductCompanyDeskPath(active.id, { bucket }));
+  }, [active.id, router]);
+
+  const openSelectedCompanyDeskPage = React.useCallback(() => {
+    router.push(buildProductCompanyDeskPath(active.id, { bucket: selectedCompanyBucket }));
+  }, [active.id, router, selectedCompanyBucket]);
 
   React.useEffect(() => {
     if (!feedback) return undefined;
@@ -8436,7 +8498,7 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
               <button
                 key={card.key}
                 type="button"
-                onClick={() => openCompanyBucket(card.key)}
+                onClick={() => openCompanyDeskPage(card.key)}
                 className={cn(
                   "rounded-[22px] border p-4 text-left shadow-[0_8px_24px_rgba(15,23,42,0.05)] transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_14px_30px_rgba(37,99,235,0.10)]",
                   selectedCompanyBucket === card.key ? "border-blue-300 bg-blue-50/70" : "border-slate-200 bg-white",
@@ -8463,16 +8525,10 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
           </div>
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
             <DashboardCard title="Company Desk">
-              <div ref={companySectionRef} className="space-y-4">
+              <div className="space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap gap-2">
-                    {[
-                      { key: "total" as const, label: "Total" },
-                      { key: "shortlist" as const, label: "Shortlist" },
-                      { key: "contacted" as const, label: "Contacted" },
-                      { key: "not-contacted" as const, label: "Not Contacted" },
-                      { key: "rest" as const, label: "Rest" },
-                    ].map((item) => (
+                    {PRODUCT_COMPANY_BUCKET_OPTIONS.map((item) => (
                       <button
                         key={item.key}
                         type="button"
@@ -8491,16 +8547,33 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
                   {role !== "MARKETER" ? (
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge variant="neutral">{selectedCompanyIds.length} selected</Badge>
+                      <Button type="button" size="sm" variant="outline" onClick={() => setCreateCompanyOpen(true)}>
+                        <Plus className="h-4 w-4" />
+                        Add Company
+                      </Button>
                       <Button type="button" size="sm" onClick={() => setAssignModalOpen(true)} disabled={!selectedCompanyIds.length || !marketerOptions.length}>
                         <UserPlus className="h-4 w-4" />
                         Assign Selected
                       </Button>
                     </div>
-                  ) : null}
+                  ) : (
+                    <Button type="button" size="sm" variant="outline" onClick={openSelectedCompanyDeskPage}>
+                      <Eye className="h-4 w-4" />
+                      View Details
+                    </Button>
+                  )}
                 </div>
                 <p className="text-sm text-slate-500">
                   Product-wise company list, current contact stage, and remaining companies are shown here first.
                 </p>
+                {role !== "MARKETER" ? (
+                  <div className="flex justify-end">
+                    <Button type="button" size="sm" variant="outline" onClick={openSelectedCompanyDeskPage}>
+                      <Eye className="h-4 w-4" />
+                      Open Detailed List
+                    </Button>
+                  </div>
+                ) : null}
               </div>
               <div className="space-y-3">
                 {bucketedCompanyRows.length ? bucketedCompanyRows.map((row) => {
@@ -8649,6 +8722,22 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
               </DashboardCard>
             </div>
           </div>
+          <FormModal
+            open={createCompanyOpen}
+            onClose={() => setCreateCompanyOpen(false)}
+            title="Add Company For This Product"
+            panelClassName="max-w-3xl"
+          >
+            <CustomerForm
+              workspace={workspace}
+              productId={active.id}
+              submitLabel="Save Company"
+              onDone={() => {
+                setCreateCompanyOpen(false);
+                router.refresh();
+              }}
+            />
+          </FormModal>
           <FormModal
             open={assignModalOpen}
             onClose={() => {
@@ -8823,6 +8912,529 @@ export function ProductDetailsPage({ role, workspace, product, productEngagement
           </FormModal>
         </div>
       </div>
+    </div>
+  );
+}
+
+export function ProductCompanyDeskPage({
+  role,
+  workspace,
+  product,
+  productEngagement,
+  initialQuery,
+}: {
+  role: Role;
+  workspace: CrmWorkspace;
+  product?: ProductRow;
+  productEngagement?: ProductEngagementData;
+  initialQuery?: ProductCompanyDeskQuery;
+}) {
+  const router = useRouter();
+  const [feedback, setFeedback] = React.useState<UserFeedback>(null);
+  const [selectedCompanyIds, setSelectedCompanyIds] = React.useState<string[]>([]);
+  const [assignModalOpen, setAssignModalOpen] = React.useState(false);
+  const [createCompanyOpen, setCreateCompanyOpen] = React.useState(false);
+  const [assignMarketerId, setAssignMarketerId] = React.useState("");
+  const [assignMessage, setAssignMessage] = React.useState("");
+  const [assignPending, startAssign] = React.useTransition();
+  const active = product;
+
+  const initialBucket = normalizeProductCompanyBucket(initialQuery?.bucket);
+  const [selectedCompanyBucket, setSelectedCompanyBucket] = React.useState<ProductCompanyBucket>(initialBucket);
+  const [selectedAssignedUserId, setSelectedAssignedUserId] = React.useState(initialQuery?.assignedUserId ?? "all");
+  const [searchValue, setSearchValue] = React.useState(initialQuery?.search ?? "");
+
+  React.useEffect(() => {
+    setSelectedCompanyBucket(normalizeProductCompanyBucket(initialQuery?.bucket));
+    setSelectedAssignedUserId(initialQuery?.assignedUserId ?? "all");
+    setSearchValue(initialQuery?.search ?? "");
+  }, [initialQuery?.assignedUserId, initialQuery?.bucket, initialQuery?.search]);
+
+  if (!active) return <EmptyState title="Product not found" description="The requested product is not available." />;
+
+  const engagement = productEngagement ?? {
+    summary: {
+      totalCompaniesContacted: 0,
+      totalLeadsInterested: 0,
+      totalCommunicationCount: 0,
+      totalShortlistedCompanies: 0,
+      contactedCompanies: 0,
+      notContactedCompanies: 0,
+      totalCallCount: 0,
+      totalWhatsAppCount: 0,
+      totalEmailCount: 0,
+      totalMeetingCount: 0,
+      followUpCount: 0,
+      quotationSentCount: 0,
+      salesCount: 0,
+      conversionRate: 0,
+    },
+    rows: [],
+    filters: {},
+    filterOptions: { communicationTypes: [], assignedUsers: [] },
+  };
+
+  const marketerOptions = React.useMemo(
+    () => workspace.employees
+      .filter((employee) => employee.roleKey === "MARKETER")
+      .map((employee) => ({ id: employee.id, name: employee.name })),
+    [workspace.employees],
+  );
+  const workspaceCompanyById = React.useMemo(() => new Map(workspace.companies.map((company) => [company.id, company])), [workspace.companies]);
+  const workspaceCompanyByName = React.useMemo(
+    () => new Map(workspace.companies.map((company) => [company.name.trim().toLowerCase(), company])),
+    [workspace.companies],
+  );
+  const productLeads = workspace.leads.filter((lead) => matchesProductLead(active, lead));
+  const productLeadMap = new Map(productLeads.map((lead) => [lead.id, lead]));
+  const fallbackEngagementRows = productLeads
+    .map((lead) => ({
+      id: `fallback-${lead.id}`,
+      companyId: lead.companyId ?? null,
+      leadId: lead.id,
+      companyName: lead.company || lead.customerName || "-",
+      leadName: lead.title || "-",
+      communicationType: "-",
+      summary: lead.notes || "-",
+      discussionTopic: active.name,
+      nextFollowUpDate: lead.followUpDate || "-",
+      lastContactDate: lead.createdAt || "-",
+      status: lead.status || "Interested",
+      assignedMarketer: lead.assignedTo || "-",
+      communicationCount: lead.communicationCount,
+      followUpCount: lead.followUpCount,
+      quotationCount: 0,
+      probability: lead.purchaseProbability,
+    }))
+    .sort((left, right) => right.communicationCount - left.communicationCount || right.probability - left.probability);
+
+  const insightSourceRows = engagement.rows.length ? engagement.rows : fallbackEngagementRows;
+  const customerInsightRows = insightSourceRows.map((row) => {
+    const relatedLead =
+      (row.leadId ? productLeadMap.get(row.leadId) : undefined) ??
+      productLeads.find((lead) => {
+        if (row.companyId && lead.companyId === row.companyId) return true;
+        return row.companyName !== "-" && row.companyName === lead.company;
+      });
+
+    return {
+      ...row,
+      customerName: row.companyName !== "-" ? row.companyName : relatedLead?.company || relatedLead?.customerName || "-",
+      leadDisplayName: row.leadName !== "-" ? row.leadName : relatedLead?.title || "-",
+      stage: row.status !== "-" ? row.status : relatedLead?.status || "Interested",
+      assignedOwner: row.assignedMarketer !== "-" ? row.assignedMarketer : relatedLead?.assignedTo || "-",
+      assignedOwnerId: relatedLead?.assignedToId ?? undefined,
+      nextFollowUpDisplay: row.nextFollowUpDate !== "-" ? row.nextFollowUpDate : relatedLead?.followUpDate || "-",
+      lastContactDisplay: row.lastContactDate !== "-" ? row.lastContactDate : relatedLead?.createdAt || "-",
+    };
+  });
+
+  const shortlistCompanyRows = React.useMemo(() => {
+    const rows = new Map<string, ProductCompanyDeskRow>();
+
+    for (const row of customerInsightRows) {
+      const baseCompany = row.companyId
+        ? workspaceCompanyById.get(row.companyId)
+        : workspaceCompanyByName.get(row.customerName.trim().toLowerCase());
+      const key = row.companyId ?? baseCompany?.id ?? row.customerName.trim().toLowerCase();
+      const existing = rows.get(key) ?? {
+        id: baseCompany?.id ?? row.companyId ?? key,
+        name: row.customerName,
+        marketer: row.assignedOwner !== "-" ? row.assignedOwner : baseCompany?.assignedTo || "-",
+        marketerId: row.assignedOwnerId ?? baseCompany?.assignedToId ?? undefined,
+        stage: row.stage,
+        communications: 0,
+        followUps: 0,
+        quotations: 0,
+        lastContact: row.lastContactDisplay,
+        nextFollowUp: row.nextFollowUpDisplay,
+        city: baseCompany?.cityOrZilla ?? "-",
+        phone: baseCompany?.phone ?? "-",
+      };
+
+      existing.communications += row.communicationCount;
+      existing.followUps += row.followUpCount;
+      existing.quotations += row.quotationCount;
+      if (existing.stage === "-" || existing.stage === "Interested") existing.stage = row.stage;
+      if (existing.lastContact === "-" || row.lastContactDisplay !== "-") existing.lastContact = row.lastContactDisplay;
+      if (existing.nextFollowUp === "-" || row.nextFollowUpDisplay !== "-") existing.nextFollowUp = row.nextFollowUpDisplay;
+      rows.set(key, existing);
+    }
+
+    return Array.from(rows.values()).sort((left, right) => right.communications - left.communications || left.name.localeCompare(right.name));
+  }, [customerInsightRows, workspaceCompanyById, workspaceCompanyByName]);
+
+  const shortlistedIds = new Set(shortlistCompanyRows.map((row) => row.id));
+  const restCompanyRows = React.useMemo(
+    () => workspace.companies
+      .filter((company) => !shortlistedIds.has(company.id))
+      .map((company) => ({
+        id: company.id,
+        name: company.name,
+        marketer: company.assignedTo || "-",
+        marketerId: company.assignedToId ?? undefined,
+        stage: "Not Contacted Yet",
+        communications: 0,
+        followUps: 0,
+        quotations: 0,
+        lastContact: company.lastCommunication || "-",
+        nextFollowUp: "-",
+        city: company.cityOrZilla,
+        phone: company.phone,
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name)),
+    [shortlistedIds, workspace.companies],
+  );
+
+  const filterByMarketer = React.useCallback((rows: ProductCompanyDeskRow[]) => {
+    if (selectedAssignedUserId === "all") return rows;
+    return rows.filter((row) => row.marketerId === selectedAssignedUserId);
+  }, [selectedAssignedUserId]);
+
+  const scopedShortlistRows = React.useMemo(() => filterByMarketer(shortlistCompanyRows), [filterByMarketer, shortlistCompanyRows]);
+  const scopedContactedRows = React.useMemo(() => scopedShortlistRows.filter((row) => row.communications > 0), [scopedShortlistRows]);
+  const scopedNotContactedRows = React.useMemo(() => scopedShortlistRows.filter((row) => row.communications === 0), [scopedShortlistRows]);
+  const scopedRestRows = React.useMemo(() => filterByMarketer(restCompanyRows), [filterByMarketer, restCompanyRows]);
+  const scopedTotalRows = React.useMemo(() => [...scopedShortlistRows, ...scopedRestRows], [scopedRestRows, scopedShortlistRows]);
+
+  const bucketedCompanyRows = selectedCompanyBucket === "total"
+    ? scopedTotalRows
+    : selectedCompanyBucket === "contacted"
+      ? scopedContactedRows
+      : selectedCompanyBucket === "not-contacted"
+        ? scopedNotContactedRows
+        : selectedCompanyBucket === "rest"
+          ? scopedRestRows
+          : scopedShortlistRows;
+
+  const visibleRows = React.useMemo(
+    () => bucketedCompanyRows.filter((row) => matchesProductCompanyDeskSearch(row, searchValue)),
+    [bucketedCompanyRows, searchValue],
+  );
+
+  const selectedCompanyRows = React.useMemo(
+    () => scopedTotalRows.filter((row) => selectedCompanyIds.includes(row.id)),
+    [scopedTotalRows, selectedCompanyIds],
+  );
+
+  React.useEffect(() => {
+    setSelectedCompanyIds((current) => current.filter((id) => bucketedCompanyRows.some((row) => row.id === id)));
+  }, [bucketedCompanyRows]);
+
+  React.useEffect(() => {
+    if (!feedback) return undefined;
+    const timer = window.setTimeout(() => setFeedback(null), 4500);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
+
+  React.useEffect(() => {
+    if (!assignModalOpen) return;
+    setAssignMarketerId((current) => current || marketerOptions[0]?.id || "");
+    setAssignMessage("");
+  }, [assignModalOpen, marketerOptions]);
+
+  const pushFilters = React.useCallback((next: ProductCompanyDeskQuery) => {
+    router.push(buildProductCompanyDeskPath(active.id, next));
+  }, [active.id, router]);
+
+  const handleBucketChange = React.useCallback((bucket: ProductCompanyBucket) => {
+    setSelectedCompanyBucket(bucket);
+    pushFilters({ bucket, assignedUserId: selectedAssignedUserId === "all" ? undefined : selectedAssignedUserId, search: searchValue });
+  }, [pushFilters, searchValue, selectedAssignedUserId]);
+
+  const handleMarketerChange = React.useCallback((assignedUserId: string) => {
+    setSelectedAssignedUserId(assignedUserId);
+    pushFilters({ bucket: selectedCompanyBucket, assignedUserId: assignedUserId === "all" ? undefined : assignedUserId, search: searchValue });
+  }, [pushFilters, searchValue, selectedCompanyBucket]);
+
+  const handleSearchSubmit = React.useCallback((event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    pushFilters({ bucket: selectedCompanyBucket, assignedUserId: selectedAssignedUserId === "all" ? undefined : selectedAssignedUserId, search: searchValue });
+  }, [pushFilters, searchValue, selectedAssignedUserId, selectedCompanyBucket]);
+
+  const handleResetFilters = React.useCallback(() => {
+    setSelectedCompanyBucket("shortlist");
+    setSelectedAssignedUserId("all");
+    setSearchValue("");
+    pushFilters({ bucket: "shortlist" });
+  }, [pushFilters]);
+
+  const handleAssignSelectedCompanies = React.useCallback((event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!assignMarketerId) {
+      setAssignMessage("Select a marketer first.");
+      return;
+    }
+    if (!selectedCompanyIds.length) {
+      setAssignMessage("Select at least one company.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.set("productId", active.id);
+    formData.set("assignedToId", assignMarketerId);
+    formData.set("companyIdsJson", JSON.stringify(selectedCompanyIds));
+
+    startAssign(async () => {
+      try {
+        const result = await assignProductCompaniesAction(formData);
+        if (typeof result === "object" && result && "ok" in result && result.ok === false) {
+          const message = "message" in result && typeof result.message === "string" ? result.message : "Assignment failed.";
+          setAssignMessage(message);
+          return;
+        }
+
+        const successMessage =
+          typeof result === "object" && result && "message" in result && typeof result.message === "string"
+            ? result.message
+            : "Selected companies have been assigned.";
+        setFeedback({ type: "success", message: successMessage });
+        setAssignModalOpen(false);
+        setAssignMessage("");
+        setSelectedCompanyIds([]);
+        router.refresh();
+      } catch (error) {
+        setAssignMessage(error instanceof Error ? error.message : "Assignment failed.");
+      }
+    });
+  }, [active.id, assignMarketerId, router, selectedCompanyIds]);
+
+  return (
+    <div className="space-y-5">
+      <FloatingFeedback feedback={feedback} />
+      <Link href={`/products/${active.id}`} className="inline-flex items-center gap-2 text-sm font-bold text-blue-700">
+        <ArrowLeft className="h-4 w-4" />
+        Back to product overview
+      </Link>
+
+      <Card className="overflow-hidden border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-blue-50/60 p-5 shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.22em] text-blue-600">Product Company Desk</p>
+            <h1 className="mt-1 text-2xl font-black text-slate-950">{active.name}</h1>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+              Shortlist, contacted, not contacted, and remaining companies are shown here with marketer-wise filtering.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="neutral">{active.category || "Product"}</Badge>
+            <Badge variant={active.status === "Active" ? "success" : "neutral"}>{active.status}</Badge>
+            <Badge variant="neutral">{visibleRows.length} visible</Badge>
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        {[
+          { key: "total" as const, title: "Total Companies", value: scopedTotalRows.length, helper: "Visible after marketer filter", tone: "bg-slate-100 text-slate-700" },
+          { key: "shortlist" as const, title: "Shortlist", value: scopedShortlistRows.length, helper: "Linked with this product", tone: "bg-blue-100 text-blue-700" },
+          { key: "contacted" as const, title: "Contacted", value: scopedContactedRows.length, helper: "At least one communication done", tone: "bg-emerald-100 text-emerald-700" },
+          { key: "not-contacted" as const, title: "Not Contacted Yet", value: scopedNotContactedRows.length, helper: "Assigned but untouched", tone: "bg-amber-100 text-amber-700" },
+          { key: "rest" as const, title: "Rest Companies", value: scopedRestRows.length, helper: "Not yet linked to this product", tone: "bg-violet-100 text-violet-700" },
+        ].map((card) => (
+          <button
+            key={card.key}
+            type="button"
+            onClick={() => handleBucketChange(card.key)}
+            className={cn(
+              "rounded-[22px] border p-4 text-left shadow-[0_8px_24px_rgba(15,23,42,0.05)] transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_14px_30px_rgba(37,99,235,0.10)]",
+              selectedCompanyBucket === card.key ? "border-blue-300 bg-blue-50/70" : "border-slate-200 bg-white",
+            )}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">{card.title}</p>
+                <p className="mt-2 text-3xl font-black text-slate-950">{card.value}</p>
+                <p className="mt-1 text-sm font-semibold text-slate-500">{card.helper}</p>
+              </div>
+              <div className={cn("inline-flex h-12 w-12 items-center justify-center rounded-2xl", card.tone)}>
+                <Building2 className="h-5 w-5" />
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <Card className="p-5">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-black text-slate-950">Company Details</h2>
+              <p className="text-sm text-slate-500">Filter by marketer, search by company, and review who still has pending contact work.</p>
+            </div>
+            {role !== "MARKETER" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="neutral">{selectedCompanyIds.length} selected</Badge>
+                <Button type="button" size="sm" variant="outline" onClick={() => setCreateCompanyOpen(true)}>
+                  <Plus className="h-4 w-4" />
+                  Add Company
+                </Button>
+                <Button type="button" size="sm" onClick={() => setAssignModalOpen(true)} disabled={!selectedCompanyIds.length || !marketerOptions.length}>
+                  <UserPlus className="h-4 w-4" />
+                  Assign Selected
+                </Button>
+              </div>
+            ) : null}
+          </div>
+
+          <form className="grid gap-3 md:grid-cols-[minmax(0,1.3fr)_220px_auto] xl:grid-cols-[minmax(0,1.6fr)_260px_auto_auto]" onSubmit={handleSearchSubmit}>
+            <Input
+              value={searchValue}
+              onChange={(event) => setSearchValue(event.target.value)}
+              placeholder="Search company, phone, city, marketer..."
+              className="h-10"
+            />
+            {role !== "MARKETER" ? (
+              <select
+                value={selectedAssignedUserId}
+                onChange={(event) => handleMarketerChange(event.target.value)}
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+              >
+                <option value="all">All marketers</option>
+                {marketerOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+              </select>
+            ) : null}
+            <Button type="submit" size="sm">
+              <Search className="h-4 w-4" />
+              Apply
+            </Button>
+            <Button type="button" size="sm" variant="outline" onClick={handleResetFilters}>
+              Reset
+            </Button>
+          </form>
+
+          <div className="flex flex-wrap gap-2">
+            {PRODUCT_COMPANY_BUCKET_OPTIONS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => handleBucketChange(item.key)}
+                className={cn(
+                  "rounded-full border px-3 py-1.5 text-xs font-bold uppercase tracking-[0.14em] transition",
+                  selectedCompanyBucket === item.key
+                    ? "border-blue-200 bg-blue-50 text-blue-700"
+                    : "border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-700",
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          <p className="text-sm text-slate-500">
+            Showing <span className="font-bold text-slate-700">{visibleRows.length}</span> compan{visibleRows.length === 1 ? "y" : "ies"} in <span className="font-bold text-slate-700">{PRODUCT_COMPANY_BUCKET_OPTIONS.find((item) => item.key === selectedCompanyBucket)?.label ?? "Shortlist"}</span>.
+          </p>
+        </div>
+
+        <div className="mt-5 space-y-3">
+          {visibleRows.length ? visibleRows.map((row) => {
+            const hasCustomerRecord = workspaceCompanyById.has(row.id);
+
+            return (
+              <div key={`product-company-detail-${row.id}`} className="rounded-[22px] border border-slate-200 bg-slate-50/85 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    {role !== "MARKETER" && hasCustomerRecord ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedCompanyIds.includes(row.id)}
+                        onChange={(event) => setSelectedCompanyIds((current) => event.target.checked ? Array.from(new Set([...current, row.id])) : current.filter((item) => item !== row.id))}
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        aria-label={`Select ${row.name}`}
+                      />
+                    ) : null}
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-slate-950">
+                        <EntityLink href={hasCustomerRecord ? `/customers/${row.id}` : undefined} className="font-black">{row.name}</EntityLink>
+                      </p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">{row.city} / {row.phone}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {row.stage ? <Badge variant={productStageBadgeVariant(row.stage)}>{row.stage}</Badge> : null}
+                    {row.marketer !== "-" ? <Badge variant="neutral">{row.marketer}</Badge> : null}
+                    {!hasCustomerRecord ? <Badge variant="warning">Lead Only</Badge> : null}
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs font-semibold text-slate-600">
+                  <span>Calls / touches: {row.communications}</span>
+                  <span>Follow-ups: {row.followUps}</span>
+                  <span>Quotations: {row.quotations}</span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs font-semibold text-slate-500">
+                  <span>Last contact: {row.lastContact}</span>
+                  {row.nextFollowUp !== "-" ? <span>Next follow-up: {row.nextFollowUp}</span> : null}
+                </div>
+              </div>
+            );
+          }) : (
+            <p className="text-sm font-semibold text-slate-500">No company record matched this filter yet.</p>
+          )}
+        </div>
+      </Card>
+
+      <FormModal
+        open={createCompanyOpen}
+        onClose={() => setCreateCompanyOpen(false)}
+        title="Add Company For This Product"
+        panelClassName="max-w-3xl"
+      >
+        <CustomerForm
+          workspace={workspace}
+          productId={active.id}
+          submitLabel="Save Company"
+          onDone={() => {
+            setCreateCompanyOpen(false);
+            router.refresh();
+          }}
+        />
+      </FormModal>
+
+      <FormModal
+        open={assignModalOpen}
+        onClose={() => {
+          setAssignModalOpen(false);
+          setAssignMessage("");
+        }}
+        title="Assign Product Contact Companies"
+        panelClassName="max-w-[640px]"
+      >
+        <form className="space-y-4" onSubmit={handleAssignSelectedCompanies}>
+          <div className="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
+            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Product</p>
+            <p className="mt-2 text-lg font-black text-slate-950">{active.name}</p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {selectedCompanyRows.length} selected compan{selectedCompanyRows.length === 1 ? "y" : "ies"} will be linked to this product and assigned for contact.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500" htmlFor="assign-product-detail-marketer">
+              Marketer
+            </label>
+            <select
+              id="assign-product-detail-marketer"
+              value={assignMarketerId}
+              onChange={(event) => setAssignMarketerId(event.target.value)}
+              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+            >
+              <option value="">Select marketer</option>
+              {marketerOptions.map((employee) => (
+                <option key={employee.id} value={employee.id}>{employee.name}</option>
+              ))}
+            </select>
+          </div>
+          {assignMessage ? <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">{assignMessage}</div> : null}
+          <div className="flex flex-wrap justify-end gap-3">
+            <Button type="button" variant="outline" onClick={() => setAssignModalOpen(false)} disabled={assignPending}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={assignPending || !selectedCompanyIds.length || !assignMarketerId}>
+              <UserPlus className="h-4 w-4" />
+              {assignPending ? "Assigning..." : "Assign Companies"}
+            </Button>
+          </div>
+        </form>
+      </FormModal>
     </div>
   );
 }
