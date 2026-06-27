@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { searchCrmActivities } from "@/lib/crm-data";
 import { requireRequestUser } from "@/lib/request-user";
+import { rolePath } from "@/lib/utils";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,11 +30,18 @@ export async function GET(request: Request) {
       limit,
     });
 
+    const tasksPageHref = rolePath(auth.user.role, "tasks");
+
     return NextResponse.json({
       success: true,
       rows: rows.map((row) => ({
         id: row.id,
         href: row.href ?? row.customerHref ?? row.relatedCustomerHref,
+        actionHref: row.taskId
+          ? `${tasksPageHref}?editTaskId=${encodeURIComponent(row.taskId)}`
+          : row.followUpId
+            ? `${tasksPageHref}?editFollowUpId=${encodeURIComponent(row.followUpId)}`
+            : row.href ?? row.customerHref ?? row.relatedCustomerHref,
         title: row.title,
         detail: row.detail,
         badgeLabel: row.badgeLabel ?? "Activity",
@@ -42,6 +50,8 @@ export async function GET(request: Request) {
         employeeName: row.employeeName ?? row.createdBy ?? "-",
         discussionSummary: row.discussionSummary ?? row.notes ?? "",
         time: row.time,
+        taskId: row.taskId,
+        followUpId: row.followUpId,
       })),
     });
   } catch (error) {

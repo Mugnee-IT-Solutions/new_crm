@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -5567,8 +5567,7 @@ export function TaskCreateModal({
   const [pending, setPending] = React.useState(false);
   const [message, setMessage] = React.useState("");
   const isEditing = Boolean(initialTask?.id);
-  const needsScheduledDateTime = title === "Follow-up";
-  const taskTitleOptions = ["Call", "Follow-up", "Quotation", "Sale"];
+  const taskTitleOptions = ["Call", "Follow-up", "Demo Send", "Quotation", "Sale"];
   const assignableMembers = React.useMemo(() => {
     if (role === "MARKETER") return [];
 
@@ -5635,17 +5634,13 @@ export function TaskCreateModal({
       return;
     }
 
-    if (needsScheduledDateTime && !taskDateTime) {
-      setMessage("Follow-up task er jonno date and time select korte hobe.");
+    if (!taskDateTime) {
+      setMessage("Task er jonno date and time select korte hobe.");
       setPending(false);
       return;
     }
 
-    const effectiveTaskDateTime = needsScheduledDateTime
-      ? taskDateTime
-      : isEditing && initialTask?.taskDateIso
-        ? dateTimeLocalValue(new Date(initialTask.taskDateIso))
-        : dateTimeLocalValue();
+    const effectiveTaskDateTime = taskDateTime;
 
     try {
       const response = await fetch(isEditing ? `/api/tasks/${initialTask?.id}` : "/api/tasks", {
@@ -5813,6 +5808,35 @@ export function TaskCreateModal({
             className="min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
           />
         </label>
+        <div className="rounded-2xl border border-blue-200 bg-blue-50/80 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-slate-900">Task Schedule</p>
+              <p className="mt-1 text-xs font-semibold text-slate-600">
+                Call, Follow-up, Demo Send, Quotation, Sale sob task-er jonno future date and time set korte parben.
+              </p>
+            </div>
+            <Badge variant="neutral">Required</Badge>
+          </div>
+          <label className="mt-3 block space-y-1.5">
+            <span className="text-sm font-semibold text-slate-700">Scheduled Date & Time</span>
+            <Input
+              type="datetime-local"
+              value={taskDateTime}
+              onChange={(event) => {
+                const input = event.currentTarget;
+                setTaskDateTime(event.target.value);
+                window.requestAnimationFrame(() => {
+                  input.blur();
+                });
+              }}
+              required
+            />
+            <p className="text-xs text-slate-500">
+              Aajke task add koreo agamikal ba porer kono din-er exact time set korte parben.
+            </p>
+          </label>
+        </div>
         <div className={cn("grid gap-3", role === "MARKETER" ? "sm:grid-cols-2" : "sm:grid-cols-2 xl:grid-cols-3")}>
           <label className="space-y-1.5">
             <span className="text-sm font-semibold text-slate-700">Priority</span>
@@ -5827,23 +5851,6 @@ export function TaskCreateModal({
               <option value="IMPORTANT">Important</option>
             </select>
           </label>
-          {needsScheduledDateTime ? (
-            <label className="space-y-1.5">
-              <span className="text-sm font-semibold text-slate-700">Date & Time</span>
-              <Input
-                type="datetime-local"
-                value={taskDateTime}
-                onChange={(event) => {
-                  const input = event.currentTarget;
-                  setTaskDateTime(event.target.value);
-                  window.requestAnimationFrame(() => {
-                    input.blur();
-                  });
-                }}
-                required
-              />
-            </label>
-          ) : null}
           {role !== "MARKETER" ? (
             <label className="space-y-1.5">
               <span className="text-sm font-semibold text-slate-700">Reminder</span>
@@ -6856,6 +6863,9 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
   const [activeFilter, setActiveFilter] = React.useState<TodayWorkFilter>("all");
   const { refreshTaskCount } = useTaskCounterContext();
   const scheduledRefreshTimers = React.useRef<number[]>([]);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   const loadTasks = React.useCallback(async () => {
     setLoading(true);
@@ -7084,6 +7094,53 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
     }
     setCompletionItem(task);
   }, [role, workspace.user.id]);
+
+  React.useEffect(() => {
+    if (loading) return;
+
+    const editTaskId = searchParams.get("editTaskId")?.trim();
+    const editFollowUpId = searchParams.get("editFollowUpId")?.trim();
+    if (!editTaskId && !editFollowUpId) return;
+
+    let handled = false;
+
+    if (editTaskId) {
+      const pendingTask = activeTasks.find((item) => item.sourceType === "TASK" && item.sourceId === editTaskId);
+      if (pendingTask) {
+        setEditingTask(toEditableTaskRow(pendingTask));
+        setDetailItem(null);
+        setOpen(true);
+        handled = true;
+      } else {
+        const completedTask = completedTasks.find((item) => item.sourceType === "TASK" && item.sourceId === editTaskId);
+        if (completedTask) {
+          setDetailItem(completedTask);
+          handled = true;
+        }
+      }
+    }
+
+    if (!handled && editFollowUpId) {
+      const pendingFollowUp = activeTasks.find((item) => item.sourceType === "FOLLOW_UP" && item.sourceId === editFollowUpId);
+      if (pendingFollowUp) {
+        setEditingFollowUp(pendingFollowUp);
+        setDetailItem(null);
+        handled = true;
+      } else {
+        const completedFollowUp = completedTasks.find((item) => item.sourceType === "FOLLOW_UP" && item.sourceId === editFollowUpId);
+        if (completedFollowUp) {
+          setDetailItem(completedFollowUp);
+          handled = true;
+        }
+      }
+    }
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("editTaskId");
+    params.delete("editFollowUpId");
+    const nextQuery = params.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+  }, [activeTasks, completedTasks, loading, pathname, router, searchParams]);
 
   return (
     <>

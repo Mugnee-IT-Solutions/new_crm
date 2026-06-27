@@ -312,6 +312,9 @@ export type ActivityRow = {
   meetingDateTime?: string;
   createdBy?: string;
   relatedCustomerHref?: string;
+  entityId?: string;
+  taskId?: string;
+  followUpId?: string;
 };
 
 export type CommunicationHistoryRow = {
@@ -1697,6 +1700,7 @@ function buildActivityRowFromTimeline(item: ActivityTimelineRecord): ActivityRow
     employeeName,
     employeeId: item.user?.id ?? undefined,
     entity: item.entity,
+    entityId: item.entityId ?? undefined,
     rawAction,
     discussionSummary,
     notes,
@@ -1720,6 +1724,8 @@ function buildActivityRowFromTimeline(item: ActivityTimelineRecord): ActivityRow
         : undefined,
     createdBy: employeeName,
     relatedCustomerHref: customerHref,
+    taskId: item.taskId ?? (item.entity?.toLowerCase().includes("task") ? item.entityId ?? undefined : undefined),
+    followUpId: item.followUpId ?? (item.entity?.toLowerCase().includes("follow") ? item.entityId ?? undefined : undefined),
   };
 }
 
@@ -1761,11 +1767,14 @@ function buildActivityRowFromLog(item: ActivityLogRecord): ActivityRow {
     employeeName,
     employeeId: item.user?.id ?? readJsonText(metadata, ["userId"]),
     entity: item.entity,
+    entityId: item.entityId ?? undefined,
     rawAction,
     discussionSummary: rawAction !== title ? rawAction : undefined,
     contactMethod,
     createdBy: employeeName,
     relatedCustomerHref: customerHref,
+    taskId: item.entity?.toLowerCase().includes("task") ? item.entityId ?? undefined : undefined,
+    followUpId: item.entity?.toLowerCase().includes("follow") ? item.entityId ?? undefined : undefined,
   };
 }
 

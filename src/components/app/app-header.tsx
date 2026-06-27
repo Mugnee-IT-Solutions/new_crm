@@ -20,6 +20,7 @@ function notificationPageHref(role: Role) {
 type ActivitySearchResultRow = {
   id: string;
   href?: string;
+  actionHref?: string;
   title: string;
   detail: string;
   badgeLabel: string;
@@ -28,6 +29,8 @@ type ActivitySearchResultRow = {
   employeeName: string;
   discussionSummary: string;
   time: string;
+  taskId?: string;
+  followUpId?: string;
 };
 
 const activitySearchSuggestions = ["Call", "Demo", "Follow-up", "Quotation", "Win", "Lost"] as const;
@@ -350,7 +353,7 @@ export function AppHeader({
                         {searchResults.map((item) => (
                           <Link
                             key={item.id}
-                            href={item.href ?? communicationSearchHref}
+                            href={item.actionHref ?? item.href ?? communicationSearchHref}
                             onClick={() => setSearchOpen(false)}
                             className="block rounded-2xl border border-transparent px-3 py-3 transition hover:border-blue-200 hover:bg-blue-50/60"
                           >
