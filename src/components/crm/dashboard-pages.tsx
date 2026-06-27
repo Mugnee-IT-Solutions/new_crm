@@ -800,6 +800,7 @@ function TeamPerformanceDrilldownTable({
 }) {
   const [selectedRecordKey, setSelectedRecordKey] = React.useState<string | null>(null);
   const [activityFilter, setActivityFilter] = React.useState<DrilldownActivityFilter>("all");
+  const recordsSectionRef = React.useRef<HTMLDivElement | null>(null);
   const orderedRows = React.useMemo(() => (
     [...rows].sort((left, right) => drilldownSortTime(right) - drilldownSortTime(left))
   ), [rows]);
@@ -819,6 +820,10 @@ function TeamPerformanceDrilldownTable({
       return summary;
     }, { all: 0, call: 0, followUp: 0, demo: 0, quotation: 0 });
   }, [orderedRows]);
+
+  React.useEffect(() => {
+    setSelectedRecordKey(null);
+  }, [activityFilter]);
 
   const latestNotes = React.useMemo(() => (
     filteredRows
@@ -905,6 +910,54 @@ function TeamPerformanceDrilldownTable({
     }, { calls: 0, followUps: 0, meetings: 0, whatsapp: 0 });
   }, [relatedRows]);
 
+  const summaryCards = [
+    {
+      key: "call" as const,
+      label: "Calls",
+      value: filterCounts.call,
+      helper: filterCounts.call ? `${filterCounts.call} real call records` : "No calls found",
+      activeClassName: "border-blue-600 bg-blue-600 text-white shadow-[0_18px_36px_rgba(37,99,235,0.28)]",
+      idleClassName: "border-blue-200 bg-blue-50 text-blue-900 hover:border-blue-300 hover:bg-blue-100",
+      pillClassName: "bg-white/20 text-white",
+      idlePillClassName: "bg-blue-600 text-white",
+    },
+    {
+      key: "followUp" as const,
+      label: "Follow-ups",
+      value: filterCounts.followUp,
+      helper: filterCounts.followUp ? `${filterCounts.followUp} follow-up updates` : "No follow-up records",
+      activeClassName: "border-amber-500 bg-amber-500 text-white shadow-[0_18px_36px_rgba(245,158,11,0.28)]",
+      idleClassName: "border-amber-200 bg-amber-50 text-amber-900 hover:border-amber-300 hover:bg-amber-100",
+      pillClassName: "bg-white/20 text-white",
+      idlePillClassName: "bg-amber-500 text-white",
+    },
+    {
+      key: "demo" as const,
+      label: "Demo",
+      value: filterCounts.demo,
+      helper: filterCounts.demo ? `${filterCounts.demo} demo discussions` : "No demo records",
+      activeClassName: "border-violet-600 bg-violet-600 text-white shadow-[0_18px_36px_rgba(124,58,237,0.28)]",
+      idleClassName: "border-violet-200 bg-violet-50 text-violet-900 hover:border-violet-300 hover:bg-violet-100",
+      pillClassName: "bg-white/20 text-white",
+      idlePillClassName: "bg-violet-600 text-white",
+    },
+    {
+      key: "quotation" as const,
+      label: "Quotation",
+      value: filterCounts.quotation,
+      helper: filterCounts.quotation ? `${filterCounts.quotation} quotation records` : "No quotation records",
+      activeClassName: "border-emerald-600 bg-emerald-600 text-white shadow-[0_18px_36px_rgba(5,150,105,0.28)]",
+      idleClassName: "border-emerald-200 bg-emerald-50 text-emerald-900 hover:border-emerald-300 hover:bg-emerald-100",
+      pillClassName: "bg-white/20 text-white",
+      idlePillClassName: "bg-emerald-600 text-white",
+    },
+  ];
+
+  const handleSummaryCardClick = (key: Exclude<DrilldownActivityFilter, "all">) => {
+    setActivityFilter(key);
+    recordsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   return (
     <div className="relative space-y-4">
       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -936,22 +989,44 @@ function TeamPerformanceDrilldownTable({
           })}
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Calls</p>
-            <p className="mt-2 text-2xl font-black text-slate-950">{filterCounts.call}</p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Follow-ups</p>
-            <p className="mt-2 text-2xl font-black text-slate-950">{filterCounts.followUp}</p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Demo</p>
-            <p className="mt-2 text-2xl font-black text-slate-950">{filterCounts.demo}</p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-400">Quotation</p>
-            <p className="mt-2 text-2xl font-black text-slate-950">{filterCounts.quotation}</p>
-          </div>
+          {summaryCards.map((card) => {
+            const active = activityFilter === card.key;
+            return (
+              <button
+                key={card.key}
+                type="button"
+                onClick={() => handleSummaryCardClick(card.key)}
+                className={cn(
+                  "rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300",
+                  active ? card.activeClassName : card.idleClassName,
+                )}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className={cn(
+                      "text-[11px] font-black uppercase tracking-[0.14em]",
+                      active ? "text-white/80" : "text-current/75",
+                    )}>
+                      {card.label}
+                    </p>
+                    <p className="mt-2 text-3xl font-black">{card.value}</p>
+                  </div>
+                  <span className={cn(
+                    "inline-flex rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em]",
+                    active ? card.pillClassName : card.idlePillClassName,
+                  )}>
+                    Clickable
+                  </span>
+                </div>
+                <p className={cn("mt-3 text-xs font-semibold", active ? "text-white/90" : "text-current/80")}>
+                  {card.helper}
+                </p>
+                <p className={cn("mt-1 text-[11px] font-bold", active ? "text-white/80" : "text-current/70")}>
+                  Click kore niche details dekhen
+                </p>
+              </button>
+            );
+          })}
         </div>
         {latestNotes.length ? (
           <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
@@ -975,7 +1050,7 @@ function TeamPerformanceDrilldownTable({
         ) : null}
       </div>
 
-      <div className="max-h-[min(58vh,40rem)] max-w-full overflow-auto rounded-2xl border border-slate-200 [scrollbar-gutter:stable_both-edges]">
+      <div ref={recordsSectionRef} className="max-h-[min(58vh,40rem)] max-w-full overflow-auto rounded-2xl border border-slate-200 [scrollbar-gutter:stable_both-edges]">
         <table className="min-w-[1040px] w-full text-left text-sm">
           <thead className="sticky top-0 z-[1] border-b border-slate-100 bg-white text-xs uppercase tracking-[0.12em] text-slate-400">
             <tr>
