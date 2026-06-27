@@ -43,6 +43,19 @@ function activitySearchBadgeVariant(category?: string) {
   return "neutral" as const;
 }
 
+function activitySearchBadgeVariantFromItem(item: Pick<ActivitySearchResultRow, "category" | "badgeLabel">) {
+  const badge = item.badgeLabel?.toUpperCase() ?? "";
+
+  if (badge === "CALL") return "warning" as const;
+  if (badge === "DEMO") return "violet" as const;
+  if (badge === "FOLLOW-UP") return "violet" as const;
+  if (badge === "QUOTATION") return "success" as const;
+  if (badge === "WIN") return "success" as const;
+  if (badge === "LOST") return "danger" as const;
+
+  return activitySearchBadgeVariant(item.category);
+}
+
 export function AppHeader({
   role,
   user,
@@ -361,7 +374,7 @@ export function AppHeader({
                               <div className="min-w-0 flex-1">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <p className="truncate text-sm font-bold text-slate-900">{item.title}</p>
-                                  <Badge variant={activitySearchBadgeVariant(item.category)}>{item.badgeLabel}</Badge>
+                                  <Badge variant={activitySearchBadgeVariantFromItem(item)}>{item.badgeLabel}</Badge>
                                 </div>
                                 <p className="mt-1 truncate text-xs font-semibold text-slate-500">
                                   {item.customerName} • {item.employeeName}

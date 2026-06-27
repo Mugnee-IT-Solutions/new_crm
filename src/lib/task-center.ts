@@ -482,6 +482,7 @@ async function addTaskActivity(prisma: ReturnType<typeof getPrisma>, input: {
   taskId: string;
   companyId?: string | null;
   title: string;
+  taskTitle?: string;
   description: string;
 }) {
   await prisma.activityTimeline.create({
@@ -502,6 +503,10 @@ async function addTaskActivity(prisma: ReturnType<typeof getPrisma>, input: {
       action: input.title,
       entity: "Task",
       entityId: input.taskId,
+      metadata: {
+        taskId: input.taskId,
+        taskTitle: input.taskTitle ?? input.title,
+      },
     },
   });
 }
@@ -1122,6 +1127,7 @@ export async function createTaskEntry(actor: TaskActor, input: {
     taskId: task.id,
     companyId: task.companyId,
     title: "Task Created",
+    taskTitle: task.title,
     description: `${task.title} assigned to ${task.assignedTo?.name ?? "marketer"}`,
   });
 
@@ -1245,6 +1251,7 @@ export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
     taskId: updated.id,
     companyId: updated.companyId,
     title: "Task Updated",
+    taskTitle: updated.title,
     description: `${updated.title} updated`,
   });
 
@@ -1340,6 +1347,7 @@ export async function completeTaskEntry(actor: TaskActor, taskId: string) {
     taskId: updated.id,
     companyId: updated.companyId,
     title: "Task Completed",
+    taskTitle: updated.title,
     description: `${updated.title} marked completed`,
   });
 

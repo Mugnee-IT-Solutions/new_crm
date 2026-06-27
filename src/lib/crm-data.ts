@@ -317,6 +317,22 @@ export type ActivityRow = {
   followUpId?: string;
 };
 
+function inferActivityPipelineBadge(...values: Array<string | null | undefined>) {
+  const normalized = values
+    .filter((value): value is string => Boolean(value))
+    .map((value) => value.toLowerCase())
+    .join(" ");
+
+  if (!normalized) return undefined;
+  if (/\b(call|phone|dial)\b/.test(normalized)) return "CALL";
+  if (/\b(demo|presentation|demo send)\b/.test(normalized)) return "DEMO";
+  if (/\bfollow[\s-]?up\b/.test(normalized)) return "FOLLOW-UP";
+  if (/\b(quotation|quote|quatation)\b/.test(normalized)) return "QUOTATION";
+  if (/\b(sale won|won sale|closed won|lead converted|win|won|conversion)\b/.test(normalized)) return "WIN";
+  if (/\b(lead lost|deal lost|closed lost|lost|failed|rejected)\b/.test(normalized)) return "LOST";
+  return undefined;
+}
+
 export type CommunicationHistoryRow = {
   id: string;
   href?: string;
@@ -1677,6 +1693,28 @@ function buildActivityRowFromTimeline(item: ActivityTimelineRecord): ActivityRow
   const title = humanizeActivityTitle({ title: item.title, rawAction, category });
   const discussionSummary = firstMeaningfulText(item.communicationLog?.note, item.description, item.followUp?.note, item.task?.description);
   const notes = firstMeaningfulText(item.communicationLog?.followUpNote, item.followUp?.nextDiscussionPlan, item.task?.notes);
+  const taskId =
+    item.taskId
+    ?? item.task?.id
+    ?? readJsonText(metadata, ["taskId", "linkedTaskId", "sourceTaskId"])
+    ?? (item.entity?.toLowerCase().includes("task") ? item.entityId ?? undefined : undefined);
+  const followUpId =
+    item.followUpId
+    ?? item.followUp?.id
+    ?? readJsonText(metadata, ["followUpId", "linkedFollowUpId", "sourceFollowUpId"])
+    ?? (item.entity?.toLowerCase().includes("follow") ? item.entityId ?? undefined : undefined);
+  const pipelineBadge = inferActivityPipelineBadge(
+    item.task?.title,
+    item.title,
+    rawAction,
+    item.description,
+    discussionSummary,
+    notes,
+    contactMethod,
+    item.communicationLog?.discussionTopic,
+    item.communicationLog?.outcome,
+    readJsonText(metadata, ["taskTitle", "taskStep", "stage", "status", "outcome"]),
+  );
 
   return {
     id: item.id,
@@ -1694,7 +1732,7 @@ function buildActivityRowFromTimeline(item: ActivityTimelineRecord): ActivityRow
     dateLabel: dateLabel(item.createdAt, "dd MMM yyyy"),
     timeLabel: dateLabel(item.createdAt, "hh:mm a"),
     category,
-    badgeLabel: activityCategoryLabel(category),
+    badgeLabel: pipelineBadge ?? activityCategoryLabel(category),
     customerName,
     customerHref,
     employeeName,
@@ -1724,8 +1762,8 @@ function buildActivityRowFromTimeline(item: ActivityTimelineRecord): ActivityRow
         : undefined,
     createdBy: employeeName,
     relatedCustomerHref: customerHref,
-    taskId: item.taskId ?? (item.entity?.toLowerCase().includes("task") ? item.entityId ?? undefined : undefined),
-    followUpId: item.followUpId ?? (item.entity?.toLowerCase().includes("follow") ? item.entityId ?? undefined : undefined),
+    taskId,
+    followUpId,
   };
 }
 
@@ -1745,6 +1783,18 @@ function buildActivityRowFromLog(item: ActivityLogRecord): ActivityRow {
   });
   const title = humanizeActivityTitle({ title: item.action, rawAction, category });
   const customerHref = customerId ? `/customers/${customerId}` : undefined;
+  const taskId =
+    readJsonText(metadata, ["taskId", "linkedTaskId", "sourceTaskId"])
+    ?? (item.entity?.toLowerCase().includes("task") ? item.entityId ?? undefined : undefined);
+  const followUpId =
+    readJsonText(metadata, ["followUpId", "linkedFollowUpId", "sourceFollowUpId"])
+    ?? (item.entity?.toLowerCase().includes("follow") ? item.entityId ?? undefined : undefined);
+  const pipelineBadge = inferActivityPipelineBadge(
+    readJsonText(metadata, ["taskTitle", "taskStep", "stage", "status", "discussionTopic", "outcome"]),
+    item.action,
+    rawAction,
+    contactMethod,
+  );
 
   return {
     id: item.id,
@@ -1761,7 +1811,7 @@ function buildActivityRowFromLog(item: ActivityLogRecord): ActivityRow {
     dateLabel: dateLabel(item.createdAt, "dd MMM yyyy"),
     timeLabel: dateLabel(item.createdAt, "hh:mm a"),
     category,
-    badgeLabel: activityCategoryLabel(category),
+    badgeLabel: pipelineBadge ?? activityCategoryLabel(category),
     customerName: customerName ?? undefined,
     customerHref,
     employeeName,
@@ -1773,8 +1823,8 @@ function buildActivityRowFromLog(item: ActivityLogRecord): ActivityRow {
     contactMethod,
     createdBy: employeeName,
     relatedCustomerHref: customerHref,
-    taskId: item.entity?.toLowerCase().includes("task") ? item.entityId ?? undefined : undefined,
-    followUpId: item.entity?.toLowerCase().includes("follow") ? item.entityId ?? undefined : undefined,
+    taskId,
+    followUpId,
   };
 }
 

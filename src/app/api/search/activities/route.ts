@@ -37,11 +37,14 @@ export async function GET(request: Request) {
       rows: rows.map((row) => ({
         id: row.id,
         href: row.href ?? row.customerHref ?? row.relatedCustomerHref,
-        actionHref: row.taskId
-          ? `${tasksPageHref}?editTaskId=${encodeURIComponent(row.taskId)}`
-          : row.followUpId
+        actionHref:
+          row.followUpId && (row.category === "FOLLOW_UP" || row.badgeLabel?.toUpperCase().includes("FOLLOW"))
             ? `${tasksPageHref}?editFollowUpId=${encodeURIComponent(row.followUpId)}`
-            : row.href ?? row.customerHref ?? row.relatedCustomerHref,
+            : row.taskId
+              ? `${tasksPageHref}?editTaskId=${encodeURIComponent(row.taskId)}`
+              : row.followUpId
+                ? `${tasksPageHref}?editFollowUpId=${encodeURIComponent(row.followUpId)}`
+                : row.href ?? row.customerHref ?? row.relatedCustomerHref,
         title: row.title,
         detail: row.detail,
         badgeLabel: row.badgeLabel ?? "Activity",
