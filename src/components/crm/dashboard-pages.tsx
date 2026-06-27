@@ -2174,17 +2174,25 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
     return item.sourceType === "FOLLOW_UP" ? "Follow-up" : null;
   }, []);
 
-  const reminderKey = React.useCallback((item: TodayWorkQueueItem) => `${item.sourceId}:${item.taskDateIso}`, []);
+  const reminderStorageKey = React.useMemo(() => `crm_followup_reminders_dismissed_v3:${workspace.user.id}`, [workspace.user.id]);
+
+  const persistDismissedReminderKeys = React.useCallback((nextKeys: Set<string>) => {
+    try {
+      window.localStorage.setItem(reminderStorageKey, JSON.stringify([...nextKeys]));
+    } catch {}
+  }, [reminderStorageKey]);
+
+  const reminderKey = React.useCallback((item: TodayWorkQueueItem) => item.sourceId, []);
 
   React.useEffect(() => {
     try {
-      const raw = window.localStorage.getItem("crm_followup_reminders_shown_v1");
+      const raw = window.localStorage.getItem(reminderStorageKey);
       if (!raw) return;
       const parsed = JSON.parse(raw) as unknown;
       if (!Array.isArray(parsed)) return;
       shownReminderKeys.current = new Set(parsed.filter((value) => typeof value === "string"));
     } catch {}
-  }, []);
+  }, [reminderStorageKey]);
 
   const maybeOpenDueReminder = React.useCallback((rows: TodayWorkQueueItem[], preferredIso?: string | null) => {
     const now = Date.now();
@@ -2205,12 +2213,16 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
     const nextItem = matched ?? dueRows[0];
     if (!nextItem) return;
 
-    shownReminderKeys.current.add(reminderKey(nextItem));
-    try {
-      window.localStorage.setItem("crm_followup_reminders_shown_v1", JSON.stringify([...shownReminderKeys.current]));
-    } catch {}
     setDueReminderItem(nextItem);
   }, [reminderKey]);
+
+  const dismissDueReminder = React.useCallback((item: TodayWorkQueueItem | null) => {
+    if (item) {
+      shownReminderKeys.current.add(reminderKey(item));
+      persistDismissedReminderKeys(shownReminderKeys.current);
+    }
+    setDueReminderItem(null);
+  }, [persistDismissedReminderKeys, reminderKey]);
 
   const loadTasks = React.useCallback(async () => {
     setLoading(true);
@@ -2585,7 +2597,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
       <FormModal
         open={Boolean(dueReminderItem)}
         title="Follow-up Reminder"
-        onClose={() => setDueReminderItem(null)}
+        onClose={() => dismissDueReminder(dueReminderItem)}
         panelClassName="w-[95vw] max-w-[520px]"
         contentClassName="space-y-4"
       >
@@ -2605,7 +2617,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
                 className="w-full"
                 onClick={() => {
                   setCompletionItem(dueReminderItem);
-                  setDueReminderItem(null);
+                  dismissDueReminder(dueReminderItem);
                 }}
               >
                 Complete
@@ -2616,7 +2628,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
                 className="w-full"
                 onClick={() => {
                   setEditingFollowUp(dueReminderItem);
-                  setDueReminderItem(null);
+                  dismissDueReminder(dueReminderItem);
                 }}
               >
                 Edit Follow-up
@@ -2625,7 +2637,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
                 type="button"
                 variant="outline"
                 className="w-full"
-                onClick={() => setDueReminderItem(null)}
+                onClick={() => dismissDueReminder(dueReminderItem)}
               >
                 Close
               </Button>
