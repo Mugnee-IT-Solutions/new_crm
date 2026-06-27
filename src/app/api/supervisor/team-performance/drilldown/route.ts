@@ -655,36 +655,6 @@ export async function GET(request: Request) {
         orderBy: { communicationAt: "desc" },
       });
 
-      const followUps = await prisma.followUp.findMany({
-        where: {
-          assignedToId: marketerId,
-          followUpDate: { gte: window.from, lt: window.to },
-          OR: methodBuckets.leadClause,
-        },
-        select: {
-          id: true,
-          companyId: true,
-          method: true,
-          note: true,
-          nextDiscussionPlan: true,
-          followUpDate: true,
-          status: true,
-          lead: {
-            select: {
-              id: true,
-              title: true,
-              companyId: true,
-              customerName: true,
-              phone: true,
-              company: { select: { name: true, contactPerson: true, phone: true } },
-            },
-          },
-          company: { select: { name: true, contactPerson: true, phone: true } },
-          task: { select: { title: true } },
-        },
-        orderBy: { followUpDate: "desc" },
-      });
-
       const merged: DrilldownDetailRow[] = [];
 
       for (const communication of communications) {
@@ -707,29 +677,6 @@ export async function GET(request: Request) {
           sortDateValue: communication.communicationAt.toISOString(),
           status: "COMPLETED",
           note: communication.note || "-",
-        });
-      }
-
-      for (const followUp of followUps) {
-        const companyName = followUp.company?.name || followUp.lead?.company?.name || followUp.lead?.customerName;
-        const companyId = followUp.companyId ?? followUp.lead?.companyId ?? null;
-        merged.push({
-          id: followUp.id,
-          type: "Follow-up",
-          customerOrCompany: companyName || "Company",
-          companyId,
-          companyHref: companyHrefFromId(companyId),
-          leadId: followUp.lead?.id ?? null,
-          leadName: normalizeLeadTitle(followUp.lead?.title, followUp.lead?.customerName),
-          contactPerson: normalizeContactPerson(followUp.company?.contactPerson || followUp.lead?.company?.contactPerson),
-          phone: pickPhone(followUp.lead?.phone || followUp.company?.phone),
-          method: followUp.method || "Follow-up",
-          title: followUp.task?.title || followUp.nextDiscussionPlan || followUp.note || "Follow-up",
-          dateTime: formatDisplayDate(followUp.followUpDate),
-          sortDate: followUp.followUpDate.getTime(),
-          sortDateValue: followUp.followUpDate.toISOString(),
-          status: "PENDING",
-          note: followUp.note || "-",
         });
       }
 

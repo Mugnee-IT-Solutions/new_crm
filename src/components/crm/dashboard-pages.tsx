@@ -600,6 +600,8 @@ type TeamPerformanceDrilldownPayload = {
   metricLabel: string;
 };
 
+type ActivityOverviewFocus = DrilldownActivityFilter;
+
 type TeamPerformanceDrilldownRow = {
   id: string;
   type: string;
@@ -779,12 +781,47 @@ function activityCategoryLabel(activity: CrmWorkspace["activities"][number]) {
 type DrilldownActivityFilter = "all" | "call" | "followUp" | "demo" | "quotation";
 
 function drilldownActivityCategory(row: TeamPerformanceDrilldownRow): Exclude<DrilldownActivityFilter, "all"> | null {
-  const haystack = [row.type, row.method, row.title, row.note].join(" ").toLowerCase();
+  const type = row.type.trim().toLowerCase();
+  const haystack = [row.method, row.title, row.note].join(" ").toLowerCase();
+
+  if (type === "quotation") return "quotation";
+  if (type === "follow-up") return "followUp";
+
+  if (type === "communication") {
+    if (haystack.includes("quotation") || haystack.includes("quatation") || haystack.includes("quote")) return "quotation";
+    if (haystack.includes("demo")) return "demo";
+    if (haystack.includes("follow")) return "followUp";
+    if (haystack.includes("call") || haystack.includes("phone")) return "call";
+    return null;
+  }
+
+  if (type === "task") {
+    if (haystack.includes("quotation") || haystack.includes("quatation") || haystack.includes("quote")) return "quotation";
+    if (haystack.includes("demo")) return "demo";
+    if (haystack.includes("follow")) return "followUp";
+    return null;
+  }
+
   if (haystack.includes("quotation") || haystack.includes("quatation") || haystack.includes("quote")) return "quotation";
   if (haystack.includes("demo")) return "demo";
   if (haystack.includes("follow")) return "followUp";
-  if (haystack.includes("call") || haystack.includes("phone")) return "call";
   return null;
+}
+
+function buildActivityOverviewHref(
+  role: Role,
+  marketerId: string,
+  marketerName: string,
+  period: TeamPerformancePeriod,
+  focus: ActivityOverviewFocus,
+) {
+  const params = new URLSearchParams({
+    marketerId,
+    marketerName,
+    period,
+    focus,
+  });
+  return `${rolePath(role, "activity-overview")}?${params.toString()}`;
 }
 
 function TeamPerformanceDrilldownTable({
@@ -792,14 +829,18 @@ function TeamPerformanceDrilldownTable({
   workspace,
   marketerId,
   marketerName,
+  initialActivityFilter,
+  onSummaryCardClick,
 }: {
   rows: TeamPerformanceDrilldownRow[];
   workspace: CrmWorkspace;
   marketerId: string;
   marketerName: string;
+  initialActivityFilter?: DrilldownActivityFilter;
+  onSummaryCardClick?: (filter: Exclude<DrilldownActivityFilter, "all">) => void;
 }) {
   const [selectedRecordKey, setSelectedRecordKey] = React.useState<string | null>(null);
-  const [activityFilter, setActivityFilter] = React.useState<DrilldownActivityFilter>("all");
+  const [activityFilter, setActivityFilter] = React.useState<DrilldownActivityFilter>(initialActivityFilter ?? "all");
   const recordsSectionRef = React.useRef<HTMLDivElement | null>(null);
   const orderedRows = React.useMemo(() => (
     [...rows].sort((left, right) => drilldownSortTime(right) - drilldownSortTime(left))
@@ -824,6 +865,10 @@ function TeamPerformanceDrilldownTable({
   React.useEffect(() => {
     setSelectedRecordKey(null);
   }, [activityFilter]);
+
+  React.useEffect(() => {
+    setActivityFilter(initialActivityFilter ?? "all");
+  }, [initialActivityFilter]);
 
   const latestNotes = React.useMemo(() => (
     filteredRows
@@ -954,6 +999,10 @@ function TeamPerformanceDrilldownTable({
   ];
 
   const handleSummaryCardClick = (key: Exclude<DrilldownActivityFilter, "all">) => {
+    if (onSummaryCardClick) {
+      onSummaryCardClick(key);
+      return;
+    }
     setActivityFilter(key);
     recordsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -1243,6 +1292,165 @@ function TeamPerformanceDrilldownTable({
           </motion.div>
         ) : null}
       </AnimatePresence>
+    </div>
+  );
+}
+
+export function ActivityOverviewDetailsPage({
+  role,
+  workspace,
+}: {
+  role: Role;
+  workspace: CrmWorkspace;
+}) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const marketerId = searchParams.get("marketerId")?.trim() ?? "";
+  const rawMarketerName = searchParams.get("marketerName")?.trim() ?? "";
+  const rawPeriod = searchParams.get("period")?.trim() ?? "";
+  const rawFocus = searchParams.get("focus")?.trim() ?? "";
+  const period: TeamPerformancePeriod = isTeamPerformancePeriod(rawPeriod) ? rawPeriod : "today";
+  const focus: DrilldownActivityFilter = rawFocus === "call" || rawFocus === "followUp" || rawFocus === "demo" || rawFocus === "quotation" || rawFocus === "all"
+    ? rawFocus
+    : "all";
+  const marketerName = React.useMemo(() => {
+    if (rawMarketerName) return rawMarketerName;
+    return workspace.employees.find((employee) => employee.id === marketerId)?.name || "Marketer";
+  }, [marketerId, rawMarketerName, workspace.employees]);
+  const [rows, setRows] = React.useState<TeamPerformanceDrilldownRow[]>([]);
+  const [count, setCount] = React.useState(0);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  const updateRoute = React.useCallback((next: { period?: TeamPerformancePeriod; focus?: DrilldownActivityFilter }) => {
+    if (!marketerId) return;
+    const href = buildActivityOverviewHref(
+      role,
+      marketerId,
+      marketerName,
+      next.period ?? period,
+      next.focus ?? focus,
+    );
+    router.push(href, { scroll: false });
+  }, [focus, marketerId, marketerName, period, role, router]);
+
+  React.useEffect(() => {
+    if (!marketerId) return;
+
+    let cancelled = false;
+    const loadRows = async () => {
+      setLoading(true);
+      setError("");
+
+      try {
+        const params = new URLSearchParams({
+          marketerId,
+          metricType: "overview",
+          period,
+        });
+        const response = await fetch(`/api/supervisor/team-performance/drilldown?${params.toString()}`, {
+          cache: "no-store",
+        });
+        const json = await response.json();
+
+        if (!response.ok || !json?.success) {
+          throw new Error(json?.message || "Failed to load activity overview.");
+        }
+
+        if (cancelled) return;
+        setRows(Array.isArray(json.rows) ? json.rows : []);
+        setCount(typeof json.count === "number" ? json.count : 0);
+      } catch (nextError) {
+        if (cancelled) return;
+        setError(nextError instanceof Error ? nextError.message : "Failed to load activity overview.");
+        setRows([]);
+        setCount(0);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    void loadRows();
+    return () => {
+      cancelled = true;
+    };
+  }, [marketerId, period]);
+
+  if (!marketerId) {
+    return (
+      <div className="space-y-4">
+        <PageHeader
+          eyebrow="Activity Overview"
+          title="Missing marketer"
+          description="Open this page from dashboard cards so the selected marketer details load correctly."
+          actions={<Link href={rolePath(role, "dashboard")} className="inline-flex h-10 items-center rounded-full border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 transition hover:border-blue-200 hover:text-blue-700">Back to dashboard</Link>}
+        />
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-600">
+          No marketer was selected for this activity details page.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Activity Overview"
+        title={`${marketerName} Details`}
+        description="Full page view for calls, follow-ups, demo, quotation, notes, and company-wise activity records."
+        actions={<Link href={rolePath(role, "dashboard")} className="inline-flex h-10 items-center rounded-full border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">Back to dashboard</Link>}
+      />
+
+      <div className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-[0_20px_50px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {teamPerformancePeriods.map((item) => {
+              const active = period === item;
+              return (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => updateRoute({ period: item })}
+                  className={cn(
+                    "inline-flex items-center rounded-full border px-4 py-2 text-sm font-bold transition",
+                    active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-blue-100 hover:text-slate-900",
+                  )}
+                >
+                  {performancePeriodLabels[item]}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-500">
+            <Badge variant="neutral">{marketerName}</Badge>
+            <Badge variant="neutral">{count} records</Badge>
+          </div>
+        </div>
+
+        {error ? (
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+            {error}
+          </div>
+        ) : null}
+
+        {loading && !rows.length ? (
+          <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-600">Loading activity details...</div>
+        ) : rows.length ? (
+          <div className="mt-4">
+            <TeamPerformanceDrilldownTable
+              rows={rows}
+              workspace={workspace}
+              marketerId={marketerId}
+              marketerName={marketerName}
+              initialActivityFilter={focus}
+            />
+          </div>
+        ) : (
+          <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+            No activity records found for this marketer in the selected period.
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -3142,6 +3350,19 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
                     workspace={workspace}
                     marketerId={drilldownPayload?.marketerId ?? ""}
                     marketerName={drilldownPayload?.marketerName ?? "Marketer"}
+                    onSummaryCardClick={(focus) => {
+                      if (!drilldownPayload?.marketerId) return;
+                      router.push(
+                        buildActivityOverviewHref(
+                          workspace.user.role,
+                          drilldownPayload.marketerId,
+                          drilldownPayload.marketerName,
+                          drilldownPeriod,
+                          focus,
+                        ),
+                        { scroll: false },
+                      );
+                    }}
                   />
                 ) : (
                   <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
@@ -3760,6 +3981,19 @@ function AdminTeamPerformancePanel({
                     workspace={workspace}
                     marketerId={drilldownPayload?.marketerId ?? ""}
                     marketerName={drilldownPayload?.marketerName ?? "Marketer"}
+                    onSummaryCardClick={(focus) => {
+                      if (!drilldownPayload?.marketerId) return;
+                      router.push(
+                        buildActivityOverviewHref(
+                          workspace.user.role,
+                          drilldownPayload.marketerId,
+                          drilldownPayload.marketerName,
+                          drilldownPeriod,
+                          focus,
+                        ),
+                        { scroll: false },
+                      );
+                    }}
                   />
                 ) : (
                   <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
