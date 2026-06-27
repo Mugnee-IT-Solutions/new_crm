@@ -4,7 +4,7 @@ import { formatCrmDate, getCrmDayWindow, getCrmPeriodWindow, isBeforeCrmDay, isS
 import { buildCustomerScopeWhere, getMarketerScopeUserIds } from "@/lib/customer-ownership";
 import { getScopedLeadUserIds } from "@/lib/lead-ownership";
 import { getPrisma } from "@/lib/prisma";
-import { getTodayWorkQueue } from "@/lib/task-center";
+import { getCompletedWorkItems, getTodayWorkQueue, type CompletedWorkItem, type TodayWorkQueueItem } from "@/lib/task-center";
 import { type Role, type ShellUser } from "@/lib/utils";
 
 type TeamPerformancePeriod = CrmPeriod;
@@ -2469,6 +2469,70 @@ function matchesActivitySearch(activity: ActivityRow, query: string) {
   return tokens.every((token) => haystack.includes(token));
 }
 
+function buildActivityRowFromWorkItem(item: TodayWorkQueueItem | CompletedWorkItem): ActivityRow {
+  const sourceCategory = item.sourceType === "FOLLOW_UP"
+    ? "FOLLOW_UP"
+    : inferActivityCategory({
+        title: item.title,
+        rawAction: item.statusKey === "COMPLETED" ? "Task Completed" : "Task Pending",
+        entity: item.sourceType,
+        description: [item.description, item.notes, item.method, item.productName].filter(Boolean).join(" "),
+        method: item.method,
+      });
+
+  const pipelineBadge = inferActivityPipelineBadge(item.title, item.description, item.notes, item.method, item.productName);
+  const primaryTime =
+    item.statusKey === "COMPLETED"
+      ? item.completedAtIso
+      : item.taskDateIso;
+  const primaryDate = new Date(primaryTime);
+  const employeeName = firstMeaningfulText(item.assignedTo, item.assignedBy, item.completedBy) ?? "-";
+  const taskId = item.sourceType === "TASK" ? item.sourceId : ("taskId" in item ? item.taskId ?? undefined : undefined);
+  const followUpId = item.sourceType === "FOLLOW_UP" ? item.sourceId : undefined;
+
+  return {
+    id: item.id,
+    href: item.companyHref ?? undefined,
+    title:
+      item.sourceType === "FOLLOW_UP"
+        ? item.statusKey === "COMPLETED" ? "Follow-up Completed" : "Pending Follow-up"
+        : item.statusKey === "COMPLETED" ? "Task Completed" : "Open Task",
+    detail: firstMeaningfulText(
+      item.companyName && employeeName ? `${item.companyName} · ${employeeName}` : undefined,
+      item.companyName,
+      employeeName !== "-" ? `By ${employeeName}` : undefined,
+      item.description,
+      item.notes,
+    ) ?? "CRM task",
+    time: dateLabel(primaryDate, "dd/MM/yyyy hh:mm a"),
+    createdAtValue: primaryDate.toISOString(),
+    dateLabel: dateLabel(primaryDate, "dd MMM yyyy"),
+    timeLabel: dateLabel(primaryDate, "hh:mm a"),
+    category: sourceCategory,
+    badgeLabel: pipelineBadge ?? activityCategoryLabel(sourceCategory),
+    customerName: item.companyName,
+    customerHref: item.companyHref ?? undefined,
+    employeeName,
+    rawAction: item.title,
+    discussionSummary: firstMeaningfulText(item.description, item.notes, item.method),
+    notes: item.notes,
+    contactMethod: item.method,
+    createdBy: firstMeaningfulText(item.assignedBy, item.completedBy, item.assignedTo),
+    relatedCustomerHref: item.companyHref ?? undefined,
+    entity: item.sourceType === "FOLLOW_UP" ? "FollowUp" : "Task",
+    entityId: item.sourceId,
+    taskId,
+    followUpId,
+  };
+}
+
+function normalizeActivitySearchRowKey(activity: ActivityRow) {
+  if (activity.followUpId) return `follow-up:${activity.followUpId}`;
+  if (activity.taskId) return `task:${activity.taskId}`;
+  if (activity.entityId) return `entity:${normalizeActivityToken(activity.entity)}:${activity.entityId}`;
+  return `row:${activity.id}`;
+}
+
 export async function searchCrmActivities({
   role,
   user,
@@ -2488,8 +2552,9 @@ export async function searchCrmActivities({
 
   const scopedUserIds = await getScopedUserIds(role, user);
   const cappedLimit = Math.max(1, Math.min(limit, 24));
+  const actor = { id: user.id ?? "", role, name: user.name };
 
-  const [timeline, activities] = await Promise.all([
+  const [timeline, activities, queueItems, completedItems] = await Promise.all([
     prisma.activityTimeline.findMany({
       where: scopedUserIds ? { userId: { in: scopedUserIds } } : undefined,
       include: activityTimelineInclude,
@@ -2502,6 +2567,8 @@ export async function searchCrmActivities({
       orderBy: { createdAt: "desc" },
       take: 180,
     }),
+    getTodayWorkQueue(actor),
+    getCompletedWorkItems(actor),
   ]);
 
   const timelineEntityKeys = new Set(
@@ -2510,7 +2577,11 @@ export async function searchCrmActivities({
       .filter(Boolean),
   );
 
-  return [
+  const directRows = [...queueItems, ...completedItems]
+    .map(buildActivityRowFromWorkItem)
+    .filter((activity) => matchesActivitySearch(activity, normalizedQuery));
+
+  const activityRows = [
     ...timeline.map(buildActivityRowFromTimeline),
     ...activities
       .filter((item) => {
@@ -2520,8 +2591,19 @@ export async function searchCrmActivities({
       .map(buildActivityRowFromLog),
   ]
     .sort((left, right) => new Date(right.createdAtValue ?? 0).getTime() - new Date(left.createdAtValue ?? 0).getTime())
-    .filter((activity) => matchesActivitySearch(activity, normalizedQuery))
-    .slice(0, cappedLimit);
+    .filter((activity) => matchesActivitySearch(activity, normalizedQuery));
+
+  const seen = new Set<string>();
+  const merged: ActivityRow[] = [];
+  for (const row of [...directRows, ...activityRows]) {
+    const key = normalizeActivitySearchRowKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
+    if (merged.length >= cappedLimit) break;
+  }
+
+  return merged;
 }
 
 export async function getCrmWorkspace(role: Role, user: ShellUser, options?: TeamPerformanceOptions): Promise<CrmWorkspace> {

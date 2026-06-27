@@ -7129,7 +7129,18 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
       } else {
         const completedFollowUp = completedTasks.find((item) => item.sourceType === "FOLLOW_UP" && item.sourceId === editFollowUpId);
         if (completedFollowUp) {
-          setDetailItem(completedFollowUp);
+          setDetailItem(null);
+          setFollowUpTask({
+            id: completedFollowUp.sourceId,
+            title: completedFollowUp.title,
+            companyId: completedFollowUp.companyId,
+            companyName: completedFollowUp.companyName,
+            leadId: completedFollowUp.leadId,
+            leadName: completedFollowUp.leadName,
+            taskId: completedFollowUp.taskId ?? null,
+            defaultStep: normalizeCrmPipelineStep(completedFollowUp.title) ?? "Follow-up",
+            defaultMethod: completedFollowUp.method,
+          });
           handled = true;
         }
       }
