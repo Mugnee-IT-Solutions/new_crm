@@ -5492,6 +5492,21 @@ function defaultTaskDateTimeValue(now = new Date()) {
   return dateTimeLocalValue(base);
 }
 
+function splitDateTimeLocalValue(value?: string | null) {
+  const fallback = defaultTaskDateTimeValue();
+  const normalized = value && value.includes("T") ? value : fallback;
+  const [date, rawTime = ""] = normalized.split("T");
+  return {
+    date: date || fallback.slice(0, 10),
+    time: rawTime.slice(0, 5) || fallback.slice(11, 16),
+  };
+}
+
+function combineDateAndTime(date: string, time: string) {
+  if (!date || !time) return "";
+  return `${date}T${time}`;
+}
+
 function taskPriorityTone(priority: TodayTaskApiRow["priorityKey"]) {
   if (priority === "IMPORTANT") return "border-orange-200 bg-orange-50 text-orange-700";
   if (priority === "HIGH") return "border-red-200 bg-red-50 text-red-700";
@@ -5638,7 +5653,8 @@ export function TaskCreateModal({
   const [productId, setProductId] = React.useState("");
   const [assignedToId, setAssignedToId] = React.useState("");
   const [priority, setPriority] = React.useState<Exclude<TodayTaskPriorityFilter, "ALL">>("MEDIUM");
-  const [taskDateTime, setTaskDateTime] = React.useState(defaultTaskDateTimeValue());
+  const [taskDate, setTaskDate] = React.useState(() => splitDateTimeLocalValue().date);
+  const [taskTime, setTaskTime] = React.useState(() => splitDateTimeLocalValue().time);
   const [reminder, setReminder] = React.useState<TaskReminderValue>("");
   const [pending, setPending] = React.useState(false);
   const [message, setMessage] = React.useState("");
@@ -5688,7 +5704,11 @@ export function TaskCreateModal({
     setProductId(initialTask?.productId ?? "");
     setAssignedToId(initialTask?.assignedToId ?? defaultAssigneeId);
     setPriority(initialTask?.priorityKey ?? "MEDIUM");
-    setTaskDateTime(initialTask?.taskDateIso ? dateTimeLocalValue(new Date(initialTask.taskDateIso)) : defaultTaskDateTimeValue());
+    const scheduledDateTime = splitDateTimeLocalValue(
+      initialTask?.taskDateIso ? dateTimeLocalValue(new Date(initialTask.taskDateIso)) : defaultTaskDateTimeValue(),
+    );
+    setTaskDate(scheduledDateTime.date);
+    setTaskTime(scheduledDateTime.time);
     setReminder(normalizeTaskReminderValue(initialTask?.reminder));
     setMessage("");
   }, [defaultAssigneeId, initialTask, open]);
@@ -5710,13 +5730,13 @@ export function TaskCreateModal({
       return;
     }
 
-    if (!taskDateTime) {
+    if (!taskDate || !taskTime) {
       setMessage("Task er jonno date and time select korte hobe.");
       setPending(false);
       return;
     }
 
-    const effectiveTaskDateTime = taskDateTime;
+    const effectiveTaskDateTime = combineDateAndTime(taskDate, taskTime);
 
     try {
       const response = await fetch(isEditing ? `/api/tasks/${initialTask?.id}` : "/api/tasks", {
@@ -5894,24 +5914,35 @@ export function TaskCreateModal({
             </div>
             <Badge variant="neutral">Required</Badge>
           </div>
-          <label className="mt-3 block space-y-1.5">
-            <span className="text-sm font-semibold text-slate-700">Scheduled Date & Time</span>
-            <Input
-              type="datetime-local"
-              value={taskDateTime}
-              onChange={(event) => {
-                const input = event.currentTarget;
-                setTaskDateTime(event.target.value);
-                window.requestAnimationFrame(() => {
-                  input.blur();
-                });
-              }}
-              required
-            />
-            <p className="text-xs text-slate-500">
-              Aajke task add koreo agamikal ba porer kono din-er exact time set korte parben.
-            </p>
-          </label>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1.5">
+              <span className="text-sm font-semibold text-slate-700">Scheduled Date</span>
+              <Input
+                type="date"
+                value={taskDate}
+                onChange={(event) => setTaskDate(event.target.value)}
+                required
+              />
+              <p className="text-xs text-slate-500">
+                Step 1: age date select korun.
+              </p>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-sm font-semibold text-slate-700">Scheduled Time</span>
+              <Input
+                type="time"
+                value={taskTime}
+                onChange={(event) => setTaskTime(event.target.value)}
+                required
+              />
+              <p className="text-xs text-slate-500">
+                Step 2: tarpor exact time set korlei schedule ready.
+              </p>
+            </label>
+          </div>
+          <p className="mt-3 text-xs text-slate-500">
+            Aajke task add koreo agamikal ba porer kono din-er exact time set korte parben.
+          </p>
         </div>
         <div className={cn("grid gap-3", role === "MARKETER" ? "sm:grid-cols-2" : "sm:grid-cols-2 xl:grid-cols-3")}>
           <label className="space-y-1.5">
