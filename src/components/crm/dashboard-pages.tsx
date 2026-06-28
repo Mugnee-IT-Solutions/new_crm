@@ -41,7 +41,7 @@ import { useTaskCounterContext } from "@/components/app/app-shell";
 import type { CrmWorkspace } from "@/lib/crm-data";
 import { getCrmPeriodWindow } from "@/lib/crm-time";
 import { cn, initials, rolePath, type Role } from "@/lib/utils";
-import { CompletedWorkList, FollowUpEditModal, type TodayTaskApiRow, TaskCreateModal, TaskFollowUpModal, TodayWorkQueueList, todayWorkCounts, matchesTodayWorkFilter, sortTodayWorkQueue, WorkCompletionModal, type TodayWorkFilter } from "@/components/crm/resource-pages";
+import { CompletedWorkList, FollowUpEditModal, InlineContactShortcuts, type TodayTaskApiRow, TaskCreateModal, TaskFollowUpModal, TodayWorkQueueList, todayWorkCounts, matchesTodayWorkFilter, sortTodayWorkQueue, WorkCompletionModal, type TodayWorkFilter } from "@/components/crm/resource-pages";
 import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
 import { updateFollowUpStatusAction, updateTaskStatusAction } from "@/lib/crm-actions";
 import { FormModal } from "@/components/shared/form-modal";
@@ -315,44 +315,68 @@ function WorkCompleteAction({ item, role }: { item: CrmWorkspace["todayWorkItems
 
 function TodaysTasksCard({ workspace, role }: { workspace: CrmWorkspace; role: Role }) {
   const todaysWork = workspace.todayWorkItems.slice(0, 8);
+  const companyById = React.useMemo(
+    () => new Map(workspace.companies.map((company) => [company.id, company])),
+    [workspace.companies],
+  );
+  const leadById = React.useMemo(
+    () => new Map(workspace.leads.map((lead) => [lead.id, lead])),
+    [workspace.leads],
+  );
 
   return (
     <DashboardCard title="Today's Tasks" action={<Link href={rolePath(role, "todays-plan")} className="inline-flex h-8 items-center gap-2 rounded-lg bg-blue-600 px-3 text-sm font-semibold text-white"><Plus className="h-4 w-4" /> Add Plan</Link>}>
       <div className="space-y-3">
-        {todaysWork.length ? todaysWork.map((item) => (
-          <div key={item.id} className={cn("grid grid-cols-[auto_1fr] gap-3 rounded-xl border px-3 py-2.5 sm:grid-cols-[auto_1fr_auto] sm:items-center", item.overdue ? "border-red-100 bg-red-50/70" : "border-slate-100 bg-slate-50")}>
-            <span className={cn("mt-1 flex h-4 w-4 items-center justify-center rounded border", item.overdue ? "border-red-300 bg-white text-red-600" : "border-slate-300 bg-white text-blue-600")}>
-              <span className="h-1.5 w-1.5 rounded-full bg-current" />
-            </span>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="min-w-0 truncate text-sm font-bold text-slate-900">
-                  <EntityLink href={item.href} className="font-bold">{item.title}</EntityLink>
+        {todaysWork.length ? todaysWork.map((item) => {
+          const relatedLead = item.leadId ? leadById.get(item.leadId) : undefined;
+          const relatedCompany = item.companyId
+            ? companyById.get(item.companyId)
+            : relatedLead?.companyId
+              ? companyById.get(relatedLead.companyId)
+              : undefined;
+          const contactPhone = relatedCompany?.phone && relatedCompany.phone !== "-"
+            ? relatedCompany.phone
+            : relatedLead?.phone;
+          const contactWhatsapp = relatedCompany?.whatsapp && relatedCompany.whatsapp !== "-"
+            ? relatedCompany.whatsapp
+            : contactPhone;
+
+          return (
+            <div key={item.id} className={cn("grid grid-cols-[auto_1fr] gap-3 rounded-xl border px-3 py-2.5 sm:grid-cols-[auto_1fr_auto] sm:items-center", item.overdue ? "border-red-100 bg-red-50/70" : "border-slate-100 bg-slate-50")}>
+              <span className={cn("mt-1 flex h-4 w-4 items-center justify-center rounded border", item.overdue ? "border-red-300 bg-white text-red-600" : "border-slate-300 bg-white text-blue-600")}>
+                <span className="h-1.5 w-1.5 rounded-full bg-current" />
+              </span>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="min-w-0 truncate text-sm font-bold text-slate-900">
+                    <EntityLink href={item.href} className="font-bold">{item.title}</EntityLink>
+                  </p>
+                  <WorkSourceBadge item={item} />
+                  {item.overdue ? <Badge variant="danger">Overdue</Badge> : null}
+                </div>
+                <p className="mt-1 flex flex-wrap items-center gap-1 text-xs font-semibold text-slate-500">
+                  <CalendarClock className="h-3.5 w-3.5" />
+                  {item.date} {item.time}
+                  {item.relatedTo !== "-" ? (
+                    <>
+                      <span>-</span>
+                      <EntityLink href={item.href} className="text-xs font-semibold">{item.relatedTo}</EntityLink>
+                    </>
+                  ) : null}
                 </p>
-                <WorkSourceBadge item={item} />
-                {item.overdue ? <Badge variant="danger">Overdue</Badge> : null}
+                <InlineContactShortcuts phone={contactPhone} whatsapp={contactWhatsapp} compact className="mt-2" />
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Badge variant={item.priority === "High" || item.priority === "Urgent" ? "danger" : item.priority === "Medium" ? "warning" : "neutral"}>{item.priority}</Badge>
+                  <Badge variant={item.status === "Overdue" ? "danger" : item.status === "Due Today" ? "warning" : "neutral"}>{item.status}</Badge>
+                  {role !== "MARKETER" && item.assignedTo !== "-" ? <Badge variant="neutral">{item.assignedTo}</Badge> : null}
+                </div>
               </div>
-              <p className="mt-1 flex flex-wrap items-center gap-1 text-xs font-semibold text-slate-500">
-                <CalendarClock className="h-3.5 w-3.5" />
-                {item.date} {item.time}
-                {item.relatedTo !== "-" ? (
-                  <>
-                    <span>-</span>
-                    <EntityLink href={item.href} className="text-xs font-semibold">{item.relatedTo}</EntityLink>
-                  </>
-                ) : null}
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <Badge variant={item.priority === "High" || item.priority === "Urgent" ? "danger" : item.priority === "Medium" ? "warning" : "neutral"}>{item.priority}</Badge>
-                <Badge variant={item.status === "Overdue" ? "danger" : item.status === "Due Today" ? "warning" : "neutral"}>{item.status}</Badge>
-                {role !== "MARKETER" && item.assignedTo !== "-" ? <Badge variant="neutral">{item.assignedTo}</Badge> : null}
+              <div className="col-span-2 sm:col-span-1">
+                <WorkCompleteAction item={item} role={role} />
               </div>
             </div>
-            <div className="col-span-2 sm:col-span-1">
-              <WorkCompleteAction item={item} role={role} />
-            </div>
-          </div>
-        )) : <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No active work for today.</p>}
+          );
+        }) : <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No active work for today.</p>}
       </div>
     </DashboardCard>
   );

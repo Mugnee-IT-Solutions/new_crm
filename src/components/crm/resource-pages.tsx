@@ -1164,13 +1164,80 @@ function normalizeDialPhone(value?: string | null) {
 }
 
 function normalizeWhatsAppPhone(value?: string | null) {
-  return String(value || "").replace(/\D/g, "");
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("880")) return digits;
+  if (digits.length === 11 && digits.startsWith("0")) return `88${digits}`;
+  return digits;
 }
 
 function normalizeEmailAddress(value?: string | null) {
   const email = cleanCustomerContactValue(value).toLowerCase();
   if (!email) return null;
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
+}
+
+export function InlineContactShortcuts({
+  phone,
+  whatsapp,
+  compact = false,
+  className,
+}: {
+  phone?: string | null;
+  whatsapp?: string | null;
+  compact?: boolean;
+  className?: string;
+}) {
+  const callPhone = normalizeDialPhone(phone);
+  const whatsappPhone = normalizeWhatsAppPhone(whatsapp || phone);
+  const callHref = callPhone ? `tel:${callPhone}` : undefined;
+  const whatsappHref = whatsappPhone
+    ? `https://wa.me/${whatsappPhone}?text=${encodeURIComponent("Hello, this is Mugnee CRM regarding your inquiry.")}`
+    : undefined;
+  const size = compact ? "sm" : "md";
+
+  return (
+    <div className={cn("flex flex-wrap items-center gap-2", className)}>
+      <a
+        href={callHref ?? "#"}
+        aria-disabled={!callHref}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (!callHref) event.preventDefault();
+        }}
+        className={cn(
+          buttonVariants({ variant: "outline", size }),
+          compact ? "h-8 px-2.5 text-xs" : "",
+          callHref && "border-blue-200 bg-blue-50/70 text-blue-700 shadow-sm hover:border-blue-300 hover:bg-blue-100 hover:text-blue-800",
+          !callHref && "cursor-not-allowed border-slate-200 bg-white text-slate-400 hover:border-slate-200 hover:bg-white hover:text-slate-400",
+        )}
+        title={callHref ? "Call" : "Valid phone not found"}
+      >
+        <Phone className="h-4 w-4" />
+        {!compact ? "Call" : null}
+      </a>
+      <a
+        href={whatsappHref ?? "#"}
+        target={whatsappHref ? "_blank" : undefined}
+        rel={whatsappHref ? "noopener noreferrer" : undefined}
+        aria-disabled={!whatsappHref}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (!whatsappHref) event.preventDefault();
+        }}
+        className={cn(
+          buttonVariants({ variant: "outline", size }),
+          compact ? "h-8 px-2.5 text-xs" : "",
+          whatsappHref && "border-emerald-200 bg-emerald-50/80 text-emerald-700 shadow-sm hover:border-emerald-300 hover:bg-emerald-100 hover:text-emerald-800",
+          !whatsappHref && "cursor-not-allowed border-slate-200 bg-white text-slate-400 hover:border-slate-200 hover:bg-white hover:text-slate-400",
+        )}
+        title={whatsappHref ? "WhatsApp" : "Valid WhatsApp number not found"}
+      >
+        <MessageSquare className="h-4 w-4" />
+        {!compact ? "WhatsApp" : null}
+      </a>
+    </div>
+  );
 }
 
 function prependUniqueById<T extends { id: string }>(rows: T[], nextRow: T) {
@@ -4475,7 +4542,16 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
             </div>
           ),
         },
-        { accessorKey: "phone", header: "Primary Phone" },
+        {
+          accessorKey: "phone",
+          header: "Primary Phone",
+          cell: ({ row }) => (
+            <div className="space-y-2">
+              <div className="font-semibold text-slate-700">{row.original.phone}</div>
+              <InlineContactShortcuts phone={row.original.phone} whatsapp={row.original.whatsapp} compact />
+            </div>
+          ),
+        },
         { accessorKey: "cityOrZilla", header: "City / Zilla" },
         { accessorKey: "address", header: "Address" },
         { accessorKey: "industry", header: "Industry" },
@@ -6572,6 +6648,11 @@ export function TodayWorkQueueList({
                     </Button>
                   </>
                 ) : null}
+                <InlineContactShortcuts
+                  phone={task.companyPrimaryPhone}
+                  whatsapp={task.companyPrimaryPhone}
+                  className="mt-1 w-full flex-col items-stretch [&>a]:justify-center"
+                />
               </div>
             </div>
           </motion.div>
