@@ -1,9 +1,9 @@
 import "server-only";
 
 import { access, readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import * as XLSX from "xlsx";
-import fontkit from "@pdf-lib/fontkit";
 import {
   PDFDocument,
   StandardFonts,
@@ -98,7 +98,25 @@ const REPORT_PDF_FONT_CANDIDATES = [
   "/usr/share/fonts/truetype/noto/NotoSerifBengali-Regular.ttf",
 ];
 
+const require = createRequire(import.meta.url);
+
 let reportPdfFontBytesPromise: Promise<Uint8Array | null> | null = null;
+let reportPdfFontkitPromise: Promise<unknown | null> | null = null;
+
+async function loadReportPdfFontkit() {
+  if (!reportPdfFontkitPromise) {
+    reportPdfFontkitPromise = (async () => {
+      try {
+        const loaded = require("@pdf-lib/fontkit/dist/fontkit.umd.js");
+        return loaded?.default ?? loaded ?? null;
+      } catch {
+        return null;
+      }
+    })();
+  }
+
+  return reportPdfFontkitPromise;
+}
 
 function stringify(value: unknown) {
   if (value == null) return "";
@@ -1229,12 +1247,14 @@ function buildPrintHtml(document: ReportDocument) {
 
 async function buildPdfBuffer(document: ReportDocument) {
   const pdfDocument = await PDFDocument.create();
-  pdfDocument.registerFontkit(fontkit);
-
   const embeddedFontBytes = await loadReportPdfFontBytes();
-  const supportsUnicodePdf = Boolean(embeddedFontBytes);
-  const bodyFont = embeddedFontBytes
-    ? await pdfDocument.embedFont(embeddedFontBytes, { subset: true })
+  const fontkit = embeddedFontBytes ? await loadReportPdfFontkit() : null;
+  const supportsUnicodePdf = Boolean(embeddedFontBytes && fontkit);
+  if (fontkit) {
+    pdfDocument.registerFontkit(fontkit as never);
+  }
+  const bodyFont = supportsUnicodePdf
+    ? await pdfDocument.embedFont(embeddedFontBytes as Uint8Array, { subset: true })
     : await pdfDocument.embedFont(StandardFonts.Helvetica);
   const normalizePdfValue = (value: string) => (
     supportsUnicodePdf
