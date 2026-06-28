@@ -1371,12 +1371,78 @@ const productInclude = {
       },
     },
   },
+  tasks: {
+    include: {
+      assignedTo: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      company: {
+        select: {
+          id: true,
+          name: true,
+          assignedToId: true,
+        },
+      },
+      lead: {
+        select: {
+          id: true,
+          companyId: true,
+          customerName: true,
+          title: true,
+          assignedToId: true,
+          createdById: true,
+          communications: {
+            select: {
+              id: true,
+              leadId: true,
+              method: true,
+              note: true,
+              discussionTopic: true,
+              productDiscussed: true,
+              followUpNote: true,
+              nextFollowUpDate: true,
+              communicationAt: true,
+              userId: true,
+            },
+            orderBy: { communicationAt: "desc" },
+          },
+        },
+      },
+      communications: {
+        select: {
+          id: true,
+          leadId: true,
+          method: true,
+          note: true,
+          discussionTopic: true,
+          productDiscussed: true,
+          followUpNote: true,
+          nextFollowUpDate: true,
+          communicationAt: true,
+          userId: true,
+        },
+        orderBy: { communicationAt: "desc" },
+      },
+      followUps: {
+        select: {
+          id: true,
+          status: true,
+          assignedToId: true,
+          followUpDate: true,
+        },
+      },
+    },
+  },
 } satisfies Prisma.Prisma.ProductServiceInclude;
 
 type ProductRecord = Prisma.Prisma.ProductServiceGetPayload<{ include: typeof productInclude }>;
 type ProductLeadRecord = ProductRecord["leads"][number];
 type ProductCommunicationRecord = ProductLeadRecord["communications"][number];
 type ProductQuoteRecord = ProductRecord["quoteItems"][number]["quotation"];
+type ProductTaskRecord = ProductRecord["tasks"][number];
 
 function linkedEntityHref({ entity, entityId, leadId, companyId, quotationId }: { entity?: string | null; entityId?: string | null; leadId?: string | null; companyId?: string | null; quotationId?: string | null }) {
   if (leadId) return `/leads/${leadId}`;
@@ -1538,6 +1604,16 @@ function buildProductCompanyContactSummary(products: ProductRecord[], scopedUser
       const standaloneCommunications = (interest.company.communications ?? []).filter((communication) => !communication.leadId);
       if (standaloneCommunications.length > 0) {
         contactedCompanyIds.add(interest.companyId);
+      }
+    }
+
+    for (const task of product.tasks) {
+      if (!taskInScope(task, scope)) continue;
+      const companyId = task.companyId ?? task.lead?.companyId ?? null;
+      if (!companyId) continue;
+      targetCompanyIds.add(companyId);
+      if (task.communications.length > 0 || task.lead?.communications.length) {
+        contactedCompanyIds.add(companyId);
       }
     }
   }
@@ -2026,7 +2102,20 @@ function leadInScope(lead: ProductLeadRecord, scopedUserIds: Set<string> | undef
   return userInScope(scopedUserIds, lead.assignedToId) || userInScope(scopedUserIds, lead.createdById);
 }
 
+function taskInScope(task: ProductTaskRecord, scopedUserIds: Set<string> | undefined) {
+  return (
+    userInScope(scopedUserIds, task.assignedToId) ||
+    userInScope(scopedUserIds, task.lead?.assignedToId) ||
+    userInScope(scopedUserIds, task.lead?.createdById) ||
+    userInScope(scopedUserIds, task.company?.assignedToId)
+  );
+}
+
 function followUpInScope(followUp: ProductLeadRecord["followUps"][number], scopedUserIds: Set<string> | undefined) {
+  return userInScope(scopedUserIds, followUp.assignedToId);
+}
+
+function taskFollowUpInScope(followUp: ProductTaskRecord["followUps"][number], scopedUserIds: Set<string> | undefined) {
   return userInScope(scopedUserIds, followUp.assignedToId);
 }
 
@@ -2084,6 +2173,7 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
   const scope = scopedUserIds ? new Set(scopedUserIds) : undefined;
   const scopedLeads = product.leads.filter((lead) => leadInScope(lead, scope));
   const scopedLeadIds = new Set(scopedLeads.map((lead) => lead.id));
+  const scopedTasks = product.tasks.filter((task) => taskInScope(task, scope));
   const scopedQuoteItems = product.quoteItems.filter((item) => quotationInScope(item.quotation, scope));
   const communicationIds = new Set<string>();
   const companyIds = new Set<string>();
@@ -2091,6 +2181,7 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
   const assignedUsers = new Map<string, string>();
   const communicationTypes = new Set<string>();
   const convertedLeadIds = new Set<string>();
+  const pendingFollowUpIds = new Set<string>();
   const communicationMethodCounts = {
     call: 0,
     whatsapp: 0,
@@ -2131,13 +2222,42 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
     }
   }
 
+  for (const task of scopedTasks) {
+    const companyId = task.companyId ?? task.lead?.companyId ?? null;
+    if (companyId) companyIds.add(companyId);
+    if (task.assignedToId && task.assignedTo) assignedUsers.set(task.assignedToId, task.assignedTo.name);
+
+    for (const communication of task.communications) {
+      if (!communicationIds.has(communication.id)) {
+        communicationMethodCounts[communicationMethodBucket(communication.method)] += 1;
+      }
+      communicationIds.add(communication.id);
+      communicationTypes.add(communication.method);
+      if (companyId) contactedCompanyIds.add(companyId);
+    }
+
+    for (const followUp of task.followUps) {
+      if (taskFollowUpInScope(followUp, scope) && followUp.status !== "COMPLETED") {
+        pendingFollowUpIds.add(followUp.id);
+      }
+    }
+  }
+
   for (const item of scopedQuoteItems) {
     if (item.quotation.status === "CONVERTED_TO_SALE" && item.quotation.leadId && scopedLeadIds.has(item.quotation.leadId)) {
       convertedLeadIds.add(item.quotation.leadId);
     }
   }
 
-  const followUpCount = scopedLeads.reduce((sum, lead) => sum + lead.followUps.filter((followUp) => followUpInScope(followUp, scope) && followUp.status !== "COMPLETED").length, 0);
+  for (const lead of scopedLeads) {
+    for (const followUp of lead.followUps) {
+      if (followUpInScope(followUp, scope) && followUp.status !== "COMPLETED") {
+        pendingFollowUpIds.add(followUp.id);
+      }
+    }
+  }
+
+  const followUpCount = pendingFollowUpIds.size;
   const quotationSentCount = new Set(
     scopedQuoteItems
       .filter((item) => item.quotation.status !== "DRAFT")
@@ -2209,7 +2329,47 @@ function buildProductEngagement(product: ProductRecord, scopedUserIds?: string[]
     })
     .filter(Boolean) as (ProductEngagementRow & { lastContactAt: Date })[];
 
-  const rows = [...rowsWithSort, ...standaloneInterestRows]
+  const existingRowKeys = new Set(
+    [...rowsWithSort, ...standaloneInterestRows].map((item) => `${item.companyId ?? "none"}::${item.leadId ?? "none"}`),
+  );
+  const taskRows = scopedTasks
+    .filter((task) => !filters.assignedUserId || task.assignedToId === filters.assignedUserId)
+    .map((task) => {
+      const companyId = task.companyId ?? task.lead?.companyId ?? null;
+      const rowKey = `${companyId ?? "none"}::${task.leadId ?? "none"}`;
+      if (existingRowKeys.has(rowKey)) return undefined;
+
+      const communicationFilterActive = Boolean(filters.from || filters.to || filters.communicationType);
+      const filteredCommunications = task.communications.filter((communication) => communicationMatchesFilters(communication, filters));
+      if (communicationFilterActive && filteredCommunications.length === 0) return undefined;
+
+      const visibleCommunications = communicationFilterActive ? filteredCommunications : task.communications;
+      const lastContact = visibleCommunications[0];
+      const visibleTaskFollowUps = task.followUps.filter((followUp) => taskFollowUpInScope(followUp, scope));
+      const pendingTaskFollowUps = visibleTaskFollowUps.filter((followUp) => followUp.status !== "COMPLETED");
+
+      return {
+        id: `task-${task.id}`,
+        companyId,
+        leadId: task.leadId,
+        companyName: task.company?.name ?? task.lead?.customerName ?? task.companyName ?? "-",
+        leadName: task.lead?.title ?? "-",
+        communicationType: lastContact?.method ?? "-",
+        summary: lastContact?.note ?? task.notes ?? task.description ?? task.title,
+        discussionTopic: lastContact?.discussionTopic ?? lastContact?.productDiscussed ?? product.name,
+        nextFollowUpDate: dateLabel(lastContact?.nextFollowUpDate ?? pendingTaskFollowUps[0]?.followUpDate, "dd/MM/yyyy hh:mm a"),
+        lastContactDate: dateLabel(lastContact?.communicationAt),
+        status: labelize(task.status),
+        assignedMarketer: task.assignedTo?.name ?? "-",
+        communicationCount: task.communications.length,
+        followUpCount: visibleTaskFollowUps.length,
+        quotationCount: 0,
+        lastContactAt: lastContact?.communicationAt ?? new Date(0),
+      };
+    })
+    .filter(Boolean) as (ProductEngagementRow & { lastContactAt: Date })[];
+
+  const rows = [...rowsWithSort, ...standaloneInterestRows, ...taskRows]
     .sort((a, b) => b.lastContactAt.getTime() - a.lastContactAt.getTime())
     .map((item) => ({
       id: item.id,

@@ -1,11 +1,18 @@
 import "server-only";
 
+import { access, readFile } from "node:fs/promises";
+import path from "node:path";
 import * as XLSX from "xlsx";
+import fontkit from "@pdf-lib/fontkit";
+import {
+  PDFDocument,
+  StandardFonts,
+  rgb,
+} from "pdf-lib";
 import {
   FollowUpStatus,
   LeadStatus,
   Priority,
-  QuotationStatus,
   TaskStatus,
 } from "@prisma/client";
 import type * as PrismaTypes from "@prisma/client";
@@ -77,6 +84,29 @@ const SUPPORTED_REPORT_LOG_TYPES = new Set([
   "REWARD",
   "LEAD_CONVERSION",
 ]);
+const PDF_PAGE_WIDTH = 841.89;
+const PDF_PAGE_HEIGHT = 595.28;
+const PDF_MARGIN = 36;
+const PDF_TABLE_CELL_PADDING_X = 8;
+const PDF_TABLE_CELL_PADDING_Y = 6;
+const PDF_BODY_FONT_SIZE = 9;
+const PDF_HEADER_FONT_SIZE = 9.5;
+const PDF_TITLE_FONT_SIZE = 18;
+const PDF_META_FONT_SIZE = 10;
+const PDF_LINE_HEIGHT = 11;
+const PDF_TABLE_HEADER_HEIGHT = 28;
+const PDF_MAX_CELL_LINES = 8;
+const PDF_CUSTOMER_COMMUNICATION_COLUMN_WIDTHS = [0.15, 0.28, 0.11, 0.23, 0.11, 0.12];
+const REPORT_PDF_FONT_CANDIDATES = [
+  path.join(/*turbopackIgnore: true*/ process.cwd(), "public", "fonts", "NotoSansBengali-Regular.ttf"),
+  path.join(/*turbopackIgnore: true*/ process.cwd(), "public", "fonts", "NotoSerifBengali-Regular.ttf"),
+  "C:\\Windows\\Fonts\\Nirmala.ttf",
+  "C:\\Windows\\Fonts\\kalpurush.ttf",
+  "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf",
+  "/usr/share/fonts/truetype/noto/NotoSerifBengali-Regular.ttf",
+];
+
+let reportPdfFontBytesPromise: Promise<Uint8Array | null> | null = null;
 
 function stringify(value: unknown) {
   if (value == null) return "";
@@ -110,12 +140,98 @@ function escapeCsvValue(value: unknown) {
   return `"${normalized}"`;
 }
 
-function escapePdfText(value: string) {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/\(/g, "\\(")
-    .replace(/\)/g, "\\)")
-    .replace(/\r?\n/g, " ");
+function clampPdfLines(
+  lines: string[],
+  maxLines: number,
+  measure: (value: string) => number,
+  maxWidth: number,
+) {
+  if (lines.length <= maxLines) return lines;
+
+  const trimmed = lines.slice(0, maxLines);
+  let lastLine = trimmed[maxLines - 1] ?? "";
+  while (lastLine && measure(`${lastLine}...`) > maxWidth) {
+    lastLine = Array.from(lastLine).slice(0, -1).join("");
+  }
+  trimmed[maxLines - 1] = lastLine ? `${lastLine}...` : "...";
+  return trimmed;
+}
+
+function wrapPdfText(
+  value: string,
+  measure: (text: string) => number,
+  maxWidth: number,
+) {
+  const normalized = value.replace(/\r/g, "");
+  const paragraphs = normalized.split("\n");
+  const lines: string[] = [];
+
+  for (const paragraph of paragraphs) {
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      lines.push("");
+      continue;
+    }
+
+    let currentLine = "";
+
+    for (const word of words) {
+      const nextLine = currentLine ? `${currentLine} ${word}` : word;
+      if (measure(nextLine) <= maxWidth) {
+        currentLine = nextLine;
+        continue;
+      }
+
+      if (currentLine) {
+        lines.push(currentLine);
+        currentLine = "";
+      }
+
+      if (measure(word) <= maxWidth) {
+        currentLine = word;
+        continue;
+      }
+
+      let chunk = "";
+      for (const character of Array.from(word)) {
+        const nextChunk = `${chunk}${character}`;
+        if (measure(nextChunk) <= maxWidth) {
+          chunk = nextChunk;
+          continue;
+        }
+
+        if (chunk) {
+          lines.push(chunk);
+        }
+        chunk = character;
+      }
+      currentLine = chunk;
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+  }
+
+  return lines.length ? lines : [""];
+}
+
+async function loadReportPdfFontBytes() {
+  if (!reportPdfFontBytesPromise) {
+    reportPdfFontBytesPromise = (async () => {
+      for (const candidate of REPORT_PDF_FONT_CANDIDATES) {
+        try {
+          await access(candidate);
+          return new Uint8Array(await readFile(candidate));
+        } catch {
+          continue;
+        }
+      }
+      return null;
+    })();
+  }
+
+  return reportPdfFontBytesPromise;
 }
 
 function normalizeDateInput(value?: string) {
@@ -322,17 +438,14 @@ async function buildCustomerCommunicationReport(
     actor,
     companyTitle,
     await resolveFilterLabels(prisma, filters),
-    ["Date", "Customer / Company", "Lead", "Method", "Discussion Topic", "Note", "Outcome", "Next Follow-up", "User"],
+    ["Date", "Customer / Company", "Method", "Note", "Outcome", "Next Follow-up"],
     rows.map((row) => [
       dateLabel(row.communicationAt),
       row.company?.name ?? row.lead?.customerName ?? "-",
-      row.lead?.title ?? "-",
       row.method,
-      row.discussionTopic ?? "-",
       row.note,
       row.outcome ?? "-",
       dateLabel(row.nextFollowUpDate),
-      row.user?.name ?? "-",
     ]),
   );
 }
@@ -1098,33 +1211,45 @@ function buildPrintHtml(document: ReportDocument) {
     <meta charset="utf-8" />
     <title>${document.title}</title>
     <style>
-      body { font-family: Arial, sans-serif; background: #ffffff; color: #0f172a; margin: 0; padding: 24px; }
-      .page { max-width: 1120px; margin: 0 auto; }
-      h1 { font-size: 28px; margin: 0 0 4px; }
-      h2 { font-size: 18px; margin: 0 0 18px; color: #2563eb; }
-      p { margin: 4px 0; }
-      ul { margin: 14px 0 22px; padding-left: 18px; }
-      li { margin: 4px 0; }
-      table { width: 100%; border-collapse: collapse; font-size: 12px; }
-      th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; vertical-align: top; }
-      th { background: #eff6ff; }
-      .empty { margin-top: 24px; padding: 16px; border: 1px dashed #cbd5e1; border-radius: 12px; background: #f8fafc; font-weight: 600; }
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      html { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      @page { size: A4 landscape; margin: 12mm; }
+      body { font-family: "Segoe UI", "Nirmala UI", Arial, sans-serif; background: #eef4ff; color: #0f172a; margin: 0; padding: 24px; }
+      .page { max-width: 1400px; margin: 0 auto; }
+      .hero { border: 1px solid #cbd5e1; border-radius: 18px; background: linear-gradient(135deg, #eff6ff, #ffffff); padding: 20px 24px; }
+      h1 { font-size: 14px; margin: 0; color: #475569; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+      h2 { font-size: 28px; margin: 8px 0 12px; color: #0f172a; line-height: 1.15; }
+      .meta { display: flex; flex-wrap: wrap; gap: 12px 18px; margin: 0; font-size: 13px; color: #334155; }
+      .meta strong { color: #0f172a; }
+      ul { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 18px 0 0; padding: 0; }
+      li { border: 1px solid #bfdbfe; border-radius: 999px; background: rgba(255,255,255,0.95); padding: 7px 12px; font-size: 12px; color: #1e3a8a; }
+      .table-shell { margin-top: 18px; overflow: hidden; border: 1px solid #cbd5e1; border-radius: 18px; background: #ffffff; }
+      table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+      th, td { border-bottom: 1px solid #e2e8f0; padding: 9px 10px; text-align: left; vertical-align: top; word-break: break-word; overflow-wrap: anywhere; }
+      th { background: #dbeafe; color: #0f172a; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; }
+      tr:nth-child(even) td { background: #f8fafc; }
+      .empty { margin-top: 24px; padding: 18px; border: 1px dashed #cbd5e1; border-radius: 18px; background: #f8fafc; font-weight: 600; }
       @media print {
-        body { padding: 0; }
+        body { padding: 0; background: #ffffff; }
         .page { max-width: none; }
       }
     </style>
   </head>
   <body>
     <div class="page">
-      <h1>${document.companyTitle}</h1>
-      <h2>${document.title}</h2>
-      <p><strong>Generated:</strong> ${format(document.generatedAt, "dd MMM yyyy hh:mm a")}</p>
-      <p><strong>Generated By:</strong> ${document.generatedBy}</p>
-      <ul>${filterMarkup}</ul>
+      <section class="hero">
+        <h1>${document.companyTitle}</h1>
+        <h2>${document.title}</h2>
+        <p class="meta">
+          <span><strong>Generated:</strong> ${format(document.generatedAt, "dd MMM yyyy hh:mm a")}</span>
+          <span><strong>Generated By:</strong> ${document.generatedBy}</span>
+        </p>
+        <ul>${filterMarkup}</ul>
+      </section>
       ${
         document.rows.length
-          ? `<table><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table>`
+          ? `<div class="table-shell"><table><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table></div>`
           : `<div class="empty">No data found for selected filters.</div>`
       }
     </div>
@@ -1133,105 +1258,214 @@ function buildPrintHtml(document: ReportDocument) {
 </html>`;
 }
 
-function wrapPdfLine(value: string, maxLength = 100) {
-  const words = value.split(/\s+/).filter(Boolean);
-  if (!words.length) return [""];
-  const lines: string[] = [];
-  let current = "";
+async function buildPdfBuffer(document: ReportDocument) {
+  const pdfDocument = await PDFDocument.create();
+  pdfDocument.registerFontkit(fontkit);
 
-  for (const word of words) {
-    const next = current ? `${current} ${word}` : word;
-    if (next.length > maxLength) {
-      if (current) lines.push(current);
-      current = word;
-    } else {
-      current = next;
+  const embeddedFontBytes = await loadReportPdfFontBytes();
+  const bodyFont = embeddedFontBytes
+    ? await pdfDocument.embedFont(embeddedFontBytes, { subset: true })
+    : await pdfDocument.embedFont(StandardFonts.Helvetica);
+
+  const pageSize: [number, number] = [PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT];
+  const contentWidth = PDF_PAGE_WIDTH - PDF_MARGIN * 2;
+  const tableWidth = contentWidth - 36;
+  const columnWidths =
+    document.columns.length === PDF_CUSTOMER_COMMUNICATION_COLUMN_WIDTHS.length
+      ? PDF_CUSTOMER_COMMUNICATION_COLUMN_WIDTHS.map((ratio) => ratio * tableWidth)
+      : document.columns.map(() => tableWidth / document.columns.length);
+  const textMeasure = (value: string, fontSize: number) => bodyFont.widthOfTextAtSize(value, fontSize);
+  const filterSummary = document.filters.map((item) => `${item.label}: ${item.value}`).join(" | ");
+
+  const preparedRows = document.rows.map((row) => {
+    const values = document.columns.map((_, index) => {
+      const cell = row[index];
+      return cell && cell.trim() ? cell.trim() : "-";
+    });
+    const wrappedCells = values.map((value, index) => {
+      const usableWidth = Math.max(columnWidths[index] - PDF_TABLE_CELL_PADDING_X * 2, 24);
+      const wrapped = wrapPdfText(value, (text) => textMeasure(text, PDF_BODY_FONT_SIZE), usableWidth);
+      return clampPdfLines(
+        wrapped,
+        PDF_MAX_CELL_LINES,
+        (text) => textMeasure(text, PDF_BODY_FONT_SIZE),
+        usableWidth,
+      );
+    });
+    const maxLineCount = Math.max(...wrappedCells.map((cell) => Math.max(cell.length, 1)));
+
+    return {
+      wrappedCells,
+      height: Math.max(
+        maxLineCount * PDF_LINE_HEIGHT + PDF_TABLE_CELL_PADDING_Y * 2,
+        PDF_TABLE_HEADER_HEIGHT,
+      ),
+    };
+  });
+
+  let rowIndex = 0;
+
+  while (rowIndex < preparedRows.length) {
+    const page = pdfDocument.addPage(pageSize);
+
+    let cursorY = PDF_PAGE_HEIGHT - PDF_MARGIN;
+    page.drawRectangle({
+      x: PDF_MARGIN,
+      y: PDF_MARGIN,
+      width: contentWidth,
+      height: PDF_PAGE_HEIGHT - PDF_MARGIN * 2,
+      color: rgb(1, 1, 1),
+      borderColor: rgb(0.87, 0.9, 0.96),
+      borderWidth: 1,
+    });
+
+    page.drawText(document.companyTitle, {
+      x: PDF_MARGIN + 18,
+      y: cursorY - 2,
+      size: PDF_META_FONT_SIZE,
+      font: bodyFont,
+      color: rgb(0.32, 0.39, 0.5),
+    });
+    cursorY -= 24;
+
+    page.drawText(document.title, {
+      x: PDF_MARGIN + 18,
+      y: cursorY,
+      size: PDF_TITLE_FONT_SIZE,
+      font: bodyFont,
+      color: rgb(0.06, 0.09, 0.16),
+    });
+    cursorY -= 24;
+
+    page.drawText(`Generated: ${format(document.generatedAt, "dd MMM yyyy hh:mm a")}   Generated By: ${document.generatedBy}`, {
+      x: PDF_MARGIN + 18,
+      y: cursorY,
+      size: PDF_META_FONT_SIZE,
+      font: bodyFont,
+      color: rgb(0.2, 0.27, 0.36),
+    });
+    cursorY -= 18;
+
+    const wrappedFilters = filterSummary
+      ? wrapPdfText(
+          `Filters: ${filterSummary}`,
+          (text) => textMeasure(text, PDF_META_FONT_SIZE),
+          contentWidth - 36,
+        )
+      : ["Filters: Default"];
+
+    for (const line of wrappedFilters) {
+      page.drawText(line, {
+        x: PDF_MARGIN + 18,
+        y: cursorY,
+        size: PDF_META_FONT_SIZE,
+        font: bodyFont,
+        color: rgb(0.12, 0.23, 0.54),
+      });
+      cursorY -= 14;
     }
-  }
 
-  if (current) lines.push(current);
-  return lines;
-}
+    cursorY -= 12;
 
-function buildPdfBuffer(document: ReportDocument) {
-  const lines: string[] = [];
-  lines.push(document.companyTitle);
-  lines.push(document.title);
-  lines.push(`Generated: ${format(document.generatedAt, "dd MMM yyyy hh:mm a")}`);
-  lines.push(`Generated By: ${document.generatedBy}`);
-  for (const filter of document.filters) {
-    lines.push(`${filter.label}: ${filter.value}`);
-  }
-  lines.push("");
-  lines.push(document.columns.join(" | "));
-  lines.push("-".repeat(Math.min(document.columns.join(" | ").length, 110)));
-  if (!document.rows.length) {
-    lines.push("No data found for selected filters.");
-  } else {
-    for (const row of document.rows) {
-      for (const wrapped of wrapPdfLine(row.join(" | "))) {
-        lines.push(wrapped);
+    const tableLeft = PDF_MARGIN + 18;
+    const tableHeaderY = cursorY - PDF_TABLE_HEADER_HEIGHT;
+
+    page.drawRectangle({
+      x: tableLeft,
+      y: tableHeaderY,
+      width: tableWidth,
+      height: PDF_TABLE_HEADER_HEIGHT,
+      color: rgb(0.86, 0.92, 1),
+      borderColor: rgb(0.73, 0.82, 0.95),
+      borderWidth: 1,
+    });
+
+    let columnX = tableLeft;
+    document.columns.forEach((column, index) => {
+      const width = columnWidths[index];
+      page.drawText(column, {
+        x: columnX + PDF_TABLE_CELL_PADDING_X,
+        y: tableHeaderY + 9,
+        size: PDF_HEADER_FONT_SIZE,
+        font: bodyFont,
+        color: rgb(0.06, 0.09, 0.16),
+      });
+      if (index < document.columns.length - 1) {
+        page.drawLine({
+          start: { x: columnX + width, y: tableHeaderY },
+          end: { x: columnX + width, y: tableHeaderY + PDF_TABLE_HEADER_HEIGHT },
+          color: rgb(0.73, 0.82, 0.95),
+          thickness: 1,
+        });
       }
+      columnX += width;
+    });
+
+    cursorY = tableHeaderY;
+    const minRowY = PDF_MARGIN + 26;
+    let pageRowCount = 0;
+
+    while (rowIndex < preparedRows.length) {
+      const row = preparedRows[rowIndex];
+      if (cursorY - row.height < minRowY && pageRowCount > 0) {
+        break;
+      }
+
+      const rowTop = cursorY;
+      const rowBottom = cursorY - row.height;
+      page.drawRectangle({
+        x: tableLeft,
+        y: rowBottom,
+        width: tableWidth,
+        height: row.height,
+        color: pageRowCount % 2 === 0 ? rgb(1, 1, 1) : rgb(0.97, 0.98, 1),
+        borderColor: rgb(0.88, 0.91, 0.95),
+        borderWidth: 1,
+      });
+
+      let cellX = tableLeft;
+      row.wrappedCells.forEach((cellLines, index) => {
+        const width = columnWidths[index];
+        let lineY = rowTop - PDF_TABLE_CELL_PADDING_Y - PDF_BODY_FONT_SIZE;
+        cellLines.forEach((line) => {
+          page.drawText(line || "-", {
+            x: cellX + PDF_TABLE_CELL_PADDING_X,
+            y: lineY,
+            size: PDF_BODY_FONT_SIZE,
+            font: bodyFont,
+            color: rgb(0.15, 0.18, 0.24),
+          });
+          lineY -= PDF_LINE_HEIGHT;
+        });
+
+        if (index < row.wrappedCells.length - 1) {
+          page.drawLine({
+            start: { x: cellX + width, y: rowBottom },
+            end: { x: cellX + width, y: rowTop },
+            color: rgb(0.88, 0.91, 0.95),
+            thickness: 1,
+          });
+        }
+        cellX += width;
+      });
+
+      cursorY = rowBottom;
+      rowIndex += 1;
+      pageRowCount += 1;
     }
   }
 
-  const pageWidth = 595;
-  const pageHeight = 842;
-  const marginLeft = 40;
-  const marginTop = 800;
-  const lineHeight = 14;
-  const maxLinesPerPage = 52;
-  const pages: string[][] = [];
-  for (let index = 0; index < lines.length; index += maxLinesPerPage) {
-    pages.push(lines.slice(index, index + maxLinesPerPage));
-  }
+  pdfDocument.getPages().forEach((page, index, allPages) => {
+    page.drawText(`Page ${index + 1} of ${allPages.length}`, {
+      x: PDF_PAGE_WIDTH - PDF_MARGIN - 86,
+      y: PDF_MARGIN - 10,
+      size: 9,
+      font: bodyFont,
+      color: rgb(0.4, 0.47, 0.58),
+    });
+  });
 
-  const objects: string[] = [];
-  const pageObjectNumbers: number[] = [];
-  const contentObjectNumbers: number[] = [];
-
-  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
-  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>";
-
-  let nextObjectNumber = 4;
-  for (const pageLines of pages) {
-    const pageObject = nextObjectNumber++;
-    const contentObject = nextObjectNumber++;
-    pageObjectNumbers.push(pageObject);
-    contentObjectNumbers.push(contentObject);
-
-    const textCommands = pageLines
-      .map((line, lineIndex) => {
-        const y = marginTop - lineIndex * lineHeight;
-        return `1 0 0 1 ${marginLeft} ${y} Tm (${escapePdfText(line)}) Tj`;
-      })
-      .join("\n");
-
-    const stream = `BT\n/F1 10 Tf\n${textCommands}\nET`;
-    objects[contentObject] = `<< /Length ${Buffer.byteLength(stream, "utf8")} >>\nstream\n${stream}\nendstream`;
-    objects[pageObject] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObject} 0 R >>`;
-  }
-
-  objects[2] = `<< /Type /Pages /Count ${pageObjectNumbers.length} /Kids [${pageObjectNumbers.map((item) => `${item} 0 R`).join(" ")}] >>`;
-
-  const maxObjectNumber = objects.length - 1;
-  let pdf = "%PDF-1.4\n";
-  const offsets: number[] = [0];
-
-  for (let objectNumber = 1; objectNumber <= maxObjectNumber; objectNumber += 1) {
-    offsets[objectNumber] = Buffer.byteLength(pdf, "utf8");
-    pdf += `${objectNumber} 0 obj\n${objects[objectNumber]}\nendobj\n`;
-  }
-
-  const xrefStart = Buffer.byteLength(pdf, "utf8");
-  pdf += `xref\n0 ${maxObjectNumber + 1}\n`;
-  pdf += "0000000000 65535 f \n";
-  for (let objectNumber = 1; objectNumber <= maxObjectNumber; objectNumber += 1) {
-    pdf += `${String(offsets[objectNumber]).padStart(10, "0")} 00000 n \n`;
-  }
-  pdf += `trailer\n<< /Size ${maxObjectNumber + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
-
-  return Buffer.from(pdf, "utf8");
+  return Buffer.from(await pdfDocument.save());
 }
 
 export async function generateReportExport(actor: ReportActor, reportType: ReportTypeKey, formatType: ReportFormat, filters: ReportFilters): Promise<ReportExportResult> {
@@ -1274,7 +1508,7 @@ export async function generateReportExport(actor: ReportActor, reportType: Repor
   }
 
   return {
-    buffer: buildPdfBuffer(document),
+    buffer: await buildPdfBuffer(document),
     contentType: "application/pdf",
     fileName,
     rowCount: document.rows.length,
