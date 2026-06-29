@@ -7544,6 +7544,12 @@ function TodayTasksExecutionView({
     setOpen(true);
   }, []);
 
+  const handleTaskEdit = React.useCallback((task: TodayTaskApiRow) => {
+    setEditingTask(task);
+    setDetailItem(null);
+    setOpen(true);
+  }, []);
+
   const handleAddFollowUp = React.useCallback((task: CompletedWorkItem) => {
     setFollowUpTask({
       id: task.sourceId,
@@ -7720,7 +7726,7 @@ function TodayTasksExecutionView({
                   emptyMessage="No personal tasks due right now."
                   activeItemId={completionItem?.id ?? null}
                   onOpen={setDetailItem}
-                  onEdit={setEditingTask}
+                  onEdit={handleTaskEdit}
                   onDelete={(task) => void handleTaskDelete(task)}
                   onEditFollowUp={setEditingFollowUp}
                   onDeleteFollowUp={(task) => void handleFollowUpDelete(task)}
@@ -7805,7 +7811,7 @@ function TodayTasksExecutionView({
                   emptyMessage={role === "ADMIN" ? "No assigned or created work log is pending right now." : "No pending work items match this view."}
                   activeItemId={completionItem?.id ?? null}
                   onOpen={setDetailItem}
-                  onEdit={setEditingTask}
+                  onEdit={handleTaskEdit}
                   onDelete={(task) => void handleTaskDelete(task)}
                   onEditFollowUp={setEditingFollowUp}
                   onDeleteFollowUp={(task) => void handleFollowUpDelete(task)}
