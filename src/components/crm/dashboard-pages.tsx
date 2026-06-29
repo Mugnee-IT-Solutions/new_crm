@@ -2861,6 +2861,11 @@ function MarketerTodayTaskSection({
     }
 
     if (task.sourceType === "FOLLOW_UP") {
+      if (task.taskId) {
+        setEditingTask(toEditableCompletedTaskRow(task));
+        setEditingFollowUp(null);
+        return;
+      }
       setEditingFollowUp(toEditableCompletedFollowUpItem(task));
     }
   }, []);
@@ -3053,6 +3058,7 @@ function MarketerTodayTaskSection({
 
       <FollowUpEditModal
         item={editingFollowUp}
+        workspace={workspace}
         onClose={() => setEditingFollowUp(null)}
         onSaved={(result) => {
           setEditingFollowUp(null);

@@ -98,6 +98,16 @@ export type CompletedWorkItem = {
   sourceId: string;
   sourceType: "TASK" | "FOLLOW_UP";
   taskId?: string | null;
+  linkedTaskTitle?: string | null;
+  linkedTaskDescription?: string | null;
+  linkedTaskNotes?: string | null;
+  linkedTaskReminder?: string | null;
+  linkedTaskProductId?: string | null;
+  linkedTaskProductName?: string | null;
+  linkedTaskAssignedToId?: string | null;
+  linkedTaskAssignedTo?: string | null;
+  linkedTaskPriorityKey?: "IMPORTANT" | "HIGH" | "MEDIUM" | "LOW";
+  linkedTaskDateIso?: string | null;
   title: string;
   companyName: string;
   companyPrimaryPhone: string;
@@ -957,6 +967,16 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
           select: {
             id: true,
             title: true,
+            description: true,
+            notes: true,
+            productId: true,
+            product: { select: { name: true } },
+            assignedToId: true,
+            assignedTo: { select: { name: true } },
+            priority: true,
+            reminder: true,
+            taskDate: true,
+            taskTime: true,
             assignedById: true,
             assignedBy: { select: { name: true, role: true } },
             createdAt: true,
@@ -1021,16 +1041,14 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
     const companyPrimaryPhone = normalizeQueuePhone(company?.phone);
     const companyId = company?.id ?? followUp.companyId ?? followUp.lead?.company?.id ?? null;
     const leadName = cleanQueueText(followUp.lead?.title) || cleanQueueText(followUp.lead?.customerName) || null;
+    const linkedTaskTitle = cleanQueueText(followUp.task?.title);
     const title = followUpDisplayTitle({
       note: followUp.note,
       nextDiscussionPlan: followUp.nextDiscussionPlan,
       method: followUp.method,
     });
-    const description = followUpDisplayDescription({
-      note: followUp.note,
-      nextDiscussionPlan: followUp.nextDiscussionPlan,
-      method: followUp.method,
-    });
+    const note = cleanQueueText(followUp.note);
+    const nextPlan = cleanQueueText(followUp.nextDiscussionPlan);
     const completedAt = followUp.completedAt ?? followUp.updatedAt;
     const completedBy = followUp.timelineItems[0]?.user?.name ?? followUp.assignedTo?.name ?? "-";
 
@@ -1039,18 +1057,32 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
       sourceId: followUp.id,
       sourceType: "FOLLOW_UP",
       taskId: followUp.task?.id ?? null,
-      title,
+      linkedTaskTitle: followUp.task?.title ?? null,
+      linkedTaskDescription: cleanQueueText(followUp.task?.description) || null,
+      linkedTaskNotes: cleanQueueText(followUp.task?.notes) || null,
+      linkedTaskReminder: cleanQueueText(followUp.task?.reminder) || null,
+      linkedTaskProductId: followUp.task?.productId ?? null,
+      linkedTaskProductName: cleanQueueText(followUp.task?.product?.name) || null,
+      linkedTaskAssignedToId: followUp.task?.assignedToId ?? null,
+      linkedTaskAssignedTo: cleanQueueText(followUp.task?.assignedTo?.name) || null,
+      linkedTaskPriorityKey: followUp.task?.priority ? toPriorityKey(followUp.task.priority) : undefined,
+      linkedTaskDateIso: (followUp.task?.taskTime ?? followUp.task?.taskDate)?.toISOString() ?? null,
+      title: linkedTaskTitle || title,
       companyName,
       companyPrimaryPhone,
       companyId,
-      productId: null,
+      productId: followUp.task?.productId ?? null,
       companyHref: companyId ? dashboardReturnHref(actor.role, `/customers/${companyId}`) : followUp.leadId ? `/leads/${followUp.leadId}` : null,
       leadId: followUp.leadId,
       leadName,
-      description,
-      notes: cleanQueueText(followUp.note) || "-",
+      description: note || followUpDisplayDescription({
+        note: followUp.note,
+        nextDiscussionPlan: followUp.nextDiscussionPlan,
+        method: followUp.method,
+      }),
+      notes: nextPlan || "-",
       reminder: "-",
-      productName: "-",
+      productName: cleanQueueText(followUp.task?.product?.name) || "-",
       method: cleanQueueText(followUp.method) || "Follow-up",
       assignedToId: followUp.assignedToId ?? "",
       assignedTo: followUp.assignedTo?.name ?? "-",

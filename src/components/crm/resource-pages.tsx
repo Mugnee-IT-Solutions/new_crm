@@ -2745,14 +2745,17 @@ export type EditableFollowUpModalItem = Pick<
   | "title"
   | "companyName"
   | "companyPrimaryPhone"
+  | "companyId"
   | "method"
   | "taskDateIso"
   | "description"
   | "notes"
+  | "productId"
   | "productName"
   | "priority"
   | "priorityKey"
 > & {
+  taskId?: string | null;
   statusKey: "PENDING" | "COMPLETED";
 };
 
@@ -2763,10 +2766,12 @@ function toEditableFollowUpModalItem(followUp: FollowUpRow): EditableFollowUpMod
     title: followUp.lead !== "-" ? followUp.lead : "Follow-up",
     companyName: followUp.customer,
     companyPrimaryPhone: "No phone number",
+    companyId: followUp.companyId ?? null,
     method: followUp.method,
     taskDateIso: followUp.followUpDateIso,
     description: followUp.note,
     notes: followUp.nextDiscussionPlan,
+    productId: null,
     productName: "-",
     priority: "Medium",
     priorityKey: "MEDIUM",
@@ -2778,13 +2783,16 @@ export function toEditableCompletedFollowUpItem(task: CompletedWorkItem): Editab
   return {
     sourceId: task.sourceId,
     sourceType: "FOLLOW_UP",
+    taskId: task.taskId ?? null,
     title: task.title,
     companyName: task.companyName,
     companyPrimaryPhone: task.companyPrimaryPhone,
+    companyId: task.companyId ?? null,
     method: task.method,
     taskDateIso: task.taskDateIso,
     description: task.description !== "-" ? task.description : task.method,
     notes: task.notes !== "-" ? task.notes : "",
+    productId: task.productId ?? null,
     productName: task.productName,
     priority: task.priority,
     priorityKey: task.priorityKey,
@@ -3161,6 +3169,7 @@ function CustomerViewModal({
       </FormModal>
       <FollowUpEditModal
         item={editingFollowUp}
+        workspace={taskWorkspace}
         onClose={() => setEditingFollowUp(null)}
         onSaved={() => {
           customerQuickContextCache.delete(customer.id);
@@ -6004,9 +6013,29 @@ function toEditableTaskRow(task: TodayWorkQueueItem): TodayTaskApiRow {
 }
 
 export function toEditableCompletedTaskRow(task: CompletedWorkItem): TodayTaskApiRow {
+  const linkedPriorityKey = task.linkedTaskPriorityKey;
+  const linkedPriority = linkedPriorityKey === "IMPORTANT"
+    ? "Important"
+    : linkedPriorityKey === "HIGH"
+      ? "High"
+      : linkedPriorityKey === "LOW"
+        ? "Low"
+        : "Medium";
+
   return {
     ...task,
     id: task.taskId ?? task.sourceId,
+    title: task.sourceType === "FOLLOW_UP" ? task.linkedTaskTitle ?? task.title : task.title,
+    description: task.sourceType === "FOLLOW_UP" ? task.linkedTaskDescription ?? task.description : task.description,
+    notes: task.sourceType === "FOLLOW_UP" ? task.linkedTaskNotes ?? task.notes : task.notes,
+    reminder: task.sourceType === "FOLLOW_UP" ? task.linkedTaskReminder ?? task.reminder : task.reminder,
+    productId: task.sourceType === "FOLLOW_UP" ? task.linkedTaskProductId ?? task.productId : task.productId,
+    productName: task.sourceType === "FOLLOW_UP" ? task.linkedTaskProductName ?? task.productName : task.productName,
+    assignedToId: task.sourceType === "FOLLOW_UP" ? task.linkedTaskAssignedToId ?? task.assignedToId : task.assignedToId,
+    assignedTo: task.sourceType === "FOLLOW_UP" ? task.linkedTaskAssignedTo ?? task.assignedTo : task.assignedTo,
+    priorityKey: task.sourceType === "FOLLOW_UP" ? linkedPriorityKey ?? task.priorityKey : task.priorityKey,
+    priority: task.sourceType === "FOLLOW_UP" ? (linkedPriorityKey ? linkedPriority : task.priority) : task.priority,
+    taskDateIso: task.sourceType === "FOLLOW_UP" ? task.linkedTaskDateIso ?? task.taskDateIso : task.taskDateIso,
     status: "Completed",
     statusKey: "COMPLETED",
     isPrevious: false,
@@ -6686,27 +6715,40 @@ export function TaskFollowUpModal({
 
 export function FollowUpEditModal({
   item,
+  workspace,
   onClose,
   onSaved,
   onDeleted,
 }: {
   item: EditableFollowUpModalItem | null;
+  workspace: Pick<TaskWorkspaceData, "products">;
   onClose: () => void;
   onSaved: (result?: ActionResult) => void;
   onDeleted: (result?: ActionResult) => void;
 }) {
+  const taskTitleOptions = ["Call", "Follow-up", "Demo Send", "Quotation", "Sale"];
   const [method, setMethod] = React.useState("Phone Call");
   const [followUpDate, setFollowUpDate] = React.useState(dateTimeLocalValue().slice(0, 10));
   const [followUpTime, setFollowUpTime] = React.useState("");
   const [note, setNote] = React.useState("");
   const [nextDiscussionPlan, setNextDiscussionPlan] = React.useState("");
+  const [taskTitle, setTaskTitle] = React.useState("Follow-up");
+  const [selectedProductId, setSelectedProductId] = React.useState("");
   const [pending, setPending] = React.useState(false);
   const [message, setMessage] = React.useState("");
   const isCompletedItem = item?.statusKey === "COMPLETED";
   const modalTitle = isCompletedItem ? "Edit Task" : "Edit Follow-up";
-  const productLabel = item?.productName && item.productName !== "-" ? item.productName : "No product selected";
   const phoneLabel = item?.companyPrimaryPhone && item.companyPrimaryPhone !== "-" ? item.companyPrimaryPhone : "No phone number";
   const priorityLabel = item?.priority ?? "Medium";
+  const linkedProductOption = React.useMemo(() => {
+    if (!item?.productName || item.productName === "-" || !isCompletedItem) return null;
+    if (workspace.products.some((product) => product.id === selectedProductId || product.name === item.productName)) return null;
+    return { id: "__linked_product__", name: item.productName };
+  }, [isCompletedItem, item?.productName, selectedProductId, workspace.products]);
+  const visibleProducts = React.useMemo(
+    () => linkedProductOption ? [linkedProductOption, ...workspace.products] : workspace.products,
+    [linkedProductOption, workspace.products],
+  );
 
   React.useEffect(() => {
     if (!item || item.sourceType !== "FOLLOW_UP") {
@@ -6715,6 +6757,8 @@ export function FollowUpEditModal({
       setFollowUpTime("");
       setNote("");
       setNextDiscussionPlan("");
+      setTaskTitle("Follow-up");
+      setSelectedProductId("");
       setMessage("");
       return;
     }
@@ -6725,8 +6769,14 @@ export function FollowUpEditModal({
     setFollowUpTime(hasTime ? dateTimeLocalValue(baseDate).slice(11, 16) : "");
     setNote(item.description !== "-" ? item.description : "");
     setNextDiscussionPlan(item.notes !== "-" ? item.notes : "");
+    const normalizedTaskTitle = normalizeCrmPipelineStep(item.title);
+    setTaskTitle(normalizedTaskTitle === "Sale Won" ? "Sale" : normalizedTaskTitle === "Lead Lost" ? "Follow-up" : normalizedTaskTitle ?? "Follow-up");
+    const matchedProductId = item.productId
+      ?? workspace.products.find((product) => product.name === item.productName)?.id
+      ?? (item.productName && item.productName !== "-" ? "__linked_product__" : "");
+    setSelectedProductId(matchedProductId);
     setMessage("");
-  }, [item]);
+  }, [item, workspace.products]);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -6786,15 +6836,27 @@ export function FollowUpEditModal({
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="space-y-1.5">
                   <span className="text-sm font-semibold text-slate-700">Task Title</span>
-                  <Input value={item.title} readOnly className="font-semibold" />
+                  <select
+                    value={taskTitle}
+                    onChange={(event) => setTaskTitle(event.target.value)}
+                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                  >
+                    {taskTitleOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </select>
                 </label>
                 <label className="space-y-1.5">
                   <span className="text-sm font-semibold text-slate-700">Product</span>
-                  <Input value={productLabel} readOnly className="font-semibold" />
+                  <select
+                    value={selectedProductId}
+                    onChange={(event) => setSelectedProductId(event.target.value)}
+                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                  >
+                    <option value="">Select product</option>
+                    {visibleProducts.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
+                  </select>
                 </label>
               </div>
               <div className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/80 p-4">
-                <p className="text-sm font-semibold text-slate-700">Completed follow-up er saved info ekhane task popup-style e dekhte ar update korte parben.</p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-3">
                   <label className="space-y-1.5 sm:col-span-2">
                     <span className="text-sm font-semibold text-slate-700">Company Name</span>
@@ -7836,6 +7898,13 @@ function TodayTasksExecutionView({
     }
 
     if (task.sourceType === "FOLLOW_UP") {
+      if (task.taskId) {
+        setEditingTask(toEditableCompletedTaskRow(task));
+        setEditingFollowUp(null);
+        setDetailItem(null);
+        setOpen(true);
+        return;
+      }
       setEditingFollowUp(toEditableCompletedFollowUpItem(task));
       setDetailItem(null);
     }
@@ -7961,7 +8030,13 @@ function TodayTasksExecutionView({
         const completedFollowUp = completedTasks.find((item) => item.sourceType === "FOLLOW_UP" && item.sourceId === editFollowUpId);
         if (completedFollowUp) {
           setDetailItem(null);
-          setEditingFollowUp(toEditableCompletedFollowUpItem(completedFollowUp));
+          if (completedFollowUp.taskId) {
+            setEditingTask(toEditableCompletedTaskRow(completedFollowUp));
+            setEditingFollowUp(null);
+            setOpen(true);
+          } else {
+            setEditingFollowUp(toEditableCompletedFollowUpItem(completedFollowUp));
+          }
           handled = true;
         }
       }
@@ -8158,6 +8233,7 @@ function TodayTasksExecutionView({
       />
       <FollowUpEditModal
         item={editingFollowUp}
+        workspace={workspace}
         onClose={() => setEditingFollowUp(null)}
         onSaved={(result) => {
           setEditingFollowUp(null);
