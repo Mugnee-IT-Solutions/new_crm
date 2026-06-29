@@ -12,6 +12,12 @@ function normalizeLimit(value: string | null) {
   return Math.min(parsed, 24);
 }
 
+function extractCustomerId(href?: string | null) {
+  if (!href) return undefined;
+  const match = href.match(/\/customers\/([^/?#]+)/i);
+  return match?.[1];
+}
+
 export async function GET(request: Request) {
   try {
     const auth = await requireRequestUser(["ADMIN", "SUPERVISOR", "MARKETER"]);
@@ -35,6 +41,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       success: true,
       rows: rows.map((row) => ({
+        customerId: extractCustomerId(row.customerHref ?? row.relatedCustomerHref ?? row.href),
         id: row.id,
         href: row.href ?? row.customerHref ?? row.relatedCustomerHref,
         actionHref:

@@ -2677,7 +2677,7 @@ function buildCustomerReturnHref(pathname: string, searchParams: ReturnType<type
   return `${pathname}${query ? `?${query}` : ""}`;
 }
 
-function useCustomerQuickContext(customerId: string | null | undefined, open: boolean) {
+function useCustomerQuickContext(customerId: string | null | undefined, open: boolean, refreshKey = 0) {
   const [payload, setPayload] = React.useState<CustomerQuickContextPayload | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -2689,7 +2689,7 @@ function useCustomerQuickContext(customerId: string | null | undefined, open: bo
       return;
     }
 
-    const cached = customerQuickContextCache.get(customerId);
+    const cached = refreshKey === 0 ? customerQuickContextCache.get(customerId) : undefined;
     if (cached) {
       setPayload(cached);
       setLoading(false);
@@ -2729,7 +2729,7 @@ function useCustomerQuickContext(customerId: string | null | undefined, open: bo
 
     void load();
     return () => controller.abort();
-  }, [customerId, open]);
+  }, [customerId, open, refreshKey]);
 
   return {
     payload,
@@ -2738,20 +2738,101 @@ function useCustomerQuickContext(customerId: string | null | undefined, open: bo
   };
 }
 
+type EditableFollowUpModalItem = Pick<TodayWorkQueueItem, "sourceId" | "sourceType" | "title" | "companyName" | "method" | "taskDateIso" | "description" | "notes">;
+
+function toEditableFollowUpModalItem(followUp: FollowUpRow): EditableFollowUpModalItem {
+  return {
+    sourceId: followUp.id,
+    sourceType: "FOLLOW_UP",
+    title: followUp.lead !== "-" ? followUp.lead : "Follow-up",
+    companyName: followUp.customer,
+    method: followUp.method,
+    taskDateIso: followUp.followUpDateIso,
+    description: followUp.note,
+    notes: followUp.nextDiscussionPlan,
+  };
+}
+
+type EditableTaskModalItem = {
+  id?: string;
+  title: string;
+  companyId?: string | null;
+  companyName: string;
+  description: string;
+  notes: string;
+  productId?: string | null;
+  assignedToId?: string | null;
+  priorityKey: "IMPORTANT" | "HIGH" | "MEDIUM" | "LOW";
+  taskDateIso: string;
+  reminder: string;
+  statusKey: "PENDING" | "COMPLETED";
+};
+
+function normalizeEditableTaskPriorityKey(priority: TaskRow["priorityKey"] | undefined): EditableTaskModalItem["priorityKey"] {
+  if (priority === "URGENT") return "IMPORTANT";
+  return priority ?? "MEDIUM";
+}
+
+function normalizeEditableTaskStatusKey(status: TaskRow["statusKey"] | undefined): EditableTaskModalItem["statusKey"] {
+  if (status === "COMPLETED") return "COMPLETED";
+  return "PENDING";
+}
+
+function toEditableTaskModalItem(task: TaskRow): EditableTaskModalItem {
+  return {
+    id: task.id,
+    title: task.title,
+    companyId: task.companyId,
+    companyName: task.companyName || task.relatedTo || "-",
+    description: task.description !== "-" ? task.description : "",
+    notes: task.notes !== "-" ? task.notes : "",
+    productId: task.productId,
+    assignedToId: task.assignedToId,
+    priorityKey: normalizeEditableTaskPriorityKey(task.priorityKey),
+    taskDateIso: task.taskDateIso,
+    reminder: task.reminder !== "-" ? task.reminder : "",
+    statusKey: normalizeEditableTaskStatusKey(task.statusKey),
+  };
+}
+
+function buildCustomerTaskDraft(customer: CompanyRow): EditableTaskModalItem {
+  return {
+    title: "Call",
+    companyId: customer.id,
+    companyName: customer.name,
+    description: "",
+    notes: "",
+    productId: "",
+    assignedToId: customer.assignedToId ?? "",
+    priorityKey: "MEDIUM",
+    taskDateIso: new Date().toISOString(),
+    reminder: "",
+    statusKey: "PENDING",
+  };
+}
+
 function CustomerQuickSummaryPanel({
   customer,
   open,
   role,
   compact = false,
+  refreshKey = 0,
+  onEditFollowUp,
+  onAddTask,
+  onEditTask,
 }: {
   customer: CompanyRow | null;
   open: boolean;
   role: Role;
   compact?: boolean;
+  refreshKey?: number;
+  onEditFollowUp?: (item: EditableFollowUpModalItem) => void;
+  onAddTask?: (item: EditableTaskModalItem) => void;
+  onEditTask?: (item: EditableTaskModalItem) => void;
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { payload, loading, error } = useCustomerQuickContext(customer?.id, open);
+  const { payload, loading, error } = useCustomerQuickContext(customer?.id, open, refreshKey);
 
   if (!customer) return null;
 
@@ -2810,10 +2891,12 @@ function CustomerQuickSummaryPanel({
   );
   const returnTo = buildCustomerReturnHref(pathname, searchParams);
   const profileHref = `/customers/${profileCustomer.id}?returnTo=${encodeURIComponent(returnTo)}`;
-  const taskBoardHref = rolePath(role, "tasks");
   const communicationHref = `${rolePath(role, "communication")}?activity=${encodeURIComponent(profileCustomer.name)}`;
-  const latestTaskHref = latestTask ? `${taskBoardHref}?editTaskId=${encodeURIComponent(latestTask.id)}` : "";
-  const latestFollowUpHref = latestFollowUp ? `${taskBoardHref}?editFollowUpId=${encodeURIComponent(latestFollowUp.id)}` : "";
+  const latestTaskHref = latestTask ? `${rolePath(role, "tasks")}?editTaskId=${encodeURIComponent(latestTask.id)}` : "";
+  const latestFollowUpHref = latestFollowUp ? `${rolePath(role, "tasks")}?editFollowUpId=${encodeURIComponent(latestFollowUp.id)}` : "";
+  const latestFollowUpItem = latestFollowUp ? toEditableFollowUpModalItem(latestFollowUp) : null;
+  const addTaskItem = buildCustomerTaskDraft(profileCustomer);
+  const latestTaskItem = latestTask ? toEditableTaskModalItem(latestTask) : null;
   const countTasks = payload?.counts?.tasks ?? history?.tasks.length ?? 0;
   const countFollowUps = payload?.counts?.followUps ?? history?.followUps.length ?? 0;
   const countCommunications = payload?.counts?.communications ?? history?.communications.length ?? 0;
@@ -2831,6 +2914,23 @@ function CustomerQuickSummaryPanel({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {onAddTask ? (
+            <Button type="button" variant="outline" size="sm" onClick={() => onAddTask(addTaskItem)}>
+              <CalendarClock className="h-4 w-4" />
+              Add Task
+            </Button>
+          ) : null}
+          {latestTaskItem && onEditTask ? (
+            <Button type="button" variant="outline" size="sm" onClick={() => onEditTask(latestTaskItem)}>
+              <Edit className="h-4 w-4" />
+              Edit Task
+            </Button>
+          ) : latestTaskHref ? (
+            <Link href={latestTaskHref} className={buttonVariants({ variant: "outline", size: "sm" })}>
+              <Edit className="h-4 w-4" />
+              Edit Task
+            </Link>
+          ) : null}
           <Link href={profileHref} className={buttonVariants({ variant: "outline", size: "sm" })}>
             <Eye className="h-4 w-4" />
             Full Profile
@@ -2863,12 +2963,19 @@ function CustomerQuickSummaryPanel({
           <p className="mt-2 text-sm font-black text-slate-950">{nextFollowUpTitle}</p>
           <p className="mt-1 text-xs font-semibold text-slate-500">{nextFollowUpMeta}</p>
           <p className="mt-3 text-xs leading-5 text-slate-600">{nextFollowUpDetail}</p>
-          {latestFollowUpHref ? (
+          {latestFollowUpItem ? (
             <div className="mt-3">
-              <Link href={latestFollowUpHref} className={buttonVariants({ variant: "outline", size: "sm" })}>
-                <Edit className="h-4 w-4" />
-                Edit Follow-up
-              </Link>
+              {onEditFollowUp ? (
+                <Button type="button" variant="outline" size="sm" onClick={() => onEditFollowUp(latestFollowUpItem)}>
+                  <Edit className="h-4 w-4" />
+                  Edit Follow-up
+                </Button>
+              ) : latestFollowUpHref ? (
+                <Link href={latestFollowUpHref} className={buttonVariants({ variant: "outline", size: "sm" })}>
+                  <Edit className="h-4 w-4" />
+                  Edit Follow-up
+                </Link>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -2878,18 +2985,21 @@ function CustomerQuickSummaryPanel({
             <p className="mt-2 text-sm font-black text-slate-950">{latestTaskTitle}</p>
             <p className="mt-1 text-xs font-semibold text-slate-500">{latestTaskMeta}</p>
             <p className="mt-3 text-xs leading-5 text-slate-600">{latestTaskDetail}</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {latestTaskHref ? (
+            {latestTaskItem && onEditTask ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => onEditTask(latestTaskItem)}>
+                  <Edit className="h-4 w-4" />
+                  Edit Task
+                </Button>
+              </div>
+            ) : latestTaskHref ? (
+              <div className="mt-3 flex flex-wrap gap-2">
                 <Link href={latestTaskHref} className={buttonVariants({ variant: "outline", size: "sm" })}>
                   <Edit className="h-4 w-4" />
                   Edit Task
                 </Link>
-              ) : null}
-              <Link href={taskBoardHref} className={buttonVariants({ variant: "outline", size: "sm" })}>
-                <CalendarClock className="h-4 w-4" />
-                Task Board
-              </Link>
-            </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -2926,39 +3036,120 @@ function CustomerQuickSummaryPanel({
 
 function CustomerViewModal({
   role,
+  workspace,
   customer,
   open,
   onClose,
 }: {
   role: Role;
+  workspace: CrmWorkspace;
   customer: CompanyRow | null;
   open: boolean;
   onClose: () => void;
 }) {
+  const [editingFollowUp, setEditingFollowUp] = React.useState<EditableFollowUpModalItem | null>(null);
+  const [editingTask, setEditingTask] = React.useState<EditableTaskModalItem | null>(null);
+  const [refreshKey, setRefreshKey] = React.useState(0);
+  const taskWorkspace = React.useMemo<TaskWorkspaceData>(() => ({
+    user: {
+      id: workspace.user.id ?? "",
+      name: workspace.user.name,
+      email: workspace.user.email ?? "",
+      mobile: workspace.user.mobile ?? "",
+      role: workspace.user.role,
+      designation: workspace.user.designation ?? "",
+    },
+    employees: workspace.employees.map((employee) => ({
+      id: employee.id,
+      name: employee.name,
+      role: employee.role,
+      roleKey: employee.roleKey,
+      status: employee.status,
+      statusKey: employee.statusKey,
+      designation: employee.designation,
+      supervisorId: employee.supervisorId,
+    })),
+    products: workspace.products.map((product) => ({
+      id: product.id,
+      name: product.name,
+    })),
+  }), [workspace]);
+
+  React.useEffect(() => {
+    if (!open) {
+      setEditingFollowUp(null);
+      setEditingTask(null);
+      setRefreshKey(0);
+      return;
+    }
+
+    setEditingFollowUp(null);
+    setEditingTask(null);
+  }, [customer?.id, open]);
+
   if (!customer) return null;
 
   return (
-    <FormModal open={open} title={customer.name || "Customer"} onClose={onClose} panelClassName="max-w-4xl">
-      <div className="space-y-4">
-        <CustomerQuickSummaryPanel customer={customer} open={open} role={role} />
-        <dl className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          <DetailRow label="Added By" value={customer.createdBy || customer.assignedTo || "-"} />
-          <DetailRow label="Added On" value={customer.createdAtLabel || "-"} />
-          <DetailRow label="Contact Person" value={customer.contactPerson || "-"} />
-          <DetailRow label="Phone" value={customer.phone || "-"} />
-          <DetailRow label="WhatsApp" value={customer.whatsapp || "-"} />
-          <DetailRow label="Email" value={customer.email || "-"} />
-          <DetailRow label="Website" value={customer.website || "-"} />
-          <DetailRow label="Industry" value={customer.industry || "-"} />
-          <DetailRow label="Address" value={customer.address || "-"} />
-          <DetailRow label="Assigned User" value={customer.assignedTo || "-"} />
-          <DetailRow label="Lead Count" value={String(customer.totalLeads ?? 0)} />
-          <DetailRow label="Last Communication" value={customer.lastCommunication || "-"} />
-          <DetailRow label="Status" value={customer.status || "-"} />
-          <DetailRow label="Notes" value={customer.notes || "-"} />
-        </dl>
-      </div>
-    </FormModal>
+    <>
+      <FormModal open={open} title={customer.name || "Customer"} onClose={onClose} panelClassName="max-w-4xl">
+        <div className="space-y-4">
+          <CustomerQuickSummaryPanel
+            customer={customer}
+            open={open}
+            role={role}
+            refreshKey={refreshKey}
+            onEditFollowUp={setEditingFollowUp}
+            onAddTask={setEditingTask}
+            onEditTask={setEditingTask}
+          />
+          <dl className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <DetailRow label="Added By" value={customer.createdBy || customer.assignedTo || "-"} />
+            <DetailRow label="Added On" value={customer.createdAtLabel || "-"} />
+            <DetailRow label="Contact Person" value={customer.contactPerson || "-"} />
+            <DetailRow label="Phone" value={customer.phone || "-"} />
+            <DetailRow label="WhatsApp" value={customer.whatsapp || "-"} />
+            <DetailRow label="Email" value={customer.email || "-"} />
+            <DetailRow label="Website" value={customer.website || "-"} />
+            <DetailRow label="Industry" value={customer.industry || "-"} />
+            <DetailRow label="Address" value={customer.address || "-"} />
+            <DetailRow label="Assigned User" value={customer.assignedTo || "-"} />
+            <DetailRow label="Lead Count" value={String(customer.totalLeads ?? 0)} />
+            <DetailRow label="Last Communication" value={customer.lastCommunication || "-"} />
+            <DetailRow label="Status" value={customer.status || "-"} />
+            <DetailRow label="Notes" value={customer.notes || "-"} />
+          </dl>
+        </div>
+      </FormModal>
+      <FollowUpEditModal
+        item={editingFollowUp}
+        onClose={() => setEditingFollowUp(null)}
+        onSaved={() => {
+          customerQuickContextCache.delete(customer.id);
+          setRefreshKey((current) => current + 1);
+        }}
+        onDeleted={() => {
+          customerQuickContextCache.delete(customer.id);
+          setRefreshKey((current) => current + 1);
+        }}
+      />
+      <TaskCreateModal
+        open={Boolean(editingTask)}
+        onClose={() => setEditingTask(null)}
+        onCreated={() => {
+          customerQuickContextCache.delete(customer.id);
+          setRefreshKey((current) => current + 1);
+          setEditingTask(null);
+        }}
+        onDeleted={() => {
+          customerQuickContextCache.delete(customer.id);
+          setRefreshKey((current) => current + 1);
+          setEditingTask(null);
+        }}
+        role={role}
+        workspace={taskWorkspace}
+        initialTask={editingTask}
+      />
+    </>
   );
 }
 
@@ -4713,7 +4904,9 @@ function BulkCustomerAssignModal({
 }
 
 export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
+  const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const skippedInitialRefreshRef = React.useRef(false);
   const [open, setOpen] = React.useState(false);
   const [spreadsheetImportOpen, setSpreadsheetImportOpen] = React.useState(false);
@@ -4779,6 +4972,14 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   const handleEditCustomer = React.useCallback((customer: CompanyRow) => {
     setEditCustomer(customer);
   }, []);
+
+  const clearCustomerModalParams = React.useCallback((paramKey: "editCustomerId") => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (!params.has(paramKey)) return;
+    params.delete(paramKey);
+    const nextQuery = params.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+  }, [pathname, router, searchParams]);
 
   const handleDeleteCustomer = React.useCallback((customer: CompanyRow) => {
     setDeleteError("");
@@ -4912,6 +5113,17 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
   React.useEffect(() => {
     setSelectedCustomerIds((current) => current.filter((id) => visibleCustomers.some((customer) => customer.id === id)));
   }, [visibleCustomers]);
+
+  React.useEffect(() => {
+    const editCustomerId = searchParams.get("editCustomerId")?.trim();
+    if (!editCustomerId) return;
+
+    const matchedCustomer = customers.find((customer) => customer.id === editCustomerId);
+    if (!matchedCustomer) return;
+
+    setEditCustomer(matchedCustomer);
+    clearCustomerModalParams("editCustomerId");
+  }, [clearCustomerModalParams, customers, searchParams]);
 
   React.useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -5265,7 +5477,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
           });
         }}
       />
-      <CustomerViewModal role={role} open={Boolean(viewCustomer)} customer={viewCustomer} onClose={() => setViewCustomer(null)} />
+      <CustomerViewModal role={role} workspace={workspace} open={Boolean(viewCustomer)} customer={viewCustomer} onClose={() => setViewCustomer(null)} />
       <CustomerEditModal workspace={workspace} customer={editCustomer} open={Boolean(editCustomer)} onDone={handleEditDone} onClose={() => setEditCustomer(null)} />
       <FormModal open={Boolean(deleteCustomer)} title="Delete Customer" onClose={() => !deleting && setDeleteCustomer(null)} panelClassName="max-w-md">
         {deleteCustomer ? (
@@ -5957,7 +6169,7 @@ export function TaskCreateModal({
   onDeleted?: (taskId: string) => void;
   role: Role;
   workspace: TaskWorkspaceData;
-  initialTask?: TodayTaskApiRow | null;
+  initialTask?: EditableTaskModalItem | null;
 }) {
   const [title, setTitle] = React.useState("Call");
   const [companyId, setCompanyId] = React.useState("");
@@ -6439,7 +6651,7 @@ export function FollowUpEditModal({
   onSaved,
   onDeleted,
 }: {
-  item: TodayWorkQueueItem | null;
+  item: EditableFollowUpModalItem | null;
   onClose: () => void;
   onSaved: (result?: ActionResult) => void;
   onDeleted: (result?: ActionResult) => void;

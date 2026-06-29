@@ -82,6 +82,7 @@ export type TaskRow = {
   leadId?: string | null;
   companyName?: string | null;
   leadName?: string | null;
+  productId?: string | null;
   assignedToId?: string | null;
   href?: string;
   title: string;
@@ -91,10 +92,13 @@ export type TaskRow = {
   relatedTo: string;
   product: string;
   taskDate: string;
+  taskDateIso: string;
   dueDate: string;
   time: string;
   priority: string;
+  priorityKey: "URGENT" | "IMPORTANT" | "HIGH" | "MEDIUM" | "LOW";
   status: string;
+  statusKey: string;
   isPrevious: boolean;
   completedAt: string;
   completedBy: string;
@@ -130,6 +134,7 @@ export type FollowUpRow = {
   status: string;
   bucket: "Overdue" | "Due Today" | "Upcoming" | "Completed";
   followUpDate: string;
+  followUpDateIso: string;
   assignedTo: string;
   priority: string;
   createdBy: string;
@@ -1629,6 +1634,7 @@ function mapTaskRow(task: TaskRecord): TaskRow {
     leadId: task.leadId,
     companyName: (task as { companyName?: string | null }).companyName,
     leadName: (task as { leadName?: string | null }).leadName,
+    productId: task.productId,
     href: linkedEntityHref({ leadId: task.leadId, companyId: task.companyId }),
     title: task.title,
     description: task.description ?? "-",
@@ -1638,10 +1644,13 @@ function mapTaskRow(task: TaskRecord): TaskRow {
     relatedTo: task.company?.name ?? task.lead?.title ?? (task as { companyName?: string | null }).companyName ?? (task as { leadName?: string | null }).leadName ?? "-",
     product: task.product?.name ?? "-",
     taskDate: dateLabel(taskDate),
+    taskDateIso: taskDate.toISOString(),
     dueDate: dateLabel(task.dueDate ?? taskDate),
     time: dateLabel(task.taskTime ?? taskDate, "hh:mm a"),
     priority: labelize(task.priority),
+    priorityKey: task.priority,
     status: task.status,
+    statusKey: task.status,
     isPrevious: previous,
     completedAt: dateLabel(task.completedAt, "dd/MM/yyyy hh:mm a"),
     completedBy: task.completedBy?.name ?? "-",
@@ -1668,6 +1677,7 @@ function mapFollowUpRow(followUp: FollowUpRecord): FollowUpRow {
     status: bucket,
     bucket,
     followUpDate: dateLabel(followUp.followUpDate, "dd/MM/yyyy hh:mm a"),
+    followUpDateIso: followUp.followUpDate.toISOString(),
     assignedTo: followUp.assignedTo?.name ?? "-",
     priority: labelize(followUpPriority ?? "MEDIUM"),
     createdBy: followUp.timelineItems[0]?.user?.name ?? "-",
@@ -3114,7 +3124,7 @@ export async function searchCrmActivities({
 
   const seen = new Set<string>();
   const merged: ActivityRow[] = [];
-  for (const row of [...directRows, ...activityRows, ...customerRows]) {
+  for (const row of [...customerRows, ...directRows, ...activityRows]) {
     const key = normalizeActivitySearchRowKey(row);
     if (seen.has(key)) continue;
     seen.add(key);

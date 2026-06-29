@@ -5,12 +5,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { gsap } from "gsap";
-import { ArrowRight, Bell, CheckCheck, LogOut, Menu, MessageSquare, Search, UserRound, X } from "lucide-react";
+import { ArrowRight, Bell, CalendarClock, CheckCheck, Eye, LogOut, Menu, MessageSquare, RefreshCw, Search, UserRound, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useNotificationCenterContext } from "@/components/app/app-shell";
+import { FormModal } from "@/components/shared/form-modal";
+import { StatusBadge } from "@/components/shared/status-badge";
 import { formatCrmDate } from "@/lib/crm-time";
+import type { CompanyRow, CustomerHistory, CustomerJourneySummary } from "@/lib/crm-data";
 import { cn, initials, roleLabels, rolePath, type Role, type ShellUser } from "@/lib/utils";
 
 function notificationPageHref(role: Role) {
@@ -19,6 +22,7 @@ function notificationPageHref(role: Role) {
 
 type ActivitySearchResultRow = {
   id: string;
+  customerId?: string;
   href?: string;
   actionHref?: string;
   title: string;
@@ -32,6 +36,196 @@ type ActivitySearchResultRow = {
   taskId?: string;
   followUpId?: string;
 };
+
+type CustomerQuickContextPayload = {
+  success?: boolean;
+  message?: string;
+  profileCustomer?: CompanyRow;
+  history?: CustomerHistory;
+  journey?: CustomerJourneySummary;
+  counts?: {
+    tasks: number;
+    followUps: number;
+    communications: number;
+  };
+};
+
+type CustomerLookupRow = {
+  id: string;
+  companyName?: string;
+  contactPerson?: string | null;
+  phone?: string | null;
+};
+
+function normalizeCustomerSearchText(value?: string | null) {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function pickBestCustomerMatch(query: string, rows: CustomerLookupRow[]) {
+  const normalizedQuery = normalizeCustomerSearchText(query);
+  if (!normalizedQuery) return rows[0] ?? null;
+
+  const exactMatch = rows.find((row) => normalizeCustomerSearchText(row.companyName) === normalizedQuery);
+  if (exactMatch) return exactMatch;
+
+  const startsWithMatch = rows.find((row) => normalizeCustomerSearchText(row.companyName).startsWith(normalizedQuery));
+  if (startsWithMatch) return startsWithMatch;
+
+  return rows[0] ?? null;
+}
+
+function CustomerQuickSearchModal({
+  role,
+  customerId,
+  payload,
+  loading,
+  error,
+  onNavigate,
+  onClose,
+}: {
+  role: Role;
+  customerId: string | null;
+  payload: CustomerQuickContextPayload | null;
+  loading: boolean;
+  error: string | null;
+  onNavigate: (href: string) => void;
+  onClose: () => void;
+}) {
+  const customer = payload?.profileCustomer;
+  const fullProfileHref = customerId ? `/customers/${customerId}` : "";
+  const activityHref = customer?.name
+    ? `${rolePath(role, "communication")}?activity=${encodeURIComponent(customer.name)}`
+    : rolePath(role, "communication");
+  const latestTaskId = payload?.history?.tasks[0]?.id;
+  const latestFollowUpId = payload?.history?.followUps[0]?.id;
+  const latestTaskHref = latestTaskId ? `${rolePath(role, "tasks")}?editTaskId=${encodeURIComponent(latestTaskId)}` : "";
+  const latestFollowUpHref = latestFollowUpId ? `${rolePath(role, "tasks")}?editFollowUpId=${encodeURIComponent(latestFollowUpId)}` : "";
+
+  return (
+    <FormModal
+      open={Boolean(customerId)}
+      title={customer?.name || "Customer quick view"}
+      onClose={onClose}
+      panelClassName="max-w-4xl"
+    >
+      {loading ? (
+        <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-600">
+          <RefreshCw className="h-4 w-4 animate-spin" />
+          Loading customer CRM context...
+        </div>
+      ) : error ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm font-semibold text-red-700">
+          {error}
+        </div>
+      ) : customer ? (
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-slate-50 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-blue-600">Customer Snapshot</p>
+                <h3 className="mt-1 text-xl font-black text-slate-950">{customer.name}</h3>
+                <p className="mt-2 text-sm text-slate-600">
+                  {payload?.journey?.stageSummary || "Recent communication, follow-up, ar task snapshot ekhane dekhano hocche."}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="neutral">{payload?.journey?.currentStage || "Profile"}</Badge>
+                {payload?.journey?.status ? <StatusBadge value={payload.journey.status} /> : null}
+                {payload?.journey?.priority && payload.journey.priority !== "-" ? <Badge variant="warning">{payload.journey.priority} Priority</Badge> : null}
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              <div className="rounded-2xl border border-white/80 bg-white p-4 shadow-sm">
+                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Last Activity</p>
+                <p className="mt-2 text-sm font-black text-slate-950">{payload?.journey?.lastActivity || "No activity yet"}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">{payload?.journey?.lastActivityTime || "-"}</p>
+              </div>
+              <div className="rounded-2xl border border-white/80 bg-white p-4 shadow-sm">
+                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Next Follow-up</p>
+                <p className="mt-2 text-sm font-black text-slate-950">{payload?.journey?.nextFollowUp || "No upcoming follow-up"}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">{payload?.journey?.nextFollowUpStatus || "-"}</p>
+              </div>
+              <div className="rounded-2xl border border-white/80 bg-white p-4 shadow-sm">
+                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Counts</p>
+                <div className="mt-2 space-y-2 text-sm font-semibold text-slate-600">
+                  <div className="flex items-center justify-between gap-3"><span>Calls / Logs</span><span className="font-black text-slate-950">{payload?.counts?.communications ?? payload?.history?.communications.length ?? 0}</span></div>
+                  <div className="flex items-center justify-between gap-3"><span>Follow-ups</span><span className="font-black text-slate-950">{payload?.counts?.followUps ?? payload?.history?.followUps.length ?? 0}</span></div>
+                  <div className="flex items-center justify-between gap-3"><span>Tasks</span><span className="font-black text-slate-950">{payload?.counts?.tasks ?? payload?.history?.tasks.length ?? 0}</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Recent Notes</p>
+              <div className="mt-3 space-y-3">
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-xs font-bold text-slate-500">Latest communication</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-800">{payload?.history?.communications[0]?.summary || payload?.history?.communications[0]?.notes || "No communication note saved yet."}</p>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-xs font-bold text-slate-500">Latest follow-up</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-800">{payload?.history?.followUps[0]?.note || payload?.history?.followUps[0]?.nextDiscussionPlan || "No follow-up note saved yet."}</p>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <p className="text-xs font-bold text-slate-500">Latest task</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-800">{payload?.history?.tasks[0]?.notes || payload?.history?.tasks[0]?.description || payload?.history?.tasks[0]?.title || "No task note saved yet."}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Quick Actions</p>
+              <div className="mt-3 flex flex-col gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={() => onNavigate(`${rolePath(role, "customers")}?editCustomerId=${encodeURIComponent(customerId ?? "")}`)}
+                  disabled={!customerId}
+                >
+                  <CalendarClock className="h-4 w-4" />
+                  Edit Customer
+                </Button>
+                <Button type="button" variant="outline" className="w-full justify-start" onClick={() => onNavigate(fullProfileHref)} disabled={!fullProfileHref}>
+                  <Eye className="h-4 w-4" />
+                  Full Profile
+                </Button>
+                <Button type="button" variant="outline" className="w-full justify-start" onClick={() => onNavigate(activityHref)} disabled={!activityHref}>
+                  <MessageSquare className="h-4 w-4" />
+                  Activity Log
+                </Button>
+                <Button type="button" variant="outline" className="w-full justify-start" onClick={() => onNavigate(latestFollowUpHref)} disabled={!latestFollowUpHref}>
+                  <CalendarClock className="h-4 w-4" />
+                  Edit Follow-up
+                </Button>
+                <Button type="button" variant="outline" className="w-full justify-start" onClick={() => onNavigate(latestTaskHref)} disabled={!latestTaskHref}>
+                  <CalendarClock className="h-4 w-4" />
+                  Edit Task
+                </Button>
+              </div>
+
+              <div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
+                <p><span className="font-bold text-slate-900">Phone:</span> {customer.phone || "-"}</p>
+                <p className="mt-1"><span className="font-bold text-slate-900">Email:</span> {customer.email || "-"}</p>
+                <p className="mt-1"><span className="font-bold text-slate-900">Assigned:</span> {customer.assignedTo || "-"}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-600">
+          Customer details are not available right now.
+        </div>
+      )}
+    </FormModal>
+  );
+}
 
 const activitySearchSuggestions = ["Call", "Demo", "Follow-up", "Quotation", "Win", "Lost"] as const;
 
@@ -82,6 +276,10 @@ export function AppHeader({
   const [searchResults, setSearchResults] = React.useState<ActivitySearchResultRow[]>([]);
   const [searchLoading, setSearchLoading] = React.useState(false);
   const [searchError, setSearchError] = React.useState<string | null>(null);
+  const [customerQuickViewId, setCustomerQuickViewId] = React.useState<string | null>(null);
+  const [customerQuickView, setCustomerQuickView] = React.useState<CustomerQuickContextPayload | null>(null);
+  const [customerQuickViewLoading, setCustomerQuickViewLoading] = React.useState(false);
+  const [customerQuickViewError, setCustomerQuickViewError] = React.useState<string | null>(null);
   const searchRef = React.useRef<HTMLDivElement | null>(null);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
   const notificationRef = React.useRef<HTMLDivElement | null>(null);
@@ -109,6 +307,58 @@ export function AppHeader({
     const queryString = params.toString();
     return `${rolePath(role, "communication")}${queryString ? `?${queryString}` : ""}`;
   }, [role, trimmedSearchQuery]);
+
+  const openCustomerQuickView = React.useCallback((customerId: string) => {
+    setSearchOpen(false);
+    setOpen(false);
+    setProfileOpen(false);
+    setCustomerQuickViewId(customerId);
+  }, []);
+
+  const closeCustomerQuickView = React.useCallback(() => {
+    setCustomerQuickViewId(null);
+    setCustomerQuickView(null);
+    setCustomerQuickViewLoading(false);
+    setCustomerQuickViewError(null);
+  }, []);
+
+  const navigateFromQuickView = React.useCallback((href: string) => {
+    if (!href) return;
+    closeCustomerQuickView();
+    router.push(href);
+  }, [closeCustomerQuickView, router]);
+
+  const openCustomerQuickViewFromQuery = React.useCallback(async (query: string) => {
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) return false;
+
+    try {
+      const params = new URLSearchParams({
+        search: trimmedQuery,
+        limit: "8",
+      });
+      const response = await fetch(`/api/customers/list?${params.toString()}`, {
+        cache: "no-store",
+      });
+      const payload = await response.json() as {
+        success?: boolean;
+        rows?: CustomerLookupRow[];
+        message?: string;
+      };
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.rows)) {
+        return false;
+      }
+
+      const match = pickBestCustomerMatch(trimmedQuery, payload.rows);
+      if (!match?.id) return false;
+
+      openCustomerQuickView(match.id);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [openCustomerQuickView]);
 
   const updateProfilePanelPosition = React.useCallback(() => {
     if (!profileButtonRef.current || typeof window === "undefined") return;
@@ -248,6 +498,40 @@ export function AppHeader({
     };
   }, [deferredSearchQuery, searchOpen]);
 
+  React.useEffect(() => {
+    if (!customerQuickViewId) return;
+
+    const controller = new AbortController();
+    const load = async () => {
+      try {
+        setCustomerQuickViewLoading(true);
+        setCustomerQuickViewError(null);
+        const response = await fetch(`/api/customers/${customerQuickViewId}?includeHistory=1`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = await response.json() as CustomerQuickContextPayload;
+
+        if (!response.ok || !payload.success) {
+          throw new Error(payload.message ?? "Failed to load customer details.");
+        }
+
+        setCustomerQuickView(payload);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setCustomerQuickView(null);
+        setCustomerQuickViewError(error instanceof Error ? error.message : "Failed to load customer details.");
+      } finally {
+        if (!controller.signal.aborted) {
+          setCustomerQuickViewLoading(false);
+        }
+      }
+    };
+
+    void load();
+    return () => controller.abort();
+  }, [customerQuickViewId]);
+
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/85 backdrop-blur-xl">
       <div className="flex min-h-16 items-center gap-3 px-4 py-3 lg:px-6">
@@ -276,7 +560,7 @@ export function AppHeader({
                 setProfileOpen(false);
                 setSearchOpen(true);
               }}
-              onKeyDown={(event) => {
+              onKeyDown={async (event) => {
                 if (event.key === "Escape") {
                   setSearchOpen(false);
                   return;
@@ -284,6 +568,15 @@ export function AppHeader({
 
                 if (event.key === "Enter" && trimmedSearchQuery) {
                   event.preventDefault();
+                  const topCustomerMatch = searchResults.find((item) => item.customerId);
+                  if (topCustomerMatch?.customerId) {
+                    openCustomerQuickView(topCustomerMatch.customerId);
+                    return;
+                  }
+                  const openedFromQuery = await openCustomerQuickViewFromQuery(trimmedSearchQuery);
+                  if (openedFromQuery) {
+                    return;
+                  }
                   setSearchOpen(false);
                   router.push(communicationSearchHref);
                 }
@@ -364,7 +657,31 @@ export function AppHeader({
                     ) : searchResults.length ? (
                       <div className="space-y-1.5">
                         {searchResults.map((item) => (
-                          <Link
+                          item.customerId ? (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => openCustomerQuickView(item.customerId!)}
+                              className="block w-full rounded-2xl border border-transparent px-3 py-3 text-left transition hover:border-blue-200 hover:bg-blue-50/60"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="truncate text-sm font-bold text-slate-900">{item.title}</p>
+                                    <Badge variant={activitySearchBadgeVariantFromItem(item)}>{item.badgeLabel}</Badge>
+                                  </div>
+                                  <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                                    {item.customerName} • Quick customer view
+                                  </p>
+                                  <p className="mt-2 line-clamp-2 text-xs text-slate-600">
+                                    {item.discussionSummary || item.detail}
+                                  </p>
+                                </div>
+                                <span className="shrink-0 text-[11px] font-semibold text-slate-400">{item.time}</span>
+                              </div>
+                            </button>
+                          ) : (
+                            <Link
                             key={item.id}
                             href={item.actionHref ?? item.href ?? communicationSearchHref}
                             onClick={() => setSearchOpen(false)}
@@ -385,7 +702,8 @@ export function AppHeader({
                               </div>
                               <span className="shrink-0 text-[11px] font-semibold text-slate-400">{item.time}</span>
                             </div>
-                          </Link>
+                            </Link>
+                          )
                         ))}
                       </div>
                     ) : (
@@ -593,6 +911,15 @@ export function AppHeader({
           </Button>
         </div>
       </div>
+      <CustomerQuickSearchModal
+        role={role}
+        customerId={customerQuickViewId}
+        payload={customerQuickView}
+        loading={customerQuickViewLoading}
+        error={customerQuickViewError}
+        onNavigate={navigateFromQuickView}
+        onClose={closeCustomerQuickView}
+      />
     </header>
   );
 }
