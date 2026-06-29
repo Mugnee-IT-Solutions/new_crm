@@ -11038,14 +11038,6 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
   }, [customerId, period, userId]);
 
   const handleExport = React.useCallback(async (format: ReportFormat) => {
-    if (customerLabel.trim() && !customerId) {
-      setFeedback({
-        type: "error",
-        message: "Please select a company from the list before exporting a company-specific report.",
-      });
-      return;
-    }
-
     const exportKey = `customer-communication-${format}`;
     setActiveExport(exportKey);
     setFeedback(null);
@@ -11094,7 +11086,7 @@ export function ReportsPage({ workspace }: { workspace: CrmWorkspace }) {
     } finally {
       setActiveExport(null);
     }
-  }, [buildParams, customerId, customerLabel, parseFileName]);
+  }, [buildParams, parseFileName]);
 
   return (
     <>
@@ -11292,16 +11284,34 @@ function TeamManagementTable({
   viewerRole,
   currentUserId,
   onEdit,
+  onViewDetails,
 }: {
   workspace: CrmWorkspace;
   rows: CrmWorkspace["employees"];
   viewerRole: Role;
   currentUserId?: string;
   onEdit?: (row: CrmWorkspace["employees"][number]) => void;
+  onViewDetails?: (row: CrmWorkspace["employees"][number]) => void;
 }) {
   const columns = React.useMemo<ColumnDef<(typeof workspace.employees)[number]>[]>(
     () => [
-      { accessorKey: "name", header: "Employee Name", cell: ({ row }) => <span className="font-bold text-slate-900">{row.original.name}</span> },
+      {
+        accessorKey: "name",
+        header: "Employee Name",
+        cell: ({ row }) => (
+          onViewDetails ? (
+            <button
+              type="button"
+              onClick={() => onViewDetails(row.original)}
+              className="font-bold text-slate-900 transition hover:text-blue-700 hover:underline"
+            >
+              {row.original.name}
+            </button>
+          ) : (
+            <span className="font-bold text-slate-900">{row.original.name}</span>
+          )
+        ),
+      },
       { accessorKey: "role", header: "Role" },
       { accessorKey: "leads", header: "Leads" },
       { accessorKey: "followUps", header: "Follow-ups" },
@@ -11320,7 +11330,7 @@ function TeamManagementTable({
         },
       },
     ],
-    [currentUserId, onEdit, viewerRole],
+    [currentUserId, onEdit, onViewDetails, viewerRole],
   );
 
   return <DataTable data={rows} columns={columns} searchPlaceholder="Search employee..." />;
@@ -11330,6 +11340,7 @@ export function TeamPage({ role, workspace, currentUserId }: { role: Role; works
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [editUser, setEditUser] = React.useState<CrmWorkspace["employees"][number] | null>(null);
+  const [selectedEmployee, setSelectedEmployee] = React.useState<CrmWorkspace["employees"][number] | null>(null);
   const [feedback, setFeedback] = React.useState<UserFeedback>(null);
   const [employees, setEmployees] = React.useState<CrmWorkspace["employees"]>(() => workspace.employees);
   const headerActions = role === "ADMIN"
@@ -11365,9 +11376,75 @@ export function TeamPage({ role, workspace, currentUserId }: { role: Role; works
           viewerRole={role}
           currentUserId={currentUserId}
           onEdit={(row) => setEditUser(row)}
+          onViewDetails={(row) => {
+            setSelectedEmployee(row);
+            setDrawerOpen(true);
+          }}
         />
       </Card>
-      <DetailsDrawer title="Employee Profile" open={drawerOpen} onClose={() => setDrawerOpen(false)}><p className="text-sm text-slate-500">Employee detail drawer is ready for selected employee context.</p></DetailsDrawer>
+      <DetailsDrawer
+        title={selectedEmployee ? `${selectedEmployee.name} Profile` : "Employee Profile"}
+        open={drawerOpen}
+        onClose={() => {
+          setDrawerOpen(false);
+          setSelectedEmployee(null);
+        }}
+      >
+        {selectedEmployee ? (
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm font-black text-white">
+                  {initials(selectedEmployee.name)}
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-base font-black text-slate-950">{selectedEmployee.name}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Badge variant={selectedEmployee.roleKey === "ADMIN" ? "danger" : selectedEmployee.roleKey === "SUPERVISOR" ? "violet" : "default"}>
+                      {selectedEmployee.role}
+                    </Badge>
+                    <StatusBadge value={selectedEmployee.status} />
+                  </div>
+                  <p className="mt-2 text-sm font-semibold text-slate-600">
+                    {selectedEmployee.designation !== "-" ? selectedEmployee.designation : selectedEmployee.email}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                ["Leads", selectedEmployee.leads],
+                ["Calls", selectedEmployee.calls],
+                ["WhatsApp", selectedEmployee.whatsapp],
+                ["Emails", selectedEmployee.emails],
+                ["Meetings", selectedEmployee.meetings],
+                ["Follow-ups", selectedEmployee.followUps],
+                ["Pending Tasks", selectedEmployee.pendingTasks],
+                ["Overdue", selectedEmployee.overdueFollowUps],
+                ["Sales", selectedEmployee.sales],
+                ["Reward Points", selectedEmployee.rewardPoints],
+              ].map(([label, value]) => (
+                <div key={String(label)} className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
+                  <p className="mt-1 text-lg font-black text-slate-950">{value}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Contact</p>
+              <div className="mt-3 space-y-2 text-sm font-semibold text-slate-700">
+                <p>Email: {selectedEmployee.email || "-"}</p>
+                <p>Mobile: {selectedEmployee.mobile || "-"}</p>
+                <p>Conversion: {selectedEmployee.conversionRate || "-"}</p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">Employee detail will appear here.</p>
+        )}
+      </DetailsDrawer>
       <FormModal title="Create Marketer" open={createOpen} onClose={() => setCreateOpen(false)}>
         <UserForm
           employees={employees}

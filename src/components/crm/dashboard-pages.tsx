@@ -3788,6 +3788,10 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
   const [detailOpen, setDetailOpen] = React.useState(false);
   const [detailCustomerHref, setDetailCustomerHref] = React.useState<string | null>(null);
   const [detailCustomerName, setDetailCustomerName] = React.useState<string>("");
+  const callActivities = React.useMemo(
+    () => workspace.callActivities ?? workspace.activities.filter(isRealCallActivity),
+    [workspace.activities, workspace.callActivities],
+  );
   const detailCustomerId = React.useMemo(() => {
     const match = detailCustomerHref?.match(/^\/customers\/([^/?#]+)/);
     return match?.[1] ?? "";
@@ -3795,8 +3799,7 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
 
   const periodWindow = React.useMemo(() => getCrmPeriodWindow(new Date(), { period: callPeriod }), [callPeriod]);
   const rows = React.useMemo(() => {
-    const filtered = workspace.activities
-      .filter(isRealCallActivity)
+    const filtered = callActivities
       .filter((item) => {
         if (!item.createdAtValue) return false;
         const createdAt = new Date(item.createdAtValue);
@@ -3808,17 +3811,16 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
         return rightTime - leftTime;
       });
     return filtered.slice(0, 48);
-  }, [periodWindow.from, periodWindow.to, workspace.activities]);
+  }, [callActivities, periodWindow.from, periodWindow.to]);
 
   const totalCallsInPeriod = React.useMemo(() => {
-    return workspace.activities
-      .filter(isRealCallActivity)
+    return callActivities
       .filter((item) => {
         if (!item.createdAtValue) return false;
         const createdAt = new Date(item.createdAtValue);
         return createdAt >= periodWindow.from && createdAt < periodWindow.to;
       }).length;
-  }, [periodWindow.from, periodWindow.to, workspace.activities]);
+  }, [callActivities, periodWindow.from, periodWindow.to]);
 
   const company = React.useMemo(() => {
     if (!detailCustomerId) return null;
@@ -3827,15 +3829,15 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
 
   const companyCalls = React.useMemo(() => {
     if (!detailCustomerHref) return [];
-    return workspace.activities
-      .filter((item) => isRealCallActivity(item) && item.customerHref === detailCustomerHref)
+    return callActivities
+      .filter((item) => item.customerHref === detailCustomerHref)
       .sort((left, right) => {
         const leftTime = left.createdAtValue ? new Date(left.createdAtValue).getTime() : 0;
         const rightTime = right.createdAtValue ? new Date(right.createdAtValue).getTime() : 0;
         return rightTime - leftTime;
       })
       .slice(0, 24);
-  }, [detailCustomerHref, workspace.activities]);
+  }, [callActivities, detailCustomerHref]);
 
   const callPeriodToolbar = (
     <div className="inline-flex rounded-full border border-slate-200 bg-white p-1">
@@ -3875,7 +3877,7 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
       contentClassName="p-5"
     >
       {rows.length ? (
-        <div className="max-h-[560px] overflow-auto pr-1">
+        <div className="max-h-[560px] overflow-x-auto overflow-y-auto pr-1">
           <table className="min-w-[860px] w-full text-sm">
             <thead className="sticky top-0 z-[1] bg-white text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
               <tr>

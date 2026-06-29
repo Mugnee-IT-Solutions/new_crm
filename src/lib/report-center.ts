@@ -1,7 +1,6 @@
 import "server-only";
 
 import { access, readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import * as XLSX from "xlsx";
 import {
@@ -98,8 +97,6 @@ const REPORT_PDF_FONT_CANDIDATES = [
   "/usr/share/fonts/truetype/noto/NotoSerifBengali-Regular.ttf",
 ];
 
-const require = createRequire(import.meta.url);
-
 let reportPdfFontBytesPromise: Promise<Uint8Array | null> | null = null;
 let reportPdfFontkitPromise: Promise<unknown | null> | null = null;
 
@@ -107,7 +104,7 @@ async function loadReportPdfFontkit() {
   if (!reportPdfFontkitPromise) {
     reportPdfFontkitPromise = (async () => {
       try {
-        const loaded = require("@pdf-lib/fontkit/dist/fontkit.umd.js");
+        const loaded = await import("@pdf-lib/fontkit/dist/fontkit.es.js");
         return loaded?.default ?? loaded ?? null;
       } catch {
         return null;
@@ -1299,8 +1296,9 @@ async function buildPdfBuffer(document: ReportDocument) {
   });
 
   let rowIndex = 0;
+  const hasPreparedRows = preparedRows.length > 0;
 
-  while (rowIndex < preparedRows.length) {
+  while (hasPreparedRows ? rowIndex < preparedRows.length : rowIndex === 0) {
     const page = pdfDocument.addPage(pageSize);
 
     let cursorY = PDF_PAGE_HEIGHT - PDF_MARGIN;
@@ -1400,6 +1398,29 @@ async function buildPdfBuffer(document: ReportDocument) {
     const minRowY = PDF_MARGIN + 26;
     let pageRowCount = 0;
 
+    if (!hasPreparedRows) {
+      const emptyHeight = 92;
+      const emptyBottom = Math.max(minRowY, cursorY - emptyHeight);
+      page.drawRectangle({
+        x: tableLeft,
+        y: emptyBottom,
+        width: tableWidth,
+        height: cursorY - emptyBottom,
+        color: rgb(0.985, 0.99, 1),
+        borderColor: rgb(0.88, 0.91, 0.95),
+        borderWidth: 1,
+      });
+      page.drawText(normalizePdfValue("No data found for selected filters."), {
+        x: tableLeft + 16,
+        y: emptyBottom + 42,
+        size: 12,
+        font: bodyFont,
+        color: rgb(0.32, 0.39, 0.5),
+      });
+      rowIndex = 1;
+      continue;
+    }
+
     while (rowIndex < preparedRows.length) {
       const row = preparedRows[rowIndex];
       if (cursorY - row.height < minRowY && pageRowCount > 0) {
@@ -1467,10 +1488,6 @@ export async function generateReportExport(actor: ReportActor, reportType: Repor
   const document = await buildReportDocument(actor, reportType, filters);
   const fileDate = formatCrmDate(document.generatedAt, "yyyy-MM-dd");
   const fileName = `${document.slug}-${fileDate}.${formatType === "print" ? "html" : formatType}`;
-
-  if (!document.rows.length) {
-    throw new Error("No data found for selected filters.");
-  }
 
   if (formatType === "csv") {
     return {

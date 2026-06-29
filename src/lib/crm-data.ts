@@ -537,6 +537,7 @@ export type CrmWorkspace = {
   products: ProductRow[];
   quotations: QuotationRow[];
   activities: ActivityRow[];
+  callActivities?: ActivityRow[];
   notifications: NotificationRow[];
   employees: EmployeeRow[];
   rewardRules: RewardRuleRow[];
@@ -1059,10 +1060,17 @@ type FollowUpRecord = Prisma.Prisma.FollowUpGetPayload<{ include: typeof followU
 
 const communicationHistoryInclude = {
   user: true,
+  company: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
   lead: {
     select: {
       id: true,
       title: true,
+      customerName: true,
     },
   },
   task: true,
@@ -1689,6 +1697,46 @@ function mapCommunicationHistoryRow(log: CommunicationHistoryRecord): Communicat
     notes: toEmail,
     createdBy: log.user?.name ?? "-",
     time: dateLabel(log.communicationAt, "dd/MM/yyyy hh:mm a"),
+  };
+}
+
+function buildCallActivityRowFromCommunication(log: CommunicationHistoryRecord): ActivityRow {
+  const activityAt = log.communicationAt ?? log.createdAt;
+  const customerName = log.company?.name ?? log.lead?.customerName ?? "-";
+  const customerHref = linkedEntityHref({ leadId: log.leadId, companyId: log.companyId });
+  const discussionSummary = firstMeaningfulText(log.note, log.discussionTopic, log.outcome);
+  const notes = firstMeaningfulText(log.followUpNote, log.productDiscussed);
+
+  return {
+    id: `communication-${log.id}`,
+    href: customerHref,
+    title: humanizeActivityTitle({ title: log.method, rawAction: log.method, category: "CALL" }),
+    detail: firstMeaningfulText(
+      customerName !== "-" && log.user?.name ? `${customerName} · ${log.user.name}` : undefined,
+      customerName,
+      log.user?.name ? `By ${log.user.name}` : undefined,
+      "Phone call",
+    ) ?? "Phone call",
+    time: dateLabel(activityAt, "dd/MM/yyyy hh:mm a"),
+    createdAtValue: activityAt.toISOString(),
+    dateLabel: dateLabel(activityAt, "dd MMM yyyy"),
+    timeLabel: dateLabel(activityAt, "hh:mm a"),
+    category: "CALL",
+    badgeLabel: "CALL",
+    customerName,
+    customerHref,
+    employeeName: log.user?.name ?? "-",
+    employeeId: log.user?.id ?? undefined,
+    entity: "CommunicationLog",
+    entityId: log.id,
+    rawAction: log.method,
+    discussionSummary,
+    notes,
+    rating: typeof log.rating === "number" ? String(log.rating) : undefined,
+    contactMethod: log.method,
+    nextFollowUpDate: log.nextFollowUpDate ? dateLabel(log.nextFollowUpDate, "dd MMM yyyy hh:mm a") : undefined,
+    createdBy: log.user?.name ?? "-",
+    relatedCustomerHref: customerHref,
   };
 }
 
@@ -3083,6 +3131,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
   const scopedUserIds = await getScopedUserIds(role, user);
   const scopedLeadUserIds = await getScopedLeadUserIds(prisma, { id: user.id ?? "", role });
   const { from: today, to: tomorrow } = getCrmDayWindow(new Date());
+  const callActivityWindow = getCrmPeriodWindow(new Date(), { period: "month" });
   const teamPerformanceWindow = role === "SUPERVISOR"
     ? getCrmPeriodWindow(new Date(), options)
     : role === "ADMIN"
@@ -3128,6 +3177,13 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
       }
     : {};
   const communicationWhere: Prisma.Prisma.CommunicationLogWhereInput = scopedUserIds ? { userId: { in: scopedUserIds } } : {};
+  const dashboardCallWhere = combineWhere(communicationWhere, {
+    communicationAt: { gte: callActivityWindow.from, lt: callActivityWindow.to },
+    OR: [
+      { method: { contains: "phone", mode: "insensitive" as const } },
+      { method: { contains: "call", mode: "insensitive" as const } },
+    ],
+  });
   const activityWhere = scopedUserIds ? { userId: { in: scopedUserIds } } : {};
   const planWidgetWhere = (planWhere
     ? { ...planWhere, status: { not: "COMPLETED" }, plannedAt: { lt: tomorrow } }
@@ -3171,6 +3227,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
     todayCallCount,
     todayWhatsAppCount,
     todayEmailCount,
+    callActivityLogs,
   ] = await Promise.all([
     prisma.lead.findMany({
       where: leadWhere,
@@ -3333,6 +3390,12 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
         method: { contains: "email", mode: "insensitive" as const },
       }),
     }),
+    prisma.communicationLog.findMany({
+      where: dashboardCallWhere,
+      include: communicationHistoryInclude,
+      orderBy: { communicationAt: "desc" },
+      take: role === "ADMIN" ? 320 : 240,
+    }),
   ]);
 
   const rewardByUser = new Map(rewardSums.map((item) => [item.userId, item._sum.points ?? 0]));
@@ -3484,6 +3547,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
   ]
     .sort((left, right) => new Date(right.createdAtValue ?? 0).getTime() - new Date(left.createdAtValue ?? 0).getTime())
     .slice(0, 120);
+  const callActivities = callActivityLogs.map(buildCallActivityRowFromCommunication);
 
   const notificationRows: NotificationRow[] = notifications.map((item) => ({
     id: item.id,
@@ -3788,6 +3852,7 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
     products: productRows,
     quotations: quotationRows,
     activities: mergedActivities,
+    callActivities,
     notifications: notificationRows,
     employees: employeeRows,
     rewardRules: rewardRules.map((rule) => ({
@@ -3855,6 +3920,7 @@ export async function getDashboardWorkspace(role: Role, user: ShellUser, options
   const scopedUserIds = await getScopedUserIds(role, user);
   const scopedLeadUserIds = await getScopedLeadUserIds(prisma, { id: user.id ?? "", role });
   const { from: today, to: tomorrow } = getCrmDayWindow(new Date());
+  const callActivityWindow = getCrmPeriodWindow(new Date(), { period: "month" });
   const teamPerformanceWindow = role === "SUPERVISOR" ? getCrmPeriodWindow(new Date(), options) : undefined;
   const isSupervisor = role === "SUPERVISOR";
 
@@ -3897,6 +3963,13 @@ export async function getDashboardWorkspace(role: Role, user: ShellUser, options
       }
     : {};
   const communicationWhere: Prisma.Prisma.CommunicationLogWhereInput = scopedUserIds ? { userId: { in: scopedUserIds } } : {};
+  const dashboardCallWhere = combineWhere(communicationWhere, {
+    communicationAt: { gte: callActivityWindow.from, lt: callActivityWindow.to },
+    OR: [
+      { method: { contains: "phone", mode: "insensitive" as const } },
+      { method: { contains: "call", mode: "insensitive" as const } },
+    ],
+  });
   const activityWhere = scopedUserIds ? { userId: { in: scopedUserIds } } : {};
   const planWidgetWhere = (planWhere
     ? { ...planWhere, status: { not: "COMPLETED" }, plannedAt: { lt: tomorrow } }
@@ -3969,6 +4042,7 @@ export async function getDashboardWorkspace(role: Role, user: ShellUser, options
     todayCallCount,
     todayWhatsAppCount,
     todayEmailCount,
+    callActivityLogs,
     unreadCount,
     pendingTaskCount,
     meetingTaskCount,
@@ -4064,6 +4138,12 @@ export async function getDashboardWorkspace(role: Role, user: ShellUser, options
         communicationAt: { gte: today, lt: tomorrow },
         method: { contains: "email", mode: "insensitive" as const },
       }),
+    }),
+    prisma.communicationLog.findMany({
+      where: dashboardCallWhere,
+      include: communicationHistoryInclude,
+      orderBy: { communicationAt: "desc" },
+      take: 240,
     }),
     prisma.notification.count({ where: scopedUserIds ? { recipientId: { in: scopedUserIds }, readAt: null } : { readAt: null } }),
     role === "MARKETER"
@@ -4234,6 +4314,7 @@ export async function getDashboardWorkspace(role: Role, user: ShellUser, options
   ]
     .sort((left, right) => new Date(right.createdAtValue ?? 0).getTime() - new Date(left.createdAtValue ?? 0).getTime())
     .slice(0, 60);
+  const callActivities = callActivityLogs.map(buildCallActivityRowFromCommunication);
 
   const employeeRows: EmployeeRow[] = (employeeRecords as Array<Record<string, any>>).map((employee) => {
     const mobile = typeof employee.mobile === "string" ? employee.mobile : "";
@@ -4481,6 +4562,7 @@ export async function getDashboardWorkspace(role: Role, user: ShellUser, options
     products: productRows,
     quotations: quotationRows,
     activities: mergedActivities,
+    callActivities,
     notifications: [],
     employees: employeeRows,
     rewardRules: [],
