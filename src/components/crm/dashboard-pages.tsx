@@ -2527,6 +2527,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   const scheduledRefreshTimers = React.useRef<number[]>([]);
   const crmDayRefreshTimer = React.useRef<number | null>(null);
   const shownReminderKeys = React.useRef<Set<string>>(new Set());
+  const reminderMutedUntil = React.useRef<number>(0);
   const role = workspace.user.role;
 
   const completedPipelineStage = React.useCallback((item: CompletedWorkItem) => {
@@ -2541,28 +2542,49 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
     return item.sourceType === "FOLLOW_UP" ? "Follow-up" : null;
   }, []);
 
-  const reminderStorageKey = React.useMemo(() => `crm_followup_reminders_dismissed_v3:${workspace.user.id}`, [workspace.user.id]);
+  const reminderStorageKey = React.useMemo(() => `crm_followup_reminders_dismissed_v4:${workspace.user.id}`, [workspace.user.id]);
 
-  const persistDismissedReminderKeys = React.useCallback((nextKeys: Set<string>) => {
+  const persistDismissedReminderState = React.useCallback((nextKeys: Set<string>, mutedUntil = 0) => {
     try {
-      window.localStorage.setItem(reminderStorageKey, JSON.stringify([...nextKeys]));
+      window.localStorage.setItem(reminderStorageKey, JSON.stringify({
+        dismissedKeys: [...nextKeys],
+        mutedUntil,
+      }));
     } catch {}
   }, [reminderStorageKey]);
 
-  const reminderKey = React.useCallback((item: TodayWorkQueueItem) => item.sourceId, []);
+  const reminderKey = React.useCallback(
+    (item: TodayWorkQueueItem) => `${item.sourceType}:${item.sourceId}:${item.taskDateIso}`,
+    [],
+  );
 
   React.useEffect(() => {
     try {
       const raw = window.localStorage.getItem(reminderStorageKey);
       if (!raw) return;
       const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) return;
-      shownReminderKeys.current = new Set(parsed.filter((value) => typeof value === "string"));
+      if (Array.isArray(parsed)) {
+        shownReminderKeys.current = new Set(parsed.filter((value) => typeof value === "string"));
+        reminderMutedUntil.current = 0;
+        return;
+      }
+      if (!parsed || typeof parsed !== "object") return;
+      const storedKeys = "dismissedKeys" in parsed && Array.isArray(parsed.dismissedKeys)
+        ? parsed.dismissedKeys.filter((value): value is string => typeof value === "string")
+        : [];
+      const storedMutedUntil = "mutedUntil" in parsed
+        ? Number((parsed as { mutedUntil?: number | string }).mutedUntil)
+        : 0;
+      shownReminderKeys.current = new Set(storedKeys);
+      reminderMutedUntil.current = Number.isFinite(storedMutedUntil) && storedMutedUntil > Date.now()
+        ? storedMutedUntil
+        : 0;
     } catch {}
   }, [reminderStorageKey]);
 
   const maybeOpenDueReminder = React.useCallback((rows: TodayWorkQueueItem[], preferredIso?: string | null) => {
     const now = Date.now();
+    if (reminderMutedUntil.current > now) return;
     const preferredTime = preferredIso ? new Date(preferredIso).getTime() : Number.NaN;
     const dueRows = rows
       .filter((item) => (
@@ -2583,13 +2605,19 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
     setDueReminderItem(nextItem);
   }, [reminderKey]);
 
-  const dismissDueReminder = React.useCallback((item: TodayWorkQueueItem | null) => {
+  const dismissDueReminder = React.useCallback((item: TodayWorkQueueItem | null, mode: "item" | "day" = "day") => {
     if (item) {
       shownReminderKeys.current.add(reminderKey(item));
-      persistDismissedReminderKeys(shownReminderKeys.current);
+      const nextMutedUntil = mode === "day"
+        ? getCrmDayWindow(new Date()).to.getTime()
+        : reminderMutedUntil.current > Date.now()
+          ? reminderMutedUntil.current
+          : 0;
+      reminderMutedUntil.current = nextMutedUntil;
+      persistDismissedReminderState(shownReminderKeys.current, nextMutedUntil);
     }
     setDueReminderItem(null);
-  }, [persistDismissedReminderKeys, reminderKey]);
+  }, [persistDismissedReminderState, reminderKey]);
 
   const loadTasks = React.useCallback(async () => {
     setLoading(true);
@@ -3030,7 +3058,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
       <FormModal
         open={Boolean(dueReminderItem)}
         title="Follow-up Reminder"
-        onClose={() => dismissDueReminder(dueReminderItem)}
+        onClose={() => dismissDueReminder(dueReminderItem, "day")}
         panelClassName="w-[95vw] max-w-[520px]"
         contentClassName="space-y-4"
       >
@@ -3050,7 +3078,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
                 className="w-full"
                 onClick={() => {
                   setCompletionItem(dueReminderItem);
-                  dismissDueReminder(dueReminderItem);
+                  dismissDueReminder(dueReminderItem, "item");
                 }}
               >
                 Complete
@@ -3061,7 +3089,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
                 className="w-full"
                 onClick={() => {
                   setEditingFollowUp(dueReminderItem);
-                  dismissDueReminder(dueReminderItem);
+                  dismissDueReminder(dueReminderItem, "item");
                 }}
               >
                 Edit Follow-up
@@ -3070,7 +3098,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
                 type="button"
                 variant="outline"
                 className="w-full"
-                onClick={() => dismissDueReminder(dueReminderItem)}
+                onClick={() => dismissDueReminder(dueReminderItem, "day")}
               >
                 Close
               </Button>
@@ -3774,8 +3802,12 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
         const createdAt = new Date(item.createdAtValue);
         return createdAt >= periodWindow.from && createdAt < periodWindow.to;
       })
-      .sort((left, right) => (right.createdAtValue ?? "").localeCompare(left.createdAtValue ?? ""));
-    return filtered.slice(0, 12);
+      .sort((left, right) => {
+        const leftTime = left.createdAtValue ? new Date(left.createdAtValue).getTime() : 0;
+        const rightTime = right.createdAtValue ? new Date(right.createdAtValue).getTime() : 0;
+        return rightTime - leftTime;
+      });
+    return filtered.slice(0, 48);
   }, [periodWindow.from, periodWindow.to, workspace.activities]);
 
   const totalCallsInPeriod = React.useMemo(() => {
@@ -3797,7 +3829,11 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
     if (!detailCustomerHref) return [];
     return workspace.activities
       .filter((item) => isRealCallActivity(item) && item.customerHref === detailCustomerHref)
-      .sort((left, right) => (right.createdAtValue ?? "").localeCompare(left.createdAtValue ?? ""))
+      .sort((left, right) => {
+        const leftTime = left.createdAtValue ? new Date(left.createdAtValue).getTime() : 0;
+        const rightTime = right.createdAtValue ? new Date(right.createdAtValue).getTime() : 0;
+        return rightTime - leftTime;
+      })
       .slice(0, 24);
   }, [detailCustomerHref, workspace.activities]);
 
@@ -3839,9 +3875,9 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
       contentClassName="p-5"
     >
       {rows.length ? (
-        <div className="overflow-x-auto">
+        <div className="max-h-[560px] overflow-auto pr-1">
           <table className="min-w-[860px] w-full text-sm">
-            <thead className="text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
+            <thead className="sticky top-0 z-[1] bg-white text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
               <tr>
                 <th className="px-3 py-3 font-black">Company</th>
                 <th className="px-3 py-3 font-black">Marketer</th>
