@@ -1438,6 +1438,118 @@ const productInclude = {
   },
 } satisfies Prisma.Prisma.ProductServiceInclude;
 
+const dashboardLeadSelect = {
+  id: true,
+  companyId: true,
+  title: true,
+  customerName: true,
+  phone: true,
+  email: true,
+  productInterestId: true,
+  interestedProduct: {
+    select: {
+      name: true,
+    },
+  },
+  status: true,
+  score: true,
+  priority: true,
+  assignedToId: true,
+  assignedTo: {
+    select: {
+      name: true,
+    },
+  },
+  followUpDate: true,
+  purchaseProbability: true,
+  notes: true,
+  createdAt: true,
+  company: {
+    select: {
+      name: true,
+    },
+  },
+  _count: {
+    select: {
+      communications: true,
+      followUps: true,
+    },
+  },
+} satisfies Prisma.Prisma.LeadSelect;
+
+const dashboardCompanySelect = {
+  id: true,
+  name: true,
+  createdAt: true,
+  contactPerson: true,
+  phone: true,
+  city: true,
+  address: true,
+  website: true,
+  status: true,
+  assignedToId: true,
+  assignedTo: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+} satisfies Prisma.Prisma.CustomerCompanySelect;
+
+const dashboardProductSelect = {
+  id: true,
+  name: true,
+  category: true,
+  brand: true,
+  price: true,
+  imageUrl: true,
+  description: true,
+  specification: true,
+  status: true,
+} satisfies Prisma.Prisma.ProductServiceSelect;
+
+const dashboardQuotationSelect = {
+  id: true,
+  companyId: true,
+  leadId: true,
+  quoteNumber: true,
+  totalAmount: true,
+  status: true,
+  createdAt: true,
+  company: {
+    select: {
+      name: true,
+    },
+  },
+  lead: {
+    select: {
+      customerName: true,
+    },
+  },
+  createdBy: {
+    select: {
+      name: true,
+    },
+  },
+  items: {
+    select: {
+      description: true,
+    },
+    take: 1,
+  },
+} satisfies Prisma.Prisma.QuotationSelect;
+
+const dashboardEmployeeSelect = {
+  id: true,
+  name: true,
+  email: true,
+  mobile: true,
+  role: true,
+  status: true,
+  designation: true,
+  supervisorId: true,
+} satisfies Prisma.Prisma.UserSelect;
+
 type ProductRecord = Prisma.Prisma.ProductServiceGetPayload<{ include: typeof productInclude }>;
 type ProductLeadRecord = ProductRecord["leads"][number];
 type ProductCommunicationRecord = ProductLeadRecord["communications"][number];
@@ -1769,6 +1881,9 @@ function buildActivityRowFromTimeline(item: ActivityTimelineRecord): ActivityRow
   const title = humanizeActivityTitle({ title: item.title, rawAction, category });
   const discussionSummary = firstMeaningfulText(item.communicationLog?.note, item.description, item.followUp?.note, item.task?.description);
   const notes = firstMeaningfulText(item.communicationLog?.followUpNote, item.followUp?.nextDiscussionPlan, item.task?.notes);
+  const phoneOrEmailUsed = firstMeaningfulText(
+    readJsonText(metadata, ["phone", "phoneNumber", "customerPhone", "mobile", "whatsapp", "email"]),
+  );
   const taskId =
     item.taskId
     ?? item.task?.id
@@ -1818,6 +1933,7 @@ function buildActivityRowFromTimeline(item: ActivityTimelineRecord): ActivityRow
     rawAction,
     discussionSummary,
     notes,
+    phoneOrEmailUsed,
     rating:
       typeof item.communicationLog?.rating === "number"
         ? String(item.communicationLog.rating)
@@ -1850,6 +1966,9 @@ function buildActivityRowFromLog(item: ActivityLogRecord): ActivityRow {
   const employeeName = firstMeaningfulText(item.user?.name, readJsonText(metadata, ["userName"]));
   const rawAction = firstMeaningfulText(readJsonText(metadata, ["action"]), item.action) ?? item.action;
   const contactMethod = firstMeaningfulText(readJsonText(metadata, ["method"]));
+  const phoneOrEmailUsed = firstMeaningfulText(
+    readJsonText(metadata, ["phone", "phoneNumber", "customerPhone", "mobile", "whatsapp", "email"]),
+  );
   const category = inferActivityCategory({
     title: item.action,
     rawAction,
@@ -1897,6 +2016,7 @@ function buildActivityRowFromLog(item: ActivityLogRecord): ActivityRow {
     rawAction,
     discussionSummary: rawAction !== title ? rawAction : undefined,
     contactMethod,
+    phoneOrEmailUsed,
     createdBy: employeeName,
     relatedCustomerHref: customerHref,
     taskId,
@@ -2575,6 +2695,10 @@ function normalizeActivitySearchQuery(query: string) {
     .replace(/\bdeal lost\b/g, "lost");
 }
 
+function normalizePhoneSearchValue(value?: string | null) {
+  return (value ?? "").replace(/\D+/g, "");
+}
+
 function normalizeActivitySearchToken(token: string) {
   const normalized = normalizeActivitySearchText(token);
   if (!normalized) return "";
@@ -2598,6 +2722,7 @@ function activitySearchKeywords(activity: ActivityRow) {
     activity.discussionSummary,
     activity.notes,
     activity.contactMethod,
+    activity.phoneOrEmailUsed,
     activity.quotationReference,
     activity.createdBy,
   ].filter(Boolean).join(" "));
@@ -2612,6 +2737,33 @@ function activitySearchKeywords(activity: ActivityRow) {
   if (/\b(lost|failed|rejected)\b/.test(base) || base.includes("deal lost") || base.includes("closed lost")) keywords.add("lost");
 
   return `${base} ${Array.from(keywords).join(" ")}`.trim();
+}
+
+function extractCustomerIdFromHref(href?: string | null) {
+  if (!href) return undefined;
+  const match = href.match(/\/customers\/([^/?#]+)/i);
+  return match?.[1];
+}
+
+function matchesActivityCustomerSearch(
+  activity: ActivityRow,
+  matchedCustomerIds: Set<string>,
+  matchedCustomerNames: Set<string>,
+) {
+  if (!matchedCustomerIds.size && !matchedCustomerNames.size) return false;
+
+  const customerIds = [
+    extractCustomerIdFromHref(activity.customerHref),
+    extractCustomerIdFromHref(activity.relatedCustomerHref),
+    extractCustomerIdFromHref(activity.href),
+  ].filter((value): value is string => Boolean(value));
+
+  if (customerIds.some((customerId) => matchedCustomerIds.has(customerId))) {
+    return true;
+  }
+
+  const normalizedCustomerName = normalizeActivitySearchText(activity.customerName ?? "");
+  return normalizedCustomerName ? matchedCustomerNames.has(normalizedCustomerName) : false;
 }
 
 function matchesActivitySearch(activity: ActivityRow, query: string) {
@@ -2649,6 +2801,7 @@ function buildActivityRowFromWorkItem(item: TodayWorkQueueItem | CompletedWorkIt
   const employeeName = firstMeaningfulText(item.assignedTo, item.assignedBy, item.completedBy) ?? "-";
   const taskId = item.sourceType === "TASK" ? item.sourceId : ("taskId" in item ? item.taskId ?? undefined : undefined);
   const followUpId = item.sourceType === "FOLLOW_UP" ? item.sourceId : undefined;
+  const phoneOrEmailUsed = "companyPrimaryPhone" in item ? item.companyPrimaryPhone : undefined;
 
   return {
     id: item.id,
@@ -2677,6 +2830,7 @@ function buildActivityRowFromWorkItem(item: TodayWorkQueueItem | CompletedWorkIt
     discussionSummary: firstMeaningfulText(item.description, item.notes, item.method),
     notes: item.notes,
     contactMethod: item.method,
+    phoneOrEmailUsed,
     createdBy: firstMeaningfulText(item.assignedBy, item.completedBy, item.assignedTo),
     relatedCustomerHref: item.companyHref ?? undefined,
     entity: item.sourceType === "FOLLOW_UP" ? "FollowUp" : "Task",
@@ -2691,6 +2845,68 @@ function normalizeActivitySearchRowKey(activity: ActivityRow) {
   if (activity.taskId) return `task:${activity.taskId}`;
   if (activity.entityId) return `entity:${normalizeActivityToken(activity.entity)}:${activity.entityId}`;
   return `row:${activity.id}`;
+}
+
+type CustomerSearchRecord = Prisma.Prisma.CustomerCompanyGetPayload<{
+  select: {
+    id: true;
+    name: true;
+    createdAt: true;
+    contactPerson: true;
+    phone: true;
+    phone2: true;
+    contacts: {
+      select: {
+        name: true;
+        mobile: true;
+        whatsapp: true;
+        email: true;
+      };
+    };
+    phoneNumbers: {
+      select: {
+        number: true;
+      };
+    };
+  };
+}>;
+
+function buildActivityRowFromCustomerSearch(item: CustomerSearchRecord): ActivityRow {
+  const primaryContact = item.contacts[0];
+  const contactBits = [
+    item.contactPerson,
+    primaryContact?.name,
+  ].filter((value): value is string => Boolean(value && value.trim()));
+  const phoneBits = [
+    item.phone,
+    item.phone2,
+    ...item.phoneNumbers.map((phone) => phone.number),
+    ...item.contacts.flatMap((contact) => [contact.mobile, contact.whatsapp]),
+  ].filter((value): value is string => Boolean(value && value.trim()));
+  const emailBits = item.contacts
+    .map((contact) => contact.email)
+    .filter((value): value is string => Boolean(value && value.trim()));
+
+  return {
+    id: `customer-search:${item.id}`,
+    href: `/customers/${item.id}`,
+    title: "Customer Profile",
+    detail: firstMeaningfulText(
+      contactBits.length ? `${item.name} - ${contactBits[0]}` : item.name,
+      item.name,
+    ) ?? item.name,
+    time: dateLabel(item.createdAt, "dd/MM/yyyy hh:mm a"),
+    createdAtValue: item.createdAt.toISOString(),
+    dateLabel: dateLabel(item.createdAt, "dd MMM yyyy"),
+    timeLabel: dateLabel(item.createdAt, "hh:mm a"),
+    category: "OTHER",
+    badgeLabel: "PROFILE",
+    customerName: item.name,
+    customerHref: `/customers/${item.id}`,
+    discussionSummary: "Open customer profile to see full history, notes, steps, calls, and follow-ups.",
+    phoneOrEmailUsed: [...phoneBits, ...emailBits].join(" "),
+    relatedCustomerHref: `/customers/${item.id}`,
+  };
 }
 
 export async function searchCrmActivities({
@@ -2713,8 +2929,58 @@ export async function searchCrmActivities({
   const scopedUserIds = await getScopedUserIds(role, user);
   const cappedLimit = Math.max(1, Math.min(limit, 24));
   const actor = { id: user.id ?? "", role, name: user.name };
+  const companyWhere: Prisma.Prisma.CustomerCompanyWhereInput = await buildCustomerScopeWhere(
+    prisma,
+    { id: user.id ?? "", role },
+  );
+  const text = { contains: query.trim(), mode: "insensitive" } as const;
+  const phoneQuery = query.trim();
+  const normalizedPhoneQuery = normalizePhoneSearchValue(phoneQuery);
+  const phoneNeedles = Array.from(new Set([
+    phoneQuery,
+    normalizedPhoneQuery,
+    normalizedPhoneQuery.length >= 8 ? normalizedPhoneQuery.slice(-8) : "",
+  ].filter(Boolean)));
+  const customerSearchConditions: Prisma.Prisma.CustomerCompanyWhereInput[] = [
+    { name: text },
+    { contactPerson: text },
+    { notes: text },
+    ...phoneNeedles.map((needle) => ({ phone: { contains: needle } })),
+    ...phoneNeedles.map((needle) => ({ phone2: { contains: needle } })),
+    {
+      contacts: {
+        some: {
+          OR: [
+            { name: text },
+            { email: text },
+            ...phoneNeedles.map((needle) => ({ mobile: { contains: needle } })),
+            ...phoneNeedles.map((needle) => ({ whatsapp: { contains: needle } })),
+          ],
+        },
+      },
+    },
+    {
+      phoneNumbers: {
+        some: {
+          OR: phoneNeedles.map((needle) => ({ number: { contains: needle } })),
+        },
+      },
+    },
+    {
+      leads: {
+        some: {
+          OR: [
+            { title: text },
+            { customerName: text },
+            { email: text },
+            ...phoneNeedles.map((needle) => ({ phone: { contains: needle } })),
+          ],
+        },
+      },
+    },
+  ];
 
-  const [timeline, activities, queueItems, completedItems] = await Promise.all([
+  const [timeline, activities, queueItems, completedItems, matchingCustomers] = await Promise.all([
     prisma.activityTimeline.findMany({
       where: scopedUserIds ? { userId: { in: scopedUserIds } } : undefined,
       include: activityTimelineInclude,
@@ -2729,7 +2995,42 @@ export async function searchCrmActivities({
     }),
     getTodayWorkQueue(actor),
     getCompletedWorkItems(actor),
+    prisma.customerCompany.findMany({
+      where: combineWhere(companyWhere, { OR: customerSearchConditions }),
+      select: {
+        id: true,
+        name: true,
+        createdAt: true,
+        contactPerson: true,
+        phone: true,
+        phone2: true,
+        contacts: {
+          select: {
+            name: true,
+            mobile: true,
+            whatsapp: true,
+            email: true,
+          },
+          take: 4,
+        },
+        phoneNumbers: {
+          select: {
+            number: true,
+          },
+          take: 4,
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 24,
+    }),
   ]);
+
+  const matchedCustomerIds = new Set(matchingCustomers.map((item) => item.id));
+  const matchedCustomerNames = new Set(
+    matchingCustomers
+      .map((item) => normalizeActivitySearchText(item.name))
+      .filter(Boolean),
+  );
 
   const timelineEntityKeys = new Set(
     timeline
@@ -2739,7 +3040,10 @@ export async function searchCrmActivities({
 
   const directRows = [...queueItems, ...completedItems]
     .map(buildActivityRowFromWorkItem)
-    .filter((activity) => matchesActivitySearch(activity, normalizedQuery));
+    .filter((activity) => (
+      matchesActivitySearch(activity, normalizedQuery)
+      || matchesActivityCustomerSearch(activity, matchedCustomerIds, matchedCustomerNames)
+    ));
 
   const activityRows = [
     ...timeline.map(buildActivityRowFromTimeline),
@@ -2751,11 +3055,18 @@ export async function searchCrmActivities({
       .map(buildActivityRowFromLog),
   ]
     .sort((left, right) => new Date(right.createdAtValue ?? 0).getTime() - new Date(left.createdAtValue ?? 0).getTime())
+    .filter((activity) => (
+      matchesActivitySearch(activity, normalizedQuery)
+      || matchesActivityCustomerSearch(activity, matchedCustomerIds, matchedCustomerNames)
+    ));
+
+  const customerRows = matchingCustomers
+    .map(buildActivityRowFromCustomerSearch)
     .filter((activity) => matchesActivitySearch(activity, normalizedQuery));
 
   const seen = new Set<string>();
   const merged: ActivityRow[] = [];
-  for (const row of [...directRows, ...activityRows]) {
+  for (const row of [...directRows, ...activityRows, ...customerRows]) {
     const key = normalizeActivitySearchRowKey(row);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -3534,6 +3845,672 @@ export async function getCrmWorkspace(role: Role, user: ShellUser, options?: Tea
   };
 }
 
+export async function getDashboardWorkspace(role: Role, user: ShellUser, options?: TeamPerformanceOptions): Promise<CrmWorkspace> {
+  if (role === "ADMIN") {
+    return getCrmWorkspace(role, user, options);
+  }
+
+  const prisma = getPrisma();
+  await ensureCrmFoundation();
+  const scopedUserIds = await getScopedUserIds(role, user);
+  const scopedLeadUserIds = await getScopedLeadUserIds(prisma, { id: user.id ?? "", role });
+  const { from: today, to: tomorrow } = getCrmDayWindow(new Date());
+  const teamPerformanceWindow = role === "SUPERVISOR" ? getCrmPeriodWindow(new Date(), options) : undefined;
+  const isSupervisor = role === "SUPERVISOR";
+
+  const leadWhere = scopedLeadUserIds
+    ? {
+        OR: [
+          { assignedToId: { in: scopedLeadUserIds } },
+          {
+            AND: [
+              { assignedToId: null },
+              { createdById: { in: scopedLeadUserIds } },
+            ],
+          },
+        ],
+      }
+    : {};
+
+  const companyWhere: Prisma.Prisma.CustomerCompanyWhereInput = await buildCustomerScopeWhere(
+    prisma,
+    { id: user.id ?? "", role },
+  );
+
+  const taskWhere: Prisma.Prisma.TaskWhereInput = scopedUserIds
+    ? {
+        OR: [
+          { assignedToId: { in: scopedUserIds } },
+          { assignedById: { in: scopedUserIds } },
+        ],
+      }
+    : {};
+
+  const planWhere = scopedUserIds ? { userId: { in: scopedUserIds } } : {};
+  const followUpWhere = followUpScopeWhere(scopedUserIds);
+  const quotationWhere = scopedUserIds
+    ? {
+        OR: [
+          { createdById: { in: scopedUserIds } },
+          { lead: { assignedToId: { in: scopedUserIds } } },
+        ],
+      }
+    : {};
+  const communicationWhere: Prisma.Prisma.CommunicationLogWhereInput = scopedUserIds ? { userId: { in: scopedUserIds } } : {};
+  const activityWhere = scopedUserIds ? { userId: { in: scopedUserIds } } : {};
+  const planWidgetWhere = (planWhere
+    ? { ...planWhere, status: { not: "COMPLETED" }, plannedAt: { lt: tomorrow } }
+    : { status: { not: "COMPLETED" }, plannedAt: { lt: tomorrow } }) as Prisma.Prisma.TodayPlanWhereInput;
+  const todayTaskBadgeWhere = combineWhere(taskWhere, { status: { not: "COMPLETED" }, taskDate: { lt: tomorrow } });
+  const followUpBadgeWhere = combineWhere(followUpWhere, {
+    status: { not: "COMPLETED" },
+    OR: [
+      { status: { in: ["DUE", "TODAY", "OVERDUE"] } },
+      { followUpDate: { lt: tomorrow } },
+    ],
+  });
+  const rewardWhere = scopedUserIds ? { userId: { in: scopedUserIds } } : {};
+
+  const meetingTaskWhere: Prisma.Prisma.TaskWhereInput = combineWhere(taskWhere, {
+    status: { not: "COMPLETED" },
+    dueDate: { gte: today, lt: tomorrow },
+    OR: [
+      { title: { contains: "meeting", mode: "insensitive" as const } },
+      { description: { contains: "meeting", mode: "insensitive" as const } },
+      { notes: { contains: "meeting", mode: "insensitive" as const } },
+    ],
+  });
+  const meetingFollowUpWhere: Prisma.Prisma.FollowUpWhereInput = combineWhere(followUpWhere, {
+    status: { not: "COMPLETED" },
+    followUpDate: { gte: today, lt: tomorrow },
+    OR: [
+      { method: { contains: "meeting", mode: "insensitive" as const } },
+      { note: { contains: "meeting", mode: "insensitive" as const } },
+      { nextDiscussionPlan: { contains: "meeting", mode: "insensitive" as const } },
+    ],
+  });
+  const meetingPlanWhere = (planWhere
+    ? {
+      ...planWhere,
+      status: { not: "COMPLETED" },
+      plannedAt: { gte: today, lt: tomorrow },
+      OR: [
+        { title: { contains: "meeting", mode: "insensitive" as const } },
+        { note: { contains: "meeting", mode: "insensitive" as const } },
+      ],
+    }
+    : {
+      status: { not: "COMPLETED" },
+      plannedAt: { gte: today, lt: tomorrow },
+      OR: [
+        { title: { contains: "meeting", mode: "insensitive" as const } },
+        { note: { contains: "meeting", mode: "insensitive" as const } },
+      ],
+    }) as Prisma.Prisma.TodayPlanWhereInput;
+
+  const [
+    leadRecords,
+    companyRecords,
+    followUpRecords,
+    productRecords,
+    quotationRecords,
+    activityLogs,
+    activityTimeline,
+    employeeRecords,
+    leadCount,
+    customerCount,
+    todaysPlanCount,
+    todayTaskBadgeCount,
+    followUpBadgeCount,
+    activeProductCount,
+    rewardAggregate,
+    rewardSums,
+    followUpSummaryCounts,
+    todayCallCount,
+    todayWhatsAppCount,
+    todayEmailCount,
+    unreadCount,
+    pendingTaskCount,
+    meetingTaskCount,
+    meetingFollowUpCount,
+    meetingPlanCount,
+    quotationRevenue,
+  ] = await Promise.all([
+    prisma.lead.findMany({
+      where: leadWhere,
+      select: dashboardLeadSelect,
+      orderBy: { updatedAt: "desc" },
+      take: isSupervisor ? 160 : 80,
+    }),
+    isSupervisor
+      ? prisma.customerCompany.findMany({
+        where: companyWhere,
+        select: dashboardCompanySelect,
+        orderBy: { updatedAt: "desc" },
+        take: 80,
+      })
+      : Promise.resolve([] as Array<Record<string, unknown>>),
+    isSupervisor
+      ? prisma.followUp.findMany({
+        where: followUpWhere,
+        include: followUpInclude,
+        orderBy: { followUpDate: "asc" },
+        take: 60,
+      })
+      : Promise.resolve([] as Array<Record<string, unknown>>),
+    isSupervisor
+      ? prisma.productService.findMany({
+        include: productInclude,
+        orderBy: { updatedAt: "desc" },
+        take: 80,
+      })
+      : prisma.productService.findMany({
+        select: dashboardProductSelect,
+        orderBy: { updatedAt: "desc" },
+        take: 120,
+      }),
+    isSupervisor
+      ? prisma.quotation.findMany({
+        where: quotationWhere,
+        select: dashboardQuotationSelect,
+        orderBy: { createdAt: "desc" },
+        take: 24,
+      })
+      : Promise.resolve([] as Array<Record<string, unknown>>),
+    prisma.activityLog.findMany({
+      where: activityWhere,
+      include: activityLogInclude,
+      orderBy: { createdAt: "desc" },
+      take: 60,
+    }),
+    prisma.activityTimeline.findMany({
+      where: activityWhere,
+      include: activityTimelineInclude,
+      orderBy: { createdAt: "desc" },
+      take: 60,
+    }),
+    prisma.user.findMany({
+      where: scopedUserIds ? { id: { in: scopedUserIds } } : {},
+      select: dashboardEmployeeSelect,
+      orderBy: { createdAt: "asc" },
+      take: 100,
+    }),
+    prisma.lead.count({ where: leadWhere }),
+    prisma.customerCompany.count({ where: companyWhere }),
+    prisma.todayPlan.count({ where: planWidgetWhere }),
+    prisma.task.count({ where: todayTaskBadgeWhere }),
+    prisma.followUp.count({ where: followUpBadgeWhere }),
+    prisma.productService.count({ where: { status: "ACTIVE" } }),
+    prisma.reward.aggregate({ where: rewardWhere, _sum: { points: true } }),
+    prisma.reward.groupBy({ by: ["userId"], _sum: { points: true } }),
+    countFollowUpSummary(prisma, followUpWhere),
+    prisma.communicationLog.count({
+      where: combineWhere(communicationWhere, {
+        communicationAt: { gte: today, lt: tomorrow },
+        OR: [
+          { method: { contains: "phone", mode: "insensitive" as const } },
+          { method: { contains: "call", mode: "insensitive" as const } },
+        ],
+      }),
+    }),
+    prisma.communicationLog.count({
+      where: combineWhere(communicationWhere, {
+        communicationAt: { gte: today, lt: tomorrow },
+        method: { contains: "whatsapp", mode: "insensitive" as const },
+      }),
+    }),
+    prisma.communicationLog.count({
+      where: combineWhere(communicationWhere, {
+        communicationAt: { gte: today, lt: tomorrow },
+        method: { contains: "email", mode: "insensitive" as const },
+      }),
+    }),
+    prisma.notification.count({ where: scopedUserIds ? { recipientId: { in: scopedUserIds }, readAt: null } : { readAt: null } }),
+    role === "MARKETER"
+      ? prisma.task.count({
+        where: combineWhere(taskWhere, { status: { not: "COMPLETED" } }),
+      })
+      : Promise.resolve(0),
+    prisma.task.count({ where: meetingTaskWhere }),
+    prisma.followUp.count({ where: meetingFollowUpWhere }),
+    prisma.todayPlan.count({ where: meetingPlanWhere }),
+    isSupervisor
+      ? prisma.quotation.aggregate({
+        where: quotationWhere,
+        _sum: { totalAmount: true },
+      })
+      : Promise.resolve({ _sum: { totalAmount: 0 } }),
+  ]);
+
+  const rewardByUser = new Map(rewardSums.map((item) => [item.userId, item._sum.points ?? 0]));
+
+  const leadRows: LeadRow[] = (leadRecords as Array<Record<string, any>>).map((lead) => ({
+    id: lead.id,
+    companyId: lead.companyId,
+    title: lead.title || lead.customerName,
+    customerName: lead.customerName,
+    company: lead.company?.name ?? lead.customerName,
+    phone: primaryLeadContact(lead.phone),
+    phones: splitLeadContacts(lead.phone),
+    email: primaryLeadContact(lead.email),
+    emails: splitLeadContacts(lead.email),
+    productInterestId: lead.productInterestId,
+    productInterest: lead.interestedProduct?.name ?? "-",
+    status: leadStatusLabels[lead.status] ?? labelize(lead.status),
+    score: lead.score,
+    priority: labelize(lead.priority),
+    assignedToId: lead.assignedToId,
+    assignedTo: lead.assignedTo?.name ?? "-",
+    followUpDate: dateLabel(lead.followUpDate),
+    followUpDateValue: lead.followUpDate?.toISOString() ?? "",
+    purchaseProbability: lead.purchaseProbability,
+    communicationCount: lead._count?.communications ?? 0,
+    followUpCount: lead._count?.followUps ?? 0,
+    salesProgress: progressFromLead(lead.status),
+    notes: lead.notes ?? "-",
+    createdAt: dateLabel(lead.createdAt, "dd/MM/yyyy hh:mm a"),
+  }));
+
+  const companyRows: CompanyRow[] = (companyRecords as Array<Record<string, any>>).map((company) => ({
+    id: String(company.id),
+    name: String(company.name ?? "-"),
+    contactPerson: typeof company.contactPerson === "string" && company.contactPerson.trim() ? company.contactPerson : "-",
+    email: "-",
+    emailOptions: [],
+    phone: typeof company.phone === "string" && company.phone.trim() ? company.phone : "-",
+    phone2: "-",
+    whatsapp: "-",
+    cityOrZilla: typeof company.city === "string" && company.city.trim() ? company.city : "-",
+    industry: "-",
+    address: typeof company.address === "string" && company.address.trim() ? company.address : "-",
+    website: typeof company.website === "string" && company.website.trim() ? company.website : "-",
+    assignedToId: (company.assignedToId as string | null | undefined) ?? null,
+    assignedTo: company.assignedTo?.name ?? "-",
+    createdBy: "-",
+    createdByRole: "-",
+    createdAtLabel: company.createdAt ? dateLabel(company.createdAt as Date, "dd/MM/yyyy hh:mm a") : "-",
+    status: labelize(company.status as string | null | undefined),
+    totalLeads: 0,
+    lastCommunication: "-",
+    notes: "-",
+    rawData: {},
+  }));
+
+  const followUpRows: FollowUpRow[] = isSupervisor
+    ? (followUpRecords as FollowUpRecord[]).map(mapFollowUpRow)
+    : [];
+
+  const quotationRows: QuotationRow[] = (quotationRecords as Array<Record<string, any>>).map((quotation) => ({
+    id: String(quotation.id),
+    companyId: (quotation.companyId as string | null | undefined) ?? null,
+    leadId: (quotation.leadId as string | null | undefined) ?? null,
+    quoteNumber: String(quotation.quoteNumber ?? "-"),
+    customer: quotation.company?.name ?? quotation.lead?.customerName ?? "-",
+    product: quotation.items?.[0]?.description ?? "-",
+    amount: Number(quotation.totalAmount ?? 0),
+    status: labelize(quotation.status as string | null | undefined),
+    createdBy: quotation.createdBy?.name ?? "-",
+    date: dateLabel(quotation.createdAt as Date | null | undefined),
+  }));
+
+  const productRows: ProductRow[] = isSupervisor
+    ? (productRecords as ProductRecord[]).map((product) => ({ product, engagement: buildProductEngagement(product, scopedUserIds) }))
+      .map(({ product, engagement }) => ({
+        id: product.id,
+        name: product.name,
+        category: product.category,
+        brand: product.brand ?? "-",
+        price: Number(product.price),
+        imageUrl: product.imageUrl ?? "",
+        description: product.description ?? "-",
+        specification: product.specification ?? "-",
+        status: labelize(product.status),
+        interestedCustomers: engagement.summary.totalCompaniesContacted,
+        communicationCount: engagement.summary.totalCommunicationCount,
+        followUpCount: engagement.summary.followUpCount,
+        quotationCount: engagement.summary.quotationSentCount,
+        salesCount: engagement.summary.salesCount,
+        conversionRate: engagement.summary.conversionRate,
+        assignedCount: engagement.filterOptions.assignedUsers.length,
+        assignedMarketers: engagement.filterOptions.assignedUsers.map((member) => member.name),
+        targetCompanies: engagement.summary.totalShortlistedCompanies,
+        contactedCompanies: engagement.summary.contactedCompanies,
+        remainingCompanies: Math.max(engagement.summary.totalShortlistedCompanies - engagement.summary.contactedCompanies, 0),
+      }))
+    : (productRecords as Array<Record<string, any>>).map((product) => ({
+      id: String(product.id),
+      name: String(product.name ?? "-"),
+      category: String(product.category ?? "-"),
+      brand: typeof product.brand === "string" && product.brand.trim() ? product.brand : "-",
+      price: Number(product.price ?? 0),
+      imageUrl: typeof product.imageUrl === "string" ? product.imageUrl : "",
+      description: typeof product.description === "string" && product.description.trim() ? product.description : "-",
+      specification: typeof product.specification === "string" && product.specification.trim() ? product.specification : "-",
+      status: labelize(product.status as string | null | undefined),
+      interestedCustomers: 0,
+      communicationCount: 0,
+      followUpCount: 0,
+      quotationCount: 0,
+      salesCount: 0,
+      conversionRate: 0,
+      assignedCount: 0,
+      assignedMarketers: [],
+      targetCompanies: 0,
+      contactedCompanies: 0,
+      remainingCompanies: 0,
+    }));
+
+  const productIntelligenceItems: ProductIntelligenceItem[] = productRows.map((product) => ({
+    id: product.id,
+    name: product.name,
+    category: product.category,
+    communicationCount: product.communicationCount,
+    followUpCount: product.followUpCount,
+    leadCount: product.interestedCustomers,
+    quotationCount: product.quotationCount,
+    salesCount: product.salesCount,
+    conversionRate: product.conversionRate,
+    engagementScore: product.communicationCount + product.followUpCount + product.quotationCount + product.interestedCustomers,
+  }));
+  const productIntelligence = {
+    topEngaged: [...productIntelligenceItems].sort((left, right) => right.engagementScore - left.engagementScore).slice(0, 5),
+    highestConversion: [...productIntelligenceItems].filter((item) => item.leadCount > 0).sort((left, right) => right.conversionRate - left.conversionRate || right.salesCount - left.salesCount).slice(0, 5),
+    mostDiscussed: [...productIntelligenceItems].sort((left, right) => right.communicationCount - left.communicationCount).slice(0, 5),
+  };
+
+  const timelineEntityKeys = new Set(
+    activityTimeline
+      .map((item) => normalizeActivityEntityKey(item.entity, item.entityId))
+      .filter(Boolean),
+  );
+  const mergedActivities: ActivityRow[] = [
+    ...activityTimeline.map(buildActivityRowFromTimeline),
+    ...activityLogs
+      .filter((item) => {
+        const key = normalizeActivityEntityKey(item.entity, item.entityId);
+        return !key || !timelineEntityKeys.has(key);
+      })
+      .map(buildActivityRowFromLog),
+  ]
+    .sort((left, right) => new Date(right.createdAtValue ?? 0).getTime() - new Date(left.createdAtValue ?? 0).getTime())
+    .slice(0, 60);
+
+  const employeeRows: EmployeeRow[] = (employeeRecords as Array<Record<string, any>>).map((employee) => {
+    const mobile = typeof employee.mobile === "string" ? employee.mobile : "";
+    return {
+      id: String(employee.id),
+      name: String(employee.name ?? "-"),
+      email: typeof employee.email === "string" && employee.email.trim() ? employee.email : "-",
+      mobile: mobile.startsWith("email:") ? "-" : (mobile || "-"),
+      role: labelize(employee.role as string | null | undefined),
+      roleKey: employee.role as Role,
+      status: labelize(employee.status as string | null | undefined),
+      statusKey: employee.status as "ACTIVE" | "INACTIVE",
+      designation: typeof employee.designation === "string" && employee.designation.trim() ? employee.designation : "-",
+      supervisorId: (employee.supervisorId as string | null | undefined) ?? null,
+      leads: 0,
+      calls: 0,
+      whatsapp: 0,
+      emails: 0,
+      meetings: 0,
+      followUps: 0,
+      pendingTasks: 0,
+      overdueFollowUps: 0,
+      sales: 0,
+      rewardPoints: rewardByUser.get(String(employee.id)) ?? 0,
+      conversionRate: "0%",
+    };
+  });
+
+  let teamPerformanceRows: EmployeeRow[] | undefined;
+  if (isSupervisor && teamPerformanceWindow) {
+    const performanceMembers = employeeRows.filter((item) => item.role === "Marketer");
+    const memberIds = performanceMembers.map((employee) => employee.id);
+    const followUpOverdueTo = isBefore(teamPerformanceWindow.to, today) ? teamPerformanceWindow.to : today;
+    const performanceRangeFrom = teamPerformanceWindow.from;
+    const performanceRangeTo = teamPerformanceWindow.to;
+
+    if (memberIds.length) {
+      const [
+        leadStats,
+        wonLeadStats,
+        communicationMethodStats,
+        followUpStats,
+        followUpMethodStats,
+        overdueFollowUpStats,
+        taskStats,
+      ] = await Promise.all([
+        prisma.lead.groupBy({
+          by: ["assignedToId"],
+          where: {
+            assignedToId: { in: memberIds },
+            updatedAt: { gte: performanceRangeFrom, lt: performanceRangeTo },
+          },
+          _count: { _all: true },
+        }),
+        prisma.lead.groupBy({
+          by: ["assignedToId"],
+          where: {
+            assignedToId: { in: memberIds },
+            status: "WON_SALE",
+            updatedAt: { gte: performanceRangeFrom, lt: performanceRangeTo },
+          },
+          _count: { _all: true },
+        }),
+        prisma.communicationLog.groupBy({
+          by: ["userId", "method"],
+          where: {
+            userId: { in: memberIds },
+            communicationAt: { gte: performanceRangeFrom, lt: performanceRangeTo },
+          },
+          _count: { _all: true },
+        }),
+        prisma.followUp.groupBy({
+          by: ["assignedToId"],
+          where: {
+            assignedToId: { in: memberIds },
+            followUpDate: { gte: performanceRangeFrom, lt: performanceRangeTo },
+          },
+          _count: { _all: true },
+        }),
+        prisma.followUp.groupBy({
+          by: ["assignedToId", "method"],
+          where: {
+            assignedToId: { in: memberIds },
+            followUpDate: { gte: performanceRangeFrom, lt: performanceRangeTo },
+          },
+          _count: { _all: true },
+        }),
+        followUpOverdueTo > performanceRangeFrom
+          ? prisma.followUp.groupBy({
+            by: ["assignedToId"],
+            where: {
+              assignedToId: { in: memberIds },
+              status: { not: "COMPLETED" },
+              followUpDate: { gte: performanceRangeFrom, lt: followUpOverdueTo },
+            },
+            _count: { _all: true },
+          })
+          : Promise.resolve([] as Array<Prisma.Prisma.FollowUpGroupByOutputType>),
+        prisma.task.groupBy({
+          by: ["assignedToId"],
+          where: {
+            assignedToId: { in: memberIds },
+            status: { not: "COMPLETED" },
+            dueDate: { gte: performanceRangeFrom, lt: performanceRangeTo },
+          },
+          _count: { _all: true },
+        }),
+      ]);
+
+      const leadCounts = new Map<string, number>();
+      for (const row of leadStats) {
+        if (row.assignedToId) leadCounts.set(row.assignedToId, row._count._all);
+      }
+      const wonLeadCounts = new Map<string, number>();
+      for (const row of wonLeadStats) {
+        if (row.assignedToId) wonLeadCounts.set(row.assignedToId, row._count._all);
+      }
+      const taskCounts = new Map<string, number>();
+      for (const row of taskStats) {
+        if (row.assignedToId) taskCounts.set(row.assignedToId, row._count._all);
+      }
+      const followUpCounts = new Map<string, number>();
+      for (const row of followUpStats) {
+        if (row.assignedToId) followUpCounts.set(row.assignedToId, row._count._all);
+      }
+      const overdueFollowUpCounts = new Map<string, number>();
+      for (const row of overdueFollowUpStats) {
+        if (row.assignedToId) overdueFollowUpCounts.set(row.assignedToId, row._count?._all ?? 0);
+      }
+      const communicationChannels = new Map<string, { calls: number; whatsapp: number; emails: number; meetings: number }>();
+      for (const row of communicationMethodStats) {
+        if (!row.userId) continue;
+        const current = communicationChannels.get(row.userId) ?? { calls: 0, whatsapp: 0, emails: 0, meetings: 0 };
+        if (containsAnyMethod(row.method, ["phone", "call"])) current.calls += row._count._all;
+        if (containsAnyMethod(row.method, ["whatsapp"])) current.whatsapp += row._count._all;
+        if (containsAnyMethod(row.method, ["email", "gmail"])) current.emails += row._count._all;
+        if (containsAnyMethod(row.method, ["meeting"])) current.meetings += row._count._all;
+        communicationChannels.set(row.userId, current);
+      }
+      const followUpChannels = new Map<string, { calls: number; whatsapp: number; emails: number; meetings: number }>();
+      for (const row of followUpMethodStats) {
+        if (!row.assignedToId) continue;
+        const current = followUpChannels.get(row.assignedToId) ?? { calls: 0, whatsapp: 0, emails: 0, meetings: 0 };
+        if (containsAnyMethod(row.method, ["phone", "call"])) current.calls += row._count._all;
+        if (containsAnyMethod(row.method, ["whatsapp"])) current.whatsapp += row._count._all;
+        if (containsAnyMethod(row.method, ["email", "gmail"])) current.emails += row._count._all;
+        if (containsAnyMethod(row.method, ["meeting"])) current.meetings += row._count._all;
+        followUpChannels.set(row.assignedToId, current);
+      }
+
+      teamPerformanceRows = performanceMembers.map((row) => {
+        const leadTotal = leadCounts.get(row.id) ?? 0;
+        const wonCount = wonLeadCounts.get(row.id) ?? 0;
+        const channels = communicationChannels.get(row.id) ?? { calls: 0, whatsapp: 0, emails: 0, meetings: 0 };
+        const followUpChannelsForMember = followUpChannels.get(row.id) ?? { calls: 0, whatsapp: 0, emails: 0, meetings: 0 };
+        const followUpCount = followUpCounts.get(row.id) ?? 0;
+
+        return {
+          ...row,
+          leads: leadTotal,
+          calls: channels.calls + followUpChannelsForMember.calls,
+          whatsapp: channels.whatsapp + followUpChannelsForMember.whatsapp,
+          emails: channels.emails + followUpChannelsForMember.emails,
+          meetings: channels.meetings + followUpChannelsForMember.meetings,
+          followUps: followUpCount,
+          pendingTasks: taskCounts.get(row.id) ?? 0,
+          overdueFollowUps: overdueFollowUpCounts.get(row.id) ?? 0,
+          sales: wonCount,
+          conversionRate: leadTotal ? `${Math.round((wonCount / leadTotal) * 100)}%` : "0%",
+          rewardPoints: rewardByUser.get(row.id) ?? row.rewardPoints,
+        };
+      });
+    }
+  }
+
+  const pipeline = Object.values(leadStatusLabels).map((label) => ({
+    label,
+    value: leadRows.filter((lead) => lead.status === label).length,
+    color: pipelineColors[label] ?? "bg-slate-400",
+  }));
+
+  const followUpSummary = followUpSummaryCounts;
+  const teamPerformance = teamPerformanceRows
+    ? {
+      rows: teamPerformanceRows,
+      period: teamPerformanceWindow?.period ?? "month",
+      from: formatCrmDate(teamPerformanceWindow?.from ?? today, "yyyy-MM-dd"),
+      to: formatCrmDate(new Date((teamPerformanceWindow?.to ?? tomorrow).getTime() - 1), "yyyy-MM-dd"),
+    }
+    : undefined;
+
+  const unifiedTodayWorkCount = todayTaskBadgeCount + followUpBadgeCount;
+  const pendingTasks = role === "MARKETER" ? pendingTaskCount : todayTaskBadgeCount;
+  const wonSales = leadRows.filter((lead) => lead.status === "Won Sale").length;
+  const conversion = leadRows.length ? Math.round((wonSales / leadRows.length) * 100) : 0;
+  const totalRevenue = Number(quotationRevenue._sum.totalAmount ?? 0);
+  const rewardPoints = role === "MARKETER" && user.id ? rewardByUser.get(user.id) ?? 0 : employeeRows.reduce((sum, row) => sum + row.rewardPoints, 0);
+  const meetingsToday = meetingTaskCount + meetingFollowUpCount + meetingPlanCount;
+  const communicationCenterSummary = {
+    todayCalls: todayCallCount,
+    todayWhatsApp: todayWhatsAppCount,
+    todayEmails: todayEmailCount,
+    todayMeetings: meetingsToday,
+    todayFollowUps: followUpSummary.today,
+  };
+
+  const stats =
+    role === "MARKETER"
+      ? [
+        { title: "Today's Tasks", value: String(unifiedTodayWorkCount), helper: "Unified work queue", tone: "bg-blue-100 text-blue-700" },
+        { title: "Pending Tasks", value: String(pendingTasks), helper: "Need completion", tone: "bg-red-100 text-red-700" },
+        { title: "Follow-ups Due", value: String(followUpSummary.overdue + followUpSummary.today), helper: "Overdue and today", tone: "bg-indigo-100 text-indigo-700" },
+        { title: "New Leads", value: String(leadRows.filter((lead) => lead.status === "New Lead").length), helper: "Assigned leads", tone: "bg-emerald-100 text-emerald-700" },
+        { title: "Meetings Today", value: String(meetingsToday), helper: "Scheduled meetings", tone: "bg-orange-100 text-orange-700" },
+        { title: "Reward Points", value: String(rewardPoints), helper: "This month", tone: "bg-amber-100 text-amber-700" },
+      ]
+      : [
+        { title: "Total Marketers", value: String(employeeRows.filter((row) => row.role === "Marketer").length), helper: "Under supervision", tone: "bg-blue-100 text-blue-700" },
+        { title: "Total Leads", value: String(leadCount), helper: "Team pipeline", tone: "bg-indigo-100 text-indigo-700" },
+        { title: "Follow-up Due", value: String(followUpSummary.today), helper: "Due today", tone: "bg-amber-100 text-amber-700" },
+        { title: "Overdue Follow-ups", value: String(followUpSummary.overdue), helper: "Needs attention", tone: "bg-red-100 text-red-700" },
+        { title: "Sales This Month", value: money(totalRevenue), helper: "Quotation value", tone: "bg-emerald-100 text-emerald-700" },
+        { title: "Conversion Rate", value: `${conversion}%`, helper: "Won vs leads", tone: "bg-violet-100 text-violet-700" },
+      ];
+
+  const productCompanyContactSummary = isSupervisor
+    ? buildProductCompanyContactSummary(productRecords as ProductRecord[], scopedUserIds)
+    : {
+      totalTargetCompanies: 0,
+      contactedCompanies: 0,
+      remainingCompanies: 0,
+    };
+
+  return {
+    user,
+    unreadCount,
+    stats,
+    teamPerformance,
+    leads: leadRows,
+    companies: companyRows,
+    tasks: [],
+    todayPlans: [],
+    todayWorkItems: [],
+    followUps: followUpRows,
+    products: productRows,
+    quotations: quotationRows,
+    activities: mergedActivities,
+    notifications: [],
+    employees: employeeRows,
+    rewardRules: [],
+    importExportLogs: [],
+    reportLogs: [],
+    permissions: [],
+    pipeline,
+    productOpportunities: [...productRows].sort((left, right) => right.interestedCustomers - left.interestedCustomers).slice(0, 8),
+    productIntelligence,
+    productCompanyContactSummary,
+    systemSummary: [
+      { label: "Active Users", value: String(employeeRows.filter((row) => row.status === "Active").length) },
+      { label: "Open Tasks", value: String(pendingTasks) },
+      { label: "Unread Notifications", value: String(unreadCount) },
+      { label: "Report Logs", value: "0" },
+    ],
+    communicationCenterSummary,
+    followUpSummary,
+    sidebarCounts: {
+      followUps: followUpBadgeCount,
+      leads: leadCount,
+      customers: customerCount,
+      tasks: unifiedTodayWorkCount,
+      todaysPlan: todaysPlanCount + unifiedTodayWorkCount,
+      products: activeProductCount,
+      rewards: rewardAggregate._sum.points ?? 0,
+    },
+  };
+}
+
 const followUpDateFilters: FollowUpDateFilter[] = ["all", "today", "tomorrow", "week", "month", "custom", "overdue", "completed"];
 
 function queryValue(value: unknown) {
@@ -3783,6 +4760,244 @@ export async function getLeadDetail(id: string, role: Role, user: ShellUser) {
   };
 }
 
+export async function getCustomerQuickContext(id: string, role: Role, user: ShellUser) {
+  const prisma = getPrisma();
+  const scopedUserIds = await getScopedUserIds(role, user);
+  const companyWhere: Prisma.Prisma.CustomerCompanyWhereInput = await buildCustomerScopeWhere(
+    prisma,
+    { id: user.id ?? "", role },
+  );
+
+  const record = await prisma.customerCompany.findFirst({
+    where: combineWhere(companyWhere, { id }),
+    select: workspaceCompanySelect,
+  });
+
+  if (!record) {
+    return {
+      customer: undefined,
+      history: {
+        tasks: [],
+        followUps: [],
+        activities: [],
+        communications: [],
+      } satisfies CustomerHistory,
+      journey: buildCustomerJourneyTimeline({
+        customer: undefined,
+        tasks: [],
+        followUps: [],
+        communications: [],
+        activities: [],
+        leads: [],
+        quotations: [],
+      }),
+      counts: {
+        tasks: 0,
+        followUps: 0,
+        communications: 0,
+      },
+    };
+  }
+
+  const customer = mapCompanyRow(record);
+  const customerTaskWhere = combineWhere(
+    scopedUserIds
+      ? {
+          OR: [
+            { assignedToId: { in: scopedUserIds } },
+            { assignedById: { in: scopedUserIds } },
+          ],
+        }
+      : undefined,
+    {
+      OR: [
+        { companyId: customer.id },
+        { companyName: { equals: customer.name, mode: "insensitive" as const } },
+      ],
+    },
+  );
+  const customerFollowUpWhere = combineWhere(
+    scopedUserIds ? { assignedToId: { in: scopedUserIds } } : undefined,
+    { companyId: customer.id },
+  );
+  const customerCommunicationWhere = combineWhere(
+    scopedUserIds ? { userId: { in: scopedUserIds } } : undefined,
+    { companyId: customer.id },
+  );
+  const customerTimelineWhere = combineWhere(
+    scopedUserIds ? { userId: { in: scopedUserIds } } : undefined,
+    { companyId: customer.id },
+  );
+  const customerLeadWhere = combineWhere(
+    scopedUserIds
+      ? {
+          OR: [
+            { assignedToId: { in: scopedUserIds } },
+            { createdById: { in: scopedUserIds } },
+          ],
+        }
+      : undefined,
+    {
+      OR: [
+        { companyId: customer.id },
+        { customerName: { equals: customer.name, mode: "insensitive" as const } },
+      ],
+    },
+  );
+  const customerQuotationWhere = combineWhere(
+    scopedUserIds
+      ? {
+          OR: [
+            { createdById: { in: scopedUserIds } },
+            { lead: { assignedToId: { in: scopedUserIds } } },
+            { lead: { createdById: { in: scopedUserIds } } },
+          ],
+        }
+      : undefined,
+    {
+      OR: [
+        { companyId: customer.id },
+        { lead: { companyId: customer.id } },
+      ],
+    },
+  );
+
+  const [
+    tasks,
+    followUps,
+    communications,
+    timeline,
+    leads,
+    quotations,
+    taskCount,
+    followUpCount,
+    communicationCount,
+  ] = await Promise.all([
+    prisma.task.findMany({
+      where: customerTaskWhere,
+      include: taskInclude,
+      orderBy: { updatedAt: "desc" },
+      take: 6,
+    }),
+    prisma.followUp.findMany({
+      where: customerFollowUpWhere,
+      include: followUpInclude,
+      orderBy: { updatedAt: "desc" },
+      take: 6,
+    }),
+    prisma.communicationLog.findMany({
+      where: customerCommunicationWhere,
+      include: communicationHistoryInclude,
+      orderBy: { communicationAt: "desc" },
+      take: 6,
+    }),
+    prisma.activityTimeline.findMany({
+      where: customerTimelineWhere,
+      include: activityTimelineInclude,
+      orderBy: { createdAt: "desc" },
+      take: 8,
+    }),
+    prisma.lead.findMany({
+      where: customerLeadWhere,
+      select: customerJourneyLeadSelect,
+      orderBy: { updatedAt: "desc" },
+      take: 6,
+    }),
+    prisma.quotation.findMany({
+      where: customerQuotationWhere,
+      select: customerJourneyQuotationSelect,
+      orderBy: { updatedAt: "desc" },
+      take: 6,
+    }),
+    prisma.task.count({ where: customerTaskWhere }),
+    prisma.followUp.count({ where: customerFollowUpWhere }),
+    prisma.communicationLog.count({ where: customerCommunicationWhere }),
+  ]);
+
+  const history = {
+    tasks: tasks.map(mapTaskRow),
+    followUps: followUps.map(mapFollowUpRow),
+    communications: communications.map(mapCommunicationHistoryRow),
+    activities: timeline.map(buildActivityRowFromTimeline),
+  } satisfies CustomerHistory;
+
+  const journey = buildCustomerJourneyTimeline({
+    customer: {
+      assignedTo: customer.assignedTo,
+    },
+    tasks: tasks.map((task) => ({
+      title: task.title,
+      description: task.description,
+      notes: task.notes,
+      priority: task.priority,
+      status: task.status,
+      assignedTo: task.assignedTo?.name,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      taskDate: task.taskTime ?? task.dueDate ?? task.createdAt,
+    })),
+    followUps: followUps.map((followUp) => ({
+      method: followUp.method,
+      note: followUp.note,
+      nextDiscussionPlan: followUp.nextDiscussionPlan,
+      status: followUp.status,
+      priority: followUp.priority,
+      assignedTo: followUp.assignedTo?.name,
+      createdAt: followUp.createdAt,
+      updatedAt: followUp.updatedAt,
+      completedAt: followUp.completedAt,
+      followUpDate: followUp.followUpDate,
+    })),
+    communications: communications.map((communication) => ({
+      method: communication.method,
+      note: communication.note,
+      discussionTopic: communication.discussionTopic,
+      productDiscussed: communication.productDiscussed,
+      outcome: communication.outcome,
+      followUpNote: communication.followUpNote,
+      createdBy: communication.user?.name,
+      createdAt: communication.createdAt,
+      communicationAt: communication.communicationAt,
+      nextFollowUpDate: communication.nextFollowUpDate,
+    })),
+    activities: timeline.map((item) => ({
+      title: item.title,
+      description: item.description,
+      entity: item.entity,
+      createdAt: item.createdAt,
+    })),
+    leads: leads.map((lead) => ({
+      title: lead.title,
+      notes: lead.notes,
+      status: lead.status,
+      priority: lead.priority,
+      assignedTo: lead.assignedTo?.name,
+      createdAt: lead.createdAt,
+      updatedAt: lead.updatedAt,
+      followUpDate: lead.followUpDate,
+    })),
+    quotations: quotations.map((quotation) => ({
+      quoteNumber: quotation.quoteNumber,
+      notes: quotation.notes,
+      status: quotation.status,
+      createdBy: quotation.createdBy?.name,
+      createdAt: quotation.createdAt,
+      updatedAt: quotation.updatedAt,
+    })),
+  });
+
+  return {
+    customer,
+    history,
+    journey,
+    counts: {
+      tasks: taskCount,
+      followUps: followUpCount,
+      communications: communicationCount,
+    },
+  };
+}
+
 export async function getCustomerDetail(id: string, role: Role, user: ShellUser) {
   const prisma = getPrisma();
   const workspace = await getCrmWorkspace(role, user);
@@ -3790,7 +5005,10 @@ export async function getCustomerDetail(id: string, role: Role, user: ShellUser)
   const lookup = decodeURIComponent(id);
   const lookupSlug = slugify(lookup);
   const scopeCustomer = workspace.companies.find((item) => item.id === lookup || slugify(item.name) === lookupSlug);
-  const allowedCustomerIds = new Set(workspace.companies.map((item) => item.id));
+  const companyWhere: Prisma.Prisma.CustomerCompanyWhereInput = await buildCustomerScopeWhere(
+    prisma,
+    { id: user.id ?? "", role },
+  );
 
   const record = scopeCustomer
     ? await prisma.customerCompany.findUnique({
@@ -3798,16 +5016,19 @@ export async function getCustomerDetail(id: string, role: Role, user: ShellUser)
       select: workspaceCompanySelect,
     })
     : await prisma.customerCompany.findFirst({
-      where: {
-        OR: [
-          { id: lookup },
-          { name: { equals: lookup, mode: "insensitive" } },
-        ],
-      },
+      where: combineWhere(
+        companyWhere,
+        {
+          OR: [
+            { id: lookup },
+            { name: { equals: lookup, mode: "insensitive" } },
+          ],
+        },
+      ),
       select: workspaceCompanySelect,
     });
 
-  const scopedCustomer = record && allowedCustomerIds.has(record.id) ? mapCompanyRow(record) : undefined;
+  const scopedCustomer = record ? mapCompanyRow(record) : undefined;
 
   if (!scopedCustomer) {
     return {

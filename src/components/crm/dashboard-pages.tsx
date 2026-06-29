@@ -39,9 +39,9 @@ import { PageHeader } from "@/components/shared/page-header";
 import { DashboardMetricCard, StatCard } from "@/components/shared/stat-card";
 import { useTaskCounterContext } from "@/components/app/app-shell";
 import type { CrmWorkspace } from "@/lib/crm-data";
-import { getCrmPeriodWindow } from "@/lib/crm-time";
+import { formatCrmDate, getCrmDayWindow, getCrmPeriodWindow } from "@/lib/crm-time";
 import { cn, initials, rolePath, type Role } from "@/lib/utils";
-import { CompletedWorkList, FollowUpEditModal, InlineContactShortcuts, type TodayTaskApiRow, TaskCreateModal, TaskFollowUpModal, TodayWorkQueueList, todayWorkCounts, matchesTodayWorkFilter, sortTodayWorkQueue, WorkCompletionModal, type TodayWorkFilter } from "@/components/crm/resource-pages";
+import { CompletedWorkList, FollowUpEditModal, InlineContactShortcuts, toEditableCompletedTaskRow, type TodayTaskApiRow, TaskCreateModal, TodayWorkQueueList, todayWorkCounts, matchesTodayWorkFilter, sortTodayWorkQueue, WorkCompletionModal, type TodayWorkFilter } from "@/components/crm/resource-pages";
 import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
 import { updateFollowUpStatusAction, updateTaskStatusAction } from "@/lib/crm-actions";
 import { FormModal } from "@/components/shared/form-modal";
@@ -69,6 +69,39 @@ function getPreferredDashboardName(name: string) {
   const trimmed = name.trim();
   if (!trimmed) return "there";
   return trimmed.split(/\s+/)[0] ?? trimmed;
+}
+
+function dedupeRowsById<T extends { id: string }>(rows: T[]) {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    if (seen.has(row.id)) return false;
+    seen.add(row.id);
+    return true;
+  });
+}
+
+function bucketUpcomingTasks(rows: TodayTaskApiRow[]) {
+  const { to: tomorrowStart } = getCrmDayWindow(new Date());
+  const { to: dayAfterTomorrowStart } = getCrmDayWindow(tomorrowStart);
+  const tomorrowTasks: TodayTaskApiRow[] = [];
+  const laterTasks: TodayTaskApiRow[] = [];
+
+  for (const task of rows) {
+    const taskTime = new Date(task.taskDateIso).getTime();
+    if (!Number.isFinite(taskTime)) continue;
+    if (taskTime < dayAfterTomorrowStart.getTime()) {
+      tomorrowTasks.push(task);
+    } else {
+      laterTasks.push(task);
+    }
+  }
+
+  return {
+    tomorrowTasks,
+    laterTasks,
+    tomorrowLabel: formatCrmDate(tomorrowStart, "dd MMM yyyy"),
+    total: rows.length,
+  };
 }
 
 function useDashboardGreeting(name: string, role: Role) {
@@ -1104,7 +1137,7 @@ function TeamPerformanceDrilldownTable({
         {latestNotes.length ? (
           <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-black text-slate-950">Overall Notes</p>
+              <p className="text-sm font-black text-slate-950">Overall Details / Notes</p>
               <Badge variant="neutral">{latestNotes.length} notes</Badge>
             </div>
             <div className="mt-3 max-h-[min(42vh,28rem)] space-y-2 overflow-y-auto pr-2 [scrollbar-gutter:stable]">
@@ -1134,7 +1167,7 @@ function TeamPerformanceDrilldownTable({
               <th className="px-3 py-2 font-bold">Title</th>
               <th className="px-3 py-2 font-bold">Date & Time</th>
               <th className="px-3 py-2 font-bold">Status</th>
-              <th className="px-3 py-2 font-bold">Note</th>
+              <th className="px-3 py-2 font-bold">Details / Note</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -1254,7 +1287,7 @@ function TeamPerformanceDrilldownTable({
                   <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
                     <div className="rounded-[22px] border border-slate-200 bg-white p-5">
                       <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-black text-slate-950">Latest Note</p>
+                        <p className="text-sm font-black text-slate-950">Latest Details / Note</p>
                         <Badge variant="neutral">{relatedRows.length} items</Badge>
                       </div>
                       <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
@@ -1644,12 +1677,12 @@ function buildSupervisorLeadStatusData(workspace: CrmWorkspace) {
   const count = (...labels: string[]) => labels.reduce((sum, label) => sum + (pipelineMap.get(label) ?? 0), 0);
 
   return [
-    { name: `New Leads · ${count("New Lead")}`, value: count("New Lead"), color: "#2563EB" },
-    { name: `Qualified · ${count("Contacted", "Interested", "Negotiation")}`, value: count("Contacted", "Interested", "Negotiation"), color: "#4F46E5" },
-    { name: `Follow-up · ${count("Follow-up Required")}`, value: count("Follow-up Required"), color: "#F59E0B" },
-    { name: `Quotation · ${count("Quotation Sent")}`, value: count("Quotation Sent"), color: "#0EA5E9" },
-    { name: `Customer · ${count("Won Sale")}`, value: count("Won Sale"), color: "#16A34A" },
-    { name: `Lost · ${count("Lost Sale", "On Hold")}`, value: count("Lost Sale", "On Hold"), color: "#DC2626" },
+    { name: `New Leads Â· ${count("New Lead")}`, value: count("New Lead"), color: "#2563EB" },
+    { name: `Qualified Â· ${count("Contacted", "Interested", "Negotiation")}`, value: count("Contacted", "Interested", "Negotiation"), color: "#4F46E5" },
+    { name: `Follow-up Â· ${count("Follow-up Required")}`, value: count("Follow-up Required"), color: "#F59E0B" },
+    { name: `Quotation Â· ${count("Quotation Sent")}`, value: count("Quotation Sent"), color: "#0EA5E9" },
+    { name: `Customer Â· ${count("Won Sale")}`, value: count("Won Sale"), color: "#16A34A" },
+    { name: `Lost Â· ${count("Lost Sale", "On Hold")}`, value: count("Lost Sale", "On Hold"), color: "#DC2626" },
   ].filter((item) => item.value > 0);
 }
 
@@ -1941,21 +1974,21 @@ function SupervisorProductIntelligencePanel({ workspace }: { workspace: CrmWorks
       rows: workspace.productIntelligence.topEngaged,
       badgeVariant: "default" as const,
       metric: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.engagementScore} score`,
-      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.leadCount} interested companies · ${item.followUpCount} follow-ups`,
+      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.leadCount} interested companies Â· ${item.followUpCount} follow-ups`,
     },
     {
       title: "Highest Conversion Products",
       rows: workspace.productIntelligence.highestConversion,
       badgeVariant: "success" as const,
       metric: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.conversionRate}% conversion`,
-      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.salesCount} sales · ${item.quotationCount} quotations`,
+      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.salesCount} sales Â· ${item.quotationCount} quotations`,
     },
     {
       title: "Most Discussed Products",
       rows: workspace.productIntelligence.mostDiscussed,
       badgeVariant: "warning" as const,
       metric: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.communicationCount} discussions`,
-      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.leadCount} companies · ${item.followUpCount} follow-ups`,
+      description: (item: CrmWorkspace["productIntelligence"]["topEngaged"][number]) => `${item.leadCount} companies Â· ${item.followUpCount} follow-ups`,
     },
   ] as const;
 
@@ -2442,13 +2475,14 @@ function marketerActivityIcon(title: string, detail: string) {
   return { icon: CheckCircle2, tone: "bg-slate-100 text-slate-700" };
 }
 
-function MarketerKpiGrid({ workspace, tasks }: { workspace: CrmWorkspace; tasks: CrmWorkspace["todayWorkItems"] }) {
-  const pendingTasks = workspace.tasks.filter((task) => task.status !== "COMPLETED").length;
-  const newLeads = workspace.leads.filter((lead) => lead.status === "New Lead").length;
+function MarketerKpiGrid({ workspace }: { workspace: CrmWorkspace }) {
+  const todaysTasks = Number(workspace.stats.find((item) => item.title === "Today's Tasks")?.value ?? 0);
+  const pendingTasks = Number(workspace.stats.find((item) => item.title === "Pending Tasks")?.value ?? 0);
+  const newLeads = Number(workspace.stats.find((item) => item.title === "New Leads")?.value ?? 0);
   const meetingsToday = Number(workspace.stats.find((item) => item.title === "Meetings Today")?.value ?? 0);
   const rewardPoints = Number(workspace.stats.find((item) => item.title === "Reward Points")?.value ?? 0);
   const cards = [
-    { title: "Today's Tasks", value: String(tasks.length), helper: "Unified work queue" },
+    { title: "Today's Tasks", value: String(todaysTasks), helper: "Unified work queue" },
     { title: "Pending Tasks", value: String(pendingTasks), helper: "Need your action" },
     { title: "Follow-ups Due", value: String(workspace.followUpSummary.overdue + workspace.followUpSummary.today), helper: "Overdue & today" },
     { title: "New Leads", value: String(newLeads), helper: "Assigned leads" },
@@ -2482,23 +2516,16 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   const [actionError, setActionError] = React.useState("");
   const [activeFilter, setActiveFilter] = React.useState<MarketerTaskFilter>("all");
   const [activeTasks, setActiveTasks] = React.useState<TodayWorkQueueItem[]>([]);
+  const [upcomingTasks, setUpcomingTasks] = React.useState<TodayTaskApiRow[]>([]);
   const [completedTasks, setCompletedTasks] = React.useState<CompletedWorkItem[]>([]);
   const [completedStageFilter, setCompletedStageFilter] = React.useState<"all" | "Call" | "Follow-up" | "Demo Send" | "Quotation" | "Sale Won" | "Lead Lost">("all");
   const [completionItem, setCompletionItem] = React.useState<TodayWorkQueueItem | null>(null);
   const [editingTask, setEditingTask] = React.useState<TodayTaskApiRow | null>(null);
   const [editingFollowUp, setEditingFollowUp] = React.useState<TodayWorkQueueItem | null>(null);
   const [dueReminderItem, setDueReminderItem] = React.useState<TodayWorkQueueItem | null>(null);
-  const [followUpTask, setFollowUpTask] = React.useState<{
-    id: string;
-    title: string;
-    companyId?: string | null;
-    companyName: string;
-    leadId?: string | null;
-    leadName?: string | null;
-    taskId?: string | null;
-  } | null>(null);
   const { refreshTaskCount } = useTaskCounterContext();
   const scheduledRefreshTimers = React.useRef<number[]>([]);
+  const crmDayRefreshTimer = React.useRef<number | null>(null);
   const shownReminderKeys = React.useRef<Set<string>>(new Set());
   const role = workspace.user.role;
 
@@ -2569,13 +2596,15 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
     setError("");
 
     try {
-      const [todayResponse, completedResponse] = await Promise.all([
+      const [todayResponse, upcomingResponse, completedResponse] = await Promise.all([
         fetch("/api/tasks/today", { cache: "no-store" }),
+        fetch("/api/tasks/upcoming", { cache: "no-store" }),
         fetch("/api/tasks/completed", { cache: "no-store" }),
       ]);
 
-      const [todayResult, completedResult] = await Promise.all([
+      const [todayResult, upcomingResult, completedResult] = await Promise.all([
         todayResponse.json(),
+        upcomingResponse.json(),
         completedResponse.json(),
       ]);
 
@@ -2583,13 +2612,18 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
         throw new Error(typeof todayResult.message === "string" ? todayResult.message : "Failed to load today's tasks.");
       }
 
+      if (!upcomingResponse.ok) {
+        throw new Error(typeof upcomingResult.message === "string" ? upcomingResult.message : "Failed to load upcoming tasks.");
+      }
+
       if (!completedResponse.ok) {
         throw new Error(typeof completedResult.message === "string" ? completedResult.message : "Failed to load completed tasks.");
       }
 
-      const sortedRows = sortTodayWorkQueue(todayResult.rows as TodayWorkQueueItem[]);
+      const sortedRows = sortTodayWorkQueue(dedupeRowsById(todayResult.rows as TodayWorkQueueItem[]));
       setActiveTasks(sortedRows);
-      setCompletedTasks(completedResult.rows as CompletedWorkItem[]);
+      setUpcomingTasks(dedupeRowsById(upcomingResult.rows as TodayTaskApiRow[]));
+      setCompletedTasks(dedupeRowsById(completedResult.rows as CompletedWorkItem[]));
       return sortedRows;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load tasks.");
@@ -2615,8 +2649,39 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
         window.clearTimeout(timer);
       }
       scheduledRefreshTimers.current = [];
+      if (crmDayRefreshTimer.current !== null) {
+        window.clearTimeout(crmDayRefreshTimer.current);
+        crmDayRefreshTimer.current = null;
+      }
     };
   }, []);
+
+  const scheduleNextCrmDayRefresh = React.useCallback(() => {
+    if (crmDayRefreshTimer.current !== null) {
+      window.clearTimeout(crmDayRefreshTimer.current);
+    }
+
+    const nextCrmDayStart = getCrmDayWindow(new Date()).to;
+    const delay = Math.max(0, nextCrmDayStart.getTime() - Date.now());
+
+    crmDayRefreshTimer.current = window.setTimeout(() => {
+      crmDayRefreshTimer.current = null;
+      void loadTasks();
+      void refreshTaskCount();
+      scheduleNextCrmDayRefresh();
+    }, delay + 250);
+  }, [loadTasks, refreshTaskCount]);
+
+  React.useEffect(() => {
+    scheduleNextCrmDayRefresh();
+
+    return () => {
+      if (crmDayRefreshTimer.current !== null) {
+        window.clearTimeout(crmDayRefreshTimer.current);
+        crmDayRefreshTimer.current = null;
+      }
+    };
+  }, [scheduleNextCrmDayRefresh]);
 
   const scheduleQueueRefreshAt = React.useCallback((isoDate?: string | null) => {
     if (!isoDate) return;
@@ -2694,7 +2759,6 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   };
 
   const handleFollowUpSaved = (result?: unknown) => {
-    setFollowUpTask(null);
     const scheduledDate = extractDate(result, "followUpDate");
     void loadTasks().then((rows) => {
       maybeOpenDueReminder(rows, scheduledDate);
@@ -2732,6 +2796,15 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
     if (completedStageFilter === "all") return completedTasks;
     return completedTasks.filter((task) => completedPipelineStage(task) === completedStageFilter);
   }, [completedPipelineStage, completedStageFilter, completedTasks]);
+  const upcomingTaskSummary = React.useMemo(() => {
+    const { tomorrowTasks, laterTasks } = bucketUpcomingTasks(upcomingTasks);
+    return {
+      all: upcomingTasks.length,
+      tomorrow: tomorrowTasks.length,
+      later: laterTasks.length,
+    };
+  }, [upcomingTasks]);
+  const upcomingTaskBuckets = React.useMemo(() => bucketUpcomingTasks(upcomingTasks), [upcomingTasks]);
   const chips: { key: MarketerTaskFilter; label: string }[] = [
     { key: "all", label: "All" },
     { key: "tasks", label: "Tasks" },
@@ -2740,16 +2813,9 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
     { key: "carry-forward", label: "Carry Forward" },
   ];
 
-  const handleAddFollowUp = React.useCallback((task: CompletedWorkItem) => {
-    setFollowUpTask({
-      id: task.sourceId,
-      title: task.title,
-      companyId: task.companyId,
-      companyName: task.companyName,
-      leadId: task.leadId,
-      leadName: task.leadName,
-      taskId: task.taskId ?? (task.sourceType === "TASK" ? task.sourceId : null),
-    });
+  const handleEditCompletedTask = React.useCallback((task: CompletedWorkItem) => {
+    if (task.sourceType !== "TASK") return;
+    setEditingTask(toEditableCompletedTaskRow(task));
   }, []);
 
   const handleTaskDelete = React.useCallback(async (task: TodayTaskApiRow) => {
@@ -2791,62 +2857,95 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
         {error ? <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p> : null}
         {actionError ? <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{actionError}</p> : null}
 
-        <div className="grid gap-5 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <DashboardCard
-            title="Today's Tasks"
-            action={
-              <CreateTodayTaskButton
-                workspace={workspace}
-                label="Add Task"
-                size="sm"
-                className="h-8 rounded-xl"
-                onCreated={handleCreated}
+        <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="space-y-5">
+            <DashboardCard
+              title="Today's Tasks"
+              action={
+                <CreateTodayTaskButton
+                  workspace={workspace}
+                  label="Add Task"
+                  size="sm"
+                  className="h-8 rounded-xl"
+                  onCreated={handleCreated}
+                />
+              }
+            >
+              {upcomingTaskSummary.all ? (
+                <div className="mb-4 rounded-2xl border border-sky-200 bg-gradient-to-r from-sky-50 via-blue-50 to-white p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-sky-700">Saved For Tomorrow</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-900">
+                        {upcomingTaskBuckets.tomorrowTasks.length
+                          ? `${upcomingTaskBuckets.tomorrowTasks.length} ta task ${upcomingTaskBuckets.tomorrowLabel} er jonno already save ache.`
+                          : `${upcomingTaskBuckets.laterTasks.length} ta future task already save kora ache.`}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(upcomingTaskBuckets.tomorrowTasks.length ? upcomingTaskBuckets.tomorrowTasks : upcomingTaskBuckets.laterTasks).slice(0, 2).map((task) => (
+                          <span key={`upcoming-chip-${task.id}`} className="inline-flex max-w-full items-center rounded-full border border-sky-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700">
+                            <span className="truncate">{task.companyName}</span>
+                            <span className="ml-2 shrink-0 text-slate-500">{task.timeLabel || task.taskDateLabel}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <Link
+                      href={rolePath(role, "tasks")}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                    >
+                      Open Queue
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </Link>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {chips.map((chip) => {
+                  const active = activeFilter === chip.key;
+
+                  return (
+                    <button
+                      key={chip.key}
+                      type="button"
+                      onClick={() => setActiveFilter(chip.key)}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-bold transition",
+                        active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:border-blue-100 hover:text-slate-700",
+                      )}
+                    >
+                      {chip.label}
+                      <span className={cn("rounded-full px-1.5 py-0.5 text-[11px]", active ? "bg-white text-blue-700" : "bg-slate-100 text-slate-500")}>{counts[chip.key]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-4">
+                <Badge variant={counts.overdue ? "warning" : "neutral"} className="mb-3 inline-flex w-fit rounded-full px-3 py-1 text-xs font-bold">
+                  {counts.all} Pending
+                </Badge>
+              </div>
+
+              <TodayWorkQueueList
+                rows={filteredItems}
+                loading={loading}
+                viewerRole={role}
+                emptyMessage="No work items in this view."
+                activeItemId={completionItem?.id ?? null}
+                onEdit={setEditingTask}
+                onDelete={(task) => void handleTaskDelete(task)}
+                onEditFollowUp={setEditingFollowUp}
+                onDeleteFollowUp={(item) => void handleFollowUpDelete(item)}
+                onComplete={(item) => {
+                  setActionError("");
+                  setCompletionItem(item);
+                }}
               />
-            }
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              {chips.map((chip) => {
-                const active = activeFilter === chip.key;
+            </DashboardCard>
 
-                return (
-                  <button
-                    key={chip.key}
-                    type="button"
-                    onClick={() => setActiveFilter(chip.key)}
-                    className={cn(
-                      "inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-bold transition",
-                      active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:border-blue-100 hover:text-slate-700",
-                    )}
-                  >
-                    {chip.label}
-                    <span className={cn("rounded-full px-1.5 py-0.5 text-[11px]", active ? "bg-white text-blue-700" : "bg-slate-100 text-slate-500")}>{counts[chip.key]}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="mt-4">
-              <Badge variant={counts.overdue ? "warning" : "neutral"} className="mb-3 inline-flex w-fit rounded-full px-3 py-1 text-xs font-bold">
-                {counts.all} Pending
-              </Badge>
-            </div>
-
-            <TodayWorkQueueList
-              rows={filteredItems}
-              loading={loading}
-              viewerRole={role}
-              emptyMessage="No work items in this view."
-              activeItemId={completionItem?.id ?? null}
-              onEdit={setEditingTask}
-              onDelete={(task) => void handleTaskDelete(task)}
-              onEditFollowUp={setEditingFollowUp}
-              onDeleteFollowUp={(item) => void handleFollowUpDelete(item)}
-              onComplete={(item) => {
-                setActionError("");
-                setCompletionItem(item);
-              }}
-            />
-          </DashboardCard>
+          </div>
 
           <DashboardCard
             title="Completed Tasks"
@@ -2884,7 +2983,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
               loading={loading}
               viewerRole={role}
               emptyMessage="No completed tasks yet."
-              onAddFollowUp={handleAddFollowUp}
+              onEditCompletedTask={handleEditCompletedTask}
               previewCount={6}
             />
           </DashboardCard>
@@ -2928,12 +3027,6 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
         onSaved={handleCompletionSaved}
       />
 
-      <TaskFollowUpModal
-        task={followUpTask}
-        onClose={() => setFollowUpTask(null)}
-        onSaved={handleFollowUpSaved}
-      />
-
       <FormModal
         open={Boolean(dueReminderItem)}
         title="Follow-up Reminder"
@@ -2947,7 +3040,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
               <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-700">Live now</p>
               <h3 className="mt-2 text-2xl font-black text-slate-950">{dueReminderItem.title}</h3>
               <p className="mt-2 text-base font-bold text-slate-800">{dueReminderItem.companyName}</p>
-              <p className="mt-1 text-sm font-semibold text-slate-600">{dueReminderItem.timeLabel} • {dueReminderItem.taskDateLabel}</p>
+              <p className="mt-1 text-sm font-semibold text-slate-600">{dueReminderItem.timeLabel} â€¢ {dueReminderItem.taskDateLabel}</p>
               <p className="mt-3 text-sm leading-6 text-slate-700">{dueReminderItem.description !== "-" ? dueReminderItem.description : dueReminderItem.method}</p>
             </div>
 
@@ -2990,36 +3083,142 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
 }
 
 function MarketerFollowUpCenter({ workspace }: { workspace: CrmWorkspace }) {
-  const groups = [
-    { title: "Overdue", rows: workspace.followUps.filter((item) => item.bucket === "Overdue"), tone: "text-red-600" },
-    { title: "Due Today", rows: workspace.followUps.filter((item) => item.bucket === "Due Today"), tone: "text-amber-600" },
-    { title: "Upcoming", rows: workspace.followUps.filter((item) => item.bucket === "Upcoming"), tone: "text-blue-600" },
-    { title: "Completed", rows: workspace.followUps.filter((item) => item.bucket === "Completed"), tone: "text-emerald-600" },
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState("");
+  const [rows, setRows] = React.useState<TodayTaskApiRow[]>([]);
+  const crmDayRefreshTimer = React.useRef<number | null>(null);
+
+  const loadUpcoming = React.useCallback(async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/tasks/upcoming", { cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(typeof result.message === "string" ? result.message : "Failed to load scheduled tasks.");
+      }
+      setRows(dedupeRowsById(result.rows as TodayTaskApiRow[]));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load scheduled tasks.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void loadUpcoming();
+  }, [loadUpcoming]);
+
+  const scheduleNextCrmDayRefresh = React.useCallback(() => {
+    if (crmDayRefreshTimer.current !== null) {
+      window.clearTimeout(crmDayRefreshTimer.current);
+    }
+
+    const nextCrmDayStart = getCrmDayWindow(new Date()).to;
+    const delay = Math.max(0, nextCrmDayStart.getTime() - Date.now());
+
+    crmDayRefreshTimer.current = window.setTimeout(() => {
+      crmDayRefreshTimer.current = null;
+      void loadUpcoming();
+      scheduleNextCrmDayRefresh();
+    }, delay + 250);
+  }, [loadUpcoming]);
+
+  React.useEffect(() => {
+    scheduleNextCrmDayRefresh();
+
+    return () => {
+      if (crmDayRefreshTimer.current !== null) {
+        window.clearTimeout(crmDayRefreshTimer.current);
+        crmDayRefreshTimer.current = null;
+      }
+    };
+  }, [scheduleNextCrmDayRefresh]);
+
+  const buckets = React.useMemo(() => {
+    const { tomorrowTasks, laterTasks, tomorrowLabel, total } = bucketUpcomingTasks(rows);
+    return {
+      tomorrow: tomorrowTasks,
+      later: laterTasks,
+      tomorrowLabel,
+      total,
+    };
+  }, [rows]);
+
+  const panels = [
+    {
+      title: "Tomorrow",
+      tone: "text-blue-600",
+      badgeVariant: "default" as const,
+      count: buckets.tomorrow.length,
+      rows: buckets.tomorrow,
+      empty: "Kal er jonno kono task save kora hoyni.",
+      helper: buckets.tomorrow.length ? buckets.tomorrowLabel : "No task scheduled",
+    },
+    {
+      title: "Next",
+      tone: "text-slate-700",
+      badgeVariant: "neutral" as const,
+      count: buckets.later.length,
+      rows: buckets.later,
+      empty: "Next day-r jonno kono task nai.",
+      helper: buckets.later.length ? "Porer scheduled task gulo" : "No next task",
+    },
   ] as const;
 
   return (
     <DashboardCard
-      title="Follow-up Center"
-      action={<Link href={rolePath("MARKETER", "follow-ups")} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-50">View All <ArrowRight className="h-4 w-4" /></Link>}
+      title="Scheduled For Tomorrow"
+      action={<Link href={rolePath("MARKETER", "tasks")} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-50">View All <ArrowRight className="h-4 w-4" /></Link>}
     >
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {groups.map((group) => (
-          <div key={group.title} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+      {error ? <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p> : null}
+      <div className="rounded-2xl border border-sky-200 bg-gradient-to-r from-sky-50 via-blue-50 to-white p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="default" className="rounded-full px-3 py-1 text-xs font-bold">Tomorrow {buckets.tomorrow.length}</Badge>
+          <Badge variant="neutral" className="rounded-full px-3 py-1 text-xs font-bold">Next {buckets.later.length}</Badge>
+          <Badge variant="neutral" className="rounded-full px-3 py-1 text-xs font-bold">Total {buckets.total}</Badge>
+        </div>
+        <p className="mt-3 text-sm font-semibold text-slate-900">
+          {buckets.tomorrow.length
+            ? `${buckets.tomorrowLabel} er jonno ${buckets.tomorrow.length} ta task ready ache.`
+            : buckets.later.length
+              ? `${buckets.later.length} ta next scheduled task niche list akare dekhano hocche.`
+              : "Agamikal ba next diner jonno ekhono kono task save kora hoyni."}
+        </p>
+      </div>
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        {panels.map((panel) => (
+          <div key={panel.title} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
-              <h3 className={cn("text-sm font-black", group.tone)}>{group.title}</h3>
-              <span className="inline-flex min-w-7 items-center justify-center rounded-full bg-white px-2 py-0.5 text-xs font-black text-slate-700 shadow-sm">{group.rows.length}</span>
+              <div>
+                <h3 className={cn("text-sm font-black", panel.tone)}>{panel.title}</h3>
+                <p className="mt-1 text-xs font-semibold text-slate-500">{panel.helper}</p>
+              </div>
+              <span className="inline-flex min-w-7 items-center justify-center rounded-full bg-white px-2 py-0.5 text-xs font-black text-slate-700 shadow-sm">{panel.count}</span>
             </div>
-            <div className="space-y-3">
-              {group.rows.slice(0, 3).map((item) => (
-                <div key={item.id} className="rounded-xl bg-white px-3 py-3 shadow-sm">
-                  <p className="truncate text-sm font-black text-slate-900">
-                    <EntityLink href={item.href} className="font-black">{item.customer}</EntityLink>
-                  </p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">{item.method}</p>
-                  <p className="mt-1 text-xs text-slate-400">{item.followUpDate}</p>
+            <div className="h-[280px] space-y-3 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
+              {loading ? (
+                <p className="rounded-xl bg-white p-3 text-xs font-semibold text-slate-400">Loading scheduled tasks...</p>
+              ) : panel.rows.map((task) => (
+                <div key={`${panel.title}-${task.id}`} className="rounded-xl bg-white px-3 py-3 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-slate-900">{task.title}</p>
+                      <p className="mt-1 truncate text-sm font-semibold text-blue-700">
+                        {task.companyHref ? <Link href={task.companyHref} className="hover:text-blue-800">{task.companyName}</Link> : task.companyName}
+                      </p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        {task.taskDateLabel}{task.timeLabel ? ` at ${task.timeLabel}` : ""}
+                      </p>
+                    </div>
+                    <Badge variant={panel.badgeVariant} className="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold">
+                      {task.priority}
+                    </Badge>
+                  </div>
                 </div>
               ))}
-              {!group.rows.length ? <p className="rounded-xl bg-white p-3 text-xs font-semibold text-slate-400">No follow-ups here.</p> : null}
+              {!loading && !panel.rows.length ? <p className="rounded-xl bg-white p-3 text-xs font-semibold text-slate-400">{panel.empty}</p> : null}
             </div>
           </div>
         ))}
@@ -3066,7 +3265,6 @@ function MarketerRecentActivities({ workspace }: { workspace: CrmWorkspace }) {
 }
 
 export function MarketerDashboard({ workspace }: { workspace: CrmWorkspace }) {
-  const marketerTasks = workspace.todayWorkItems.filter((item) => item.source !== "Plan");
   const greeting = useDashboardGreeting(workspace.user.name, "MARKETER");
 
   return (
@@ -3077,7 +3275,7 @@ export function MarketerDashboard({ workspace }: { workspace: CrmWorkspace }) {
         description={greeting.description}
       />
 
-      <MarketerKpiGrid workspace={workspace} tasks={marketerTasks} />
+      <MarketerKpiGrid workspace={workspace} />
 
       <MarketerTodayTaskSection workspace={workspace} />
 
@@ -3703,7 +3901,7 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
               <div className="min-w-0">
                 <p className="truncate text-base font-black text-slate-950">{company?.name ?? detailCustomerName}</p>
                 <p className="mt-1 text-xs font-semibold text-slate-500">
-                  {[company?.industry, company?.cityOrZilla].filter((value) => value && value !== "-").join(" • ") || "Company details"}
+                  {[company?.industry, company?.cityOrZilla].filter((value) => value && value !== "-").join(" â€¢ ") || "Company details"}
                 </p>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
@@ -4113,8 +4311,8 @@ function AdminRecentActivitiesPanel({ rows }: { rows: CrmWorkspace["activities"]
           {recentRows.map((item) => {
             const visual = adminActivityVisual(item.category);
             const Icon = visual.icon;
-            const customerLabel = item.customerName ?? item.detail.split("·")[0]?.trim() ?? "CRM record";
-            const employeeLabel = item.employeeName ?? item.createdBy ?? item.detail.split("·")[1]?.trim() ?? "System";
+            const customerLabel = item.customerName ?? item.detail.split("Â·")[0]?.trim() ?? "CRM record";
+            const employeeLabel = item.employeeName ?? item.createdBy ?? item.detail.split("Â·")[1]?.trim() ?? "System";
 
             return (
               <div key={item.id} className="rounded-[18px] border border-slate-200 bg-slate-50/80 p-4 shadow-sm">
@@ -4292,3 +4490,4 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
     </div>
   );
 }
+

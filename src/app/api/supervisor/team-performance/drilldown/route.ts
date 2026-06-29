@@ -52,6 +52,15 @@ function normalizeLeadTitle(value: string | null | undefined, fallbackCustomer: 
   return value?.trim() || fallbackCustomer?.trim() || "Lead";
 }
 
+function formatTaskDetailAndNote(description?: string | null, notes?: string | null) {
+  const sections = [
+    description?.trim() ? `Task Details: ${description.trim()}` : "",
+    notes?.trim() ? `Task Note: ${notes.trim()}` : "",
+  ].filter(Boolean);
+
+  return sections.join("\n\n") || "-";
+}
+
 export async function GET(request: Request) {
   try {
     const auth = await requireRequestUser(["ADMIN", "SUPERVISOR", "MARKETER"]);
@@ -205,6 +214,7 @@ export async function GET(request: Request) {
             companyId: true,
             title: true,
             description: true,
+            notes: true,
             status: true,
             dueDate: true,
             updatedAt: true,
@@ -369,7 +379,7 @@ export async function GET(request: Request) {
           sortDate: taskDate.getTime(),
           sortDateValue: taskDate.toISOString(),
           status: task.status,
-          note: task.description || "-",
+          note: formatTaskDetailAndNote(task.description, task.notes),
         });
       }
 
@@ -534,6 +544,7 @@ export async function GET(request: Request) {
           companyId: true,
           title: true,
           description: true,
+          notes: true,
           status: true,
           dueDate: true,
           updatedAt: true,
@@ -565,7 +576,7 @@ export async function GET(request: Request) {
           sortDate: taskDate.getTime(),
           sortDateValue: taskDate.toISOString(),
           status: task.status,
-          note: task.description || "-",
+          note: formatTaskDetailAndNote(task.description, task.notes),
         };
       }).sort((left, right) => right.sortDate - left.sortDate);
     }

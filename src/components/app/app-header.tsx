@@ -3,7 +3,6 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { format } from "date-fns";
 import { AnimatePresence, motion } from "framer-motion";
 import { gsap } from "gsap";
 import { ArrowRight, Bell, CheckCheck, LogOut, Menu, MessageSquare, Search, UserRound, X } from "lucide-react";
@@ -11,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useNotificationCenterContext } from "@/components/app/app-shell";
+import { formatCrmDate } from "@/lib/crm-time";
 import { cn, initials, roleLabels, rolePath, type Role, type ShellUser } from "@/lib/utils";
 
 function notificationPageHref(role: Role) {
@@ -289,7 +289,7 @@ export function AppHeader({
                 }
               }}
               className="pl-9 pr-10"
-              placeholder="Search company, marketer, demo, follow-up, quotation..."
+              placeholder="Search company, phone number, call, follow-up, quotation..."
             />
             {searchQuery ? (
               <button
@@ -324,7 +324,7 @@ export function AppHeader({
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-sm font-black text-slate-900">Live Activity Search</p>
-                      <p className="text-xs text-slate-500">See who called, demoed, quoted, won, or lost by company and marketer.</p>
+                      <p className="text-xs text-slate-500">Search by company, phone, call, follow-up, quotation, win, or lost and jump into history or edit.</p>
                     </div>
                     <Badge variant="neutral" className="shrink-0">
                       {trimmedSearchQuery ? "Live" : "Keywords"}
@@ -352,7 +352,7 @@ export function AppHeader({
                       ))}
                     </div>
                     <p className="mt-4 rounded-2xl bg-slate-50 px-3 py-3 text-xs font-medium text-slate-500">
-                      Type a company name or keywords like <span className="font-bold text-slate-700">demo</span>, <span className="font-bold text-slate-700">follow-up</span>, <span className="font-bold text-slate-700">quotation</span>, <span className="font-bold text-slate-700">win</span>, or <span className="font-bold text-slate-700">lost</span>.
+                      Type a company name, phone number, or keywords like <span className="font-bold text-slate-700">call</span>, <span className="font-bold text-slate-700">follow-up</span>, <span className="font-bold text-slate-700">quotation</span>, <span className="font-bold text-slate-700">win</span>, or <span className="font-bold text-slate-700">lost</span>.
                     </p>
                   </div>
                 ) : (
@@ -391,7 +391,7 @@ export function AppHeader({
                     ) : (
                       <div className="rounded-2xl bg-slate-50 px-4 py-8 text-center">
                         <p className="text-sm font-bold text-slate-700">No matching activity found</p>
-                        <p className="mt-1 text-xs text-slate-500">Try a company name or another keyword like demo, quotation, win, or lost.</p>
+                        <p className="mt-1 text-xs text-slate-500">Try a company name, phone number, or another keyword like call, quotation, win, or lost.</p>
                       </div>
                     )}
                   </div>
@@ -414,7 +414,7 @@ export function AppHeader({
 
         <div className="ml-auto flex items-center gap-2">
           <Badge variant="neutral" className="hidden sm:inline-flex">
-            {format(new Date(), "MMM d, yyyy")}
+            {formatCrmDate(new Date(), "dd MMM yyyy")}
           </Badge>
           <Badge variant="default" className="hidden md:inline-flex">
             {roleLabels[role]}

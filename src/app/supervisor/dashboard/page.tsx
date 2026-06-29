@@ -1,7 +1,7 @@
 import { AppShell } from "@/components/app/app-shell";
 import { SupervisorDashboard } from "@/components/crm/dashboard-pages";
 import { requireCurrentUser } from "@/lib/auth";
-import { getCrmWorkspace } from "@/lib/crm-data";
+import { getDashboardWorkspace } from "@/lib/crm-data";
 
 type TeamPerformancePeriod = "today" | "week" | "month";
 
@@ -14,7 +14,7 @@ export default async function SupervisorDashboardPage({ searchParams }: { search
   };
   const period = isValidPeriod(rawPeriod) ? (Array.isArray(rawPeriod) ? rawPeriod[0] : rawPeriod) : "today";
   const user = await requireCurrentUser("SUPERVISOR");
-  const workspace = await getCrmWorkspace("SUPERVISOR", user, { period });
+  const workspace = await getDashboardWorkspace("SUPERVISOR", user, { period });
 
   return (
     <AppShell role="SUPERVISOR" user={user} unreadCount={workspace.unreadCount} followUpCount={workspace.followUpSummary.actionable} sidebarCounts={workspace.sidebarCounts}>
@@ -22,4 +22,3 @@ export default async function SupervisorDashboardPage({ searchParams }: { search
     </AppShell>
   );
 }
-

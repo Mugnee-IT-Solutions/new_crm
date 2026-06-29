@@ -22,6 +22,7 @@ export type TaskListItem = {
   id: string;
   title: string;
   companyName: string;
+  companyPrimaryPhone: string;
   companyId?: string | null;
   productId?: string | null;
   companyHref?: string | null;
@@ -99,6 +100,7 @@ export type CompletedWorkItem = {
   taskId?: string | null;
   title: string;
   companyName: string;
+  companyPrimaryPhone: string;
   companyId?: string | null;
   productId?: string | null;
   companyHref?: string | null;
@@ -345,6 +347,7 @@ function mapTaskRecord(task: TaskQueryRecord, role: Role): TaskListItem {
     id: task.id,
     title: task.title,
     companyName: companyDisplayName(task),
+    companyPrimaryPhone: normalizeQueuePhone(task.company?.phone),
     companyId: task.companyId,
     productId: task.productId,
     companyHref: dashboardReturnHref(role, task.companyId ? `/customers/${task.companyId}` : null),
@@ -665,6 +668,33 @@ export async function getTodayTasks(actor: TaskActor, filters: TaskFilters = {})
   return tasks.filter((task) => isTaskVisibleInTodayList(task, now)).map((task) => mapTaskRecord(task, actor.role));
 }
 
+export async function getUpcomingTasks(actor: TaskActor, filters: TaskFilters = {}) {
+  const prisma = getPrisma();
+
+  const { to: tomorrow } = getCrmDayWindow(new Date());
+  const where: Record<string, unknown> = {
+    AND: [
+      await scopedTaskWhere(prisma, actor),
+      { status: "PENDING" },
+      { taskDate: { gte: tomorrow } },
+      ...(toPrismaPriority(filters.priority) ? [{ priority: toPrismaPriority(filters.priority) }] : []),
+      ...(parseCompanyFilter(filters.company) ? [parseCompanyFilter(filters.company)!] : []),
+    ],
+  };
+
+  const tasks = await prisma.task.findMany({
+    where,
+    include: taskQueryInclude,
+    orderBy: [
+      { taskDate: "asc" },
+      { taskTime: "asc" },
+      { updatedAt: "desc" },
+    ],
+  });
+
+  return tasks.map((task) => mapTaskRecord(task, actor.role));
+}
+
 export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters = {}) {
   const prisma = getPrisma();
 
@@ -913,13 +943,13 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
         ],
       },
       include: {
-        company: { select: { id: true, name: true } },
+        company: { select: { id: true, name: true, phone: true } },
         lead: {
           select: {
             id: true,
             title: true,
             customerName: true,
-            company: { select: { id: true, name: true } },
+            company: { select: { id: true, name: true, phone: true } },
           },
         },
         assignedTo: { select: { name: true, role: true } },
@@ -954,6 +984,7 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
       taskId: mapped.id,
       title: mapped.title,
       companyName: mapped.companyName,
+      companyPrimaryPhone: mapped.companyPrimaryPhone,
       companyId: mapped.companyId,
       productId: mapped.productId,
       companyHref: mapped.companyHref,
@@ -987,6 +1018,7 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
   const followUpItems: CompletedWorkItem[] = followUps.map((followUp) => {
     const company = followUp.company ?? followUp.lead?.company ?? null;
     const companyName = company?.name ?? followUp.lead?.customerName ?? "Unknown Company";
+    const companyPrimaryPhone = normalizeQueuePhone(company?.phone);
     const companyId = company?.id ?? followUp.companyId ?? followUp.lead?.company?.id ?? null;
     const leadName = cleanQueueText(followUp.lead?.title) || cleanQueueText(followUp.lead?.customerName) || null;
     const title = followUpDisplayTitle({
@@ -1009,6 +1041,7 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
       taskId: followUp.task?.id ?? null,
       title,
       companyName,
+      companyPrimaryPhone,
       companyId,
       productId: null,
       companyHref: companyId ? dashboardReturnHref(actor.role, `/customers/${companyId}`) : followUp.leadId ? `/leads/${followUp.leadId}` : null,
@@ -1044,6 +1077,7 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
     const haystack = [
       item.title,
       item.companyName,
+      item.companyPrimaryPhone,
       item.description,
       item.method,
       item.leadName ?? "",
@@ -1194,7 +1228,24 @@ export async function updateTaskEntry(actor: TaskActor, taskId: string, input: {
   }
 
   if (existing.status === "COMPLETED") {
-    throw new TaskInputError("Completed task cannot be edited.", 400);
+    const updatedCompleted = await prisma.task.update({
+      where: { id: taskId },
+      data: {
+        notes: input.notes?.trim() ? normalizeText(input.notes) : null,
+      },
+      include: taskQueryInclude,
+    });
+
+    await addTaskActivity(prisma, {
+      userId: actor.id,
+      taskId: updatedCompleted.id,
+      companyId: updatedCompleted.companyId,
+      title: "Completed Task Note Updated",
+      taskTitle: updatedCompleted.title,
+      description: `${updatedCompleted.title} note updated`,
+    });
+
+    return mapTaskRecord(updatedCompleted, actor.role);
   }
 
   const taskDateTime = new Date(input.taskDateTime);

@@ -92,7 +92,7 @@ import type {
 } from "@/lib/crm-data";
 import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
 import { TASK_REMINDER_OPTIONS, normalizeTaskReminderValue, taskReminderLabel, type TaskReminderValue } from "@/lib/task-reminders";
-import { getCrmPeriodWindow } from "@/lib/crm-time";
+import { getCrmDayWindow, getCrmPeriodWindow } from "@/lib/crm-time";
 import { type ReportFormat } from "@/lib/report-definitions";
 import { cn, formatCurrency, initials, rolePath, type Role, type ShellUser } from "@/lib/utils";
 
@@ -508,6 +508,7 @@ function TextField({
   placeholder,
   required = false,
   readOnly = false,
+  disabled = false,
   compact = false,
 }: {
   label: string;
@@ -517,6 +518,7 @@ function TextField({
   placeholder?: string;
   required?: boolean;
   readOnly?: boolean;
+  disabled?: boolean;
   compact?: boolean;
 }) {
   return (
@@ -529,9 +531,10 @@ function TextField({
         defaultValue={defaultValue}
         placeholder={placeholder}
         readOnly={readOnly}
+        disabled={disabled}
         className={cn(
           compact ? "h-9 px-2.5 text-[13px]" : undefined,
-          readOnly ? "bg-slate-100 text-slate-500" : undefined,
+          (readOnly || disabled) ? "bg-slate-100 text-slate-500" : undefined,
         )}
       />
     </label>
@@ -2633,11 +2636,293 @@ function customerActivityTooltip(customer: CompanyRow) {
   return rows.join("\n");
 }
 
+type CustomerQuickContextPayload = {
+  success?: boolean;
+  message?: string;
+  profileCustomer?: CompanyRow;
+  history?: CustomerHistory;
+  journey?: CustomerJourneySummary;
+  counts?: {
+    tasks: number;
+    followUps: number;
+    communications: number;
+  };
+};
+
+const customerQuickContextCache = new Map<string, CustomerQuickContextPayload>();
+
+function firstCustomerValue(...values: Array<string | null | undefined>) {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const normalized = value.trim();
+    if (normalized && normalized !== "-") return normalized;
+  }
+  return "-";
+}
+
+function readableCustomerValue(value: string, emptyLabel: string) {
+  return value !== "-" ? value : emptyLabel;
+}
+
+function buildCustomerReturnHref(pathname: string, searchParams: ReturnType<typeof useSearchParams>) {
+  const query = searchParams.toString();
+  return `${pathname}${query ? `?${query}` : ""}`;
+}
+
+function useCustomerQuickContext(customerId: string | null | undefined, open: boolean) {
+  const [payload, setPayload] = React.useState<CustomerQuickContextPayload | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  React.useEffect(() => {
+    if (!open || !customerId) {
+      setLoading(false);
+      setError("");
+      return;
+    }
+
+    const cached = customerQuickContextCache.get(customerId);
+    if (cached) {
+      setPayload(cached);
+      setLoading(false);
+      setError("");
+      return;
+    }
+
+    const controller = new AbortController();
+    const load = async () => {
+      setPayload(null);
+      setLoading(true);
+      setError("");
+
+      try {
+        const response = await fetch(`/api/customers/${customerId}?includeHistory=1`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const result = await response.json() as CustomerQuickContextPayload;
+
+        if (!response.ok || !result.success) {
+          throw new Error(result.message ?? "Failed to load customer context.");
+        }
+
+        customerQuickContextCache.set(customerId, result);
+        setPayload(result);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setPayload(null);
+        setError(error instanceof Error ? error.message : "Failed to load customer context.");
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void load();
+    return () => controller.abort();
+  }, [customerId, open]);
+
+  return {
+    payload,
+    loading,
+    error,
+  };
+}
+
+function CustomerQuickSummaryPanel({
+  customer,
+  open,
+  role,
+  compact = false,
+}: {
+  customer: CompanyRow | null;
+  open: boolean;
+  role: Role;
+  compact?: boolean;
+}) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const { payload, loading, error } = useCustomerQuickContext(customer?.id, open);
+
+  if (!customer) return null;
+
+  const profileCustomer = payload?.profileCustomer ?? customer;
+  const history = payload?.history;
+  const journey = payload?.journey;
+  const latestTask = history?.tasks[0];
+  const latestFollowUp = history?.followUps[0];
+  const latestCommunication = history?.communications[0];
+  const latestActivity = history?.activities[0];
+  const latestTaskNote = firstCustomerValue(latestTask?.notes, latestTask?.description);
+  const latestFollowUpNote = firstCustomerValue(latestFollowUp?.note, latestFollowUp?.nextDiscussionPlan);
+  const latestCommunicationNote = firstCustomerValue(
+    latestCommunication?.summary,
+    latestCommunication?.notes,
+    latestCommunication?.discussionTopic,
+    latestActivity?.discussionSummary,
+    latestActivity?.notes,
+  );
+  const customerRaw = parseTemplateRawData(profileCustomer.rawData) as Record<string, unknown>;
+  const customerNote = toDisplayValue(readTemplateField(customerRaw, ["Note", "Notes", "Remarks"])) || toDisplayValue(profileCustomer.notes);
+  const stageTitle = journey?.currentStage && journey.currentStage !== "No activity yet"
+    ? journey.currentStage
+    : profileCustomer.activityLabel || "No CRM activity yet";
+  const stageDetail = journey?.stageSummary && journey.stageSummary !== "Waiting for real CRM activity."
+    ? journey.stageSummary
+    : "No call, follow-up, quotation, or task has been saved for this customer yet.";
+  const lastActivityTitle = journey?.lastActivity && journey.lastActivity !== "No activity yet"
+    ? journey.lastActivity
+    : latestActivity?.title || "No CRM activity yet";
+  const lastActivityMeta = journey?.lastActivityTime && journey.lastActivityTime !== "-"
+    ? journey.lastActivityTime
+    : "No call, follow-up, or task time recorded yet.";
+  const lastActivityDetail = readableCustomerValue(
+    latestCommunicationNote,
+    "No communication note, discussion topic, or activity detail has been saved yet.",
+  );
+  const nextFollowUpTitle = journey?.nextFollowUp && journey.nextFollowUp !== "No upcoming follow-up"
+    ? journey.nextFollowUp
+    : latestFollowUp?.followUpDate || "No follow-up scheduled yet";
+  const nextFollowUpMeta = journey?.nextFollowUpStatus && journey.nextFollowUpStatus !== "No upcoming follow-up"
+    ? journey.nextFollowUpStatus
+    : latestFollowUp?.status || "No pending follow-up found.";
+  const nextFollowUpDetail = readableCustomerValue(
+    latestFollowUpNote,
+    "No next discussion plan or follow-up note has been saved yet.",
+  );
+  const latestTaskTitle = latestTask?.title || "No task created yet";
+  const latestTaskMeta = readableCustomerValue(
+    firstCustomerValue(latestTask?.dueDate, latestTask?.taskDate, latestTask?.time),
+    "No task date or reminder is available yet.",
+  );
+  const latestTaskDetail = readableCustomerValue(
+    latestTaskNote,
+    "No task detail or task note has been saved yet.",
+  );
+  const returnTo = buildCustomerReturnHref(pathname, searchParams);
+  const profileHref = `/customers/${profileCustomer.id}?returnTo=${encodeURIComponent(returnTo)}`;
+  const taskBoardHref = rolePath(role, "tasks");
+  const communicationHref = `${rolePath(role, "communication")}?activity=${encodeURIComponent(profileCustomer.name)}`;
+  const latestTaskHref = latestTask ? `${taskBoardHref}?editTaskId=${encodeURIComponent(latestTask.id)}` : "";
+  const latestFollowUpHref = latestFollowUp ? `${taskBoardHref}?editFollowUpId=${encodeURIComponent(latestFollowUp.id)}` : "";
+  const countTasks = payload?.counts?.tasks ?? history?.tasks.length ?? 0;
+  const countFollowUps = payload?.counts?.followUps ?? history?.followUps.length ?? 0;
+  const countCommunications = payload?.counts?.communications ?? history?.communications.length ?? 0;
+
+  return (
+    <div className="space-y-3 rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-slate-50 p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-blue-600">Quick CRM Context</p>
+          <h3 className="mt-1 text-base font-black text-slate-950">
+            {stageTitle}
+          </h3>
+          <p className="mt-1 text-sm text-slate-500">
+            {stageDetail}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Link href={profileHref} className={buttonVariants({ variant: "outline", size: "sm" })}>
+            <Eye className="h-4 w-4" />
+            Full Profile
+          </Link>
+          <Link href={communicationHref} className={buttonVariants({ variant: "outline", size: "sm" })}>
+            <MessageSquare className="h-4 w-4" />
+            Activity Log
+          </Link>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-500">
+          <RefreshCw className="h-4 w-4 animate-spin" />
+          Loading previous call, follow-up, ar step history...
+        </div>
+      ) : error ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-3 text-sm font-semibold text-red-700">{error}</div>
+      ) : null}
+
+      <div className={cn("grid gap-3", compact ? "lg:grid-cols-2" : "lg:grid-cols-3")}>
+        <div className="rounded-2xl border border-white/80 bg-white p-4 shadow-sm">
+          <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Last Activity</p>
+          <p className="mt-2 text-sm font-black text-slate-950">{lastActivityTitle}</p>
+          <p className="mt-1 text-xs font-semibold text-slate-500">{lastActivityMeta}</p>
+          <p className="mt-3 text-xs leading-5 text-slate-600">{lastActivityDetail}</p>
+        </div>
+        <div className="rounded-2xl border border-white/80 bg-white p-4 shadow-sm">
+          <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Next Follow-up</p>
+          <p className="mt-2 text-sm font-black text-slate-950">{nextFollowUpTitle}</p>
+          <p className="mt-1 text-xs font-semibold text-slate-500">{nextFollowUpMeta}</p>
+          <p className="mt-3 text-xs leading-5 text-slate-600">{nextFollowUpDetail}</p>
+          {latestFollowUpHref ? (
+            <div className="mt-3">
+              <Link href={latestFollowUpHref} className={buttonVariants({ variant: "outline", size: "sm" })}>
+                <Edit className="h-4 w-4" />
+                Edit Follow-up
+              </Link>
+            </div>
+          ) : null}
+        </div>
+        {!compact ? (
+          <div className="rounded-2xl border border-white/80 bg-white p-4 shadow-sm">
+            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Latest Task</p>
+            <p className="mt-2 text-sm font-black text-slate-950">{latestTaskTitle}</p>
+            <p className="mt-1 text-xs font-semibold text-slate-500">{latestTaskMeta}</p>
+            <p className="mt-3 text-xs leading-5 text-slate-600">{latestTaskDetail}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {latestTaskHref ? (
+                <Link href={latestTaskHref} className={buttonVariants({ variant: "outline", size: "sm" })}>
+                  <Edit className="h-4 w-4" />
+                  Edit Task
+                </Link>
+              ) : null}
+              <Link href={taskBoardHref} className={buttonVariants({ variant: "outline", size: "sm" })}>
+                <CalendarClock className="h-4 w-4" />
+                Task Board
+              </Link>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className={cn("grid gap-3", compact ? "lg:grid-cols-2" : "lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_220px]")}>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Customer Notes</p>
+          <p className="mt-2 text-sm leading-6 text-slate-700">{customerNote || "No customer note saved yet."}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Assigned / Priority</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Badge variant="neutral">{journey?.assignedMarketer || profileCustomer.assignedTo || "-"}</Badge>
+            <Badge variant={customerJourneyStatusVariant(journey?.status || "No activity")}>{journey?.status || "No activity"}</Badge>
+            <Badge variant={journey?.priority && journey.priority !== "-" ? "warning" : "neutral"}>
+              {journey?.priority && journey.priority !== "-" ? `${journey.priority} Priority` : "No priority"}
+            </Badge>
+          </div>
+        </div>
+        {!compact ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Counts</p>
+            <div className="mt-3 space-y-2 text-sm font-semibold text-slate-600">
+              <div className="flex items-center justify-between gap-3"><span>Calls / Logs</span><span className="font-black text-slate-950">{countCommunications}</span></div>
+              <div className="flex items-center justify-between gap-3"><span>Follow-ups</span><span className="font-black text-slate-950">{countFollowUps}</span></div>
+              <div className="flex items-center justify-between gap-3"><span>Tasks</span><span className="font-black text-slate-950">{countTasks}</span></div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function CustomerViewModal({
+  role,
   customer,
   open,
   onClose,
 }: {
+  role: Role;
   customer: CompanyRow | null;
   open: boolean;
   onClose: () => void;
@@ -2645,23 +2930,26 @@ function CustomerViewModal({
   if (!customer) return null;
 
   return (
-    <FormModal open={open} title={customer.name || "Customer"} onClose={onClose} panelClassName="max-w-2xl">
-      <dl className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-        <DetailRow label="Added By" value={customer.createdBy || customer.assignedTo || "-"} />
-        <DetailRow label="Added On" value={customer.createdAtLabel || "-"} />
-        <DetailRow label="Contact Person" value={customer.contactPerson || "-"} />
-        <DetailRow label="Phone" value={customer.phone || "-"} />
-        <DetailRow label="WhatsApp" value={customer.whatsapp || "-"} />
-        <DetailRow label="Email" value={customer.email || "-"} />
-        <DetailRow label="Website" value={customer.website || "-"} />
-        <DetailRow label="Industry" value={customer.industry || "-"} />
-        <DetailRow label="Address" value={customer.address || "-"} />
-        <DetailRow label="Assigned User" value={customer.assignedTo || "-"} />
-        <DetailRow label="Lead Count" value={String(customer.totalLeads ?? 0)} />
-        <DetailRow label="Last Communication" value={customer.lastCommunication || "-"} />
-        <DetailRow label="Status" value={customer.status || "-"} />
-        <DetailRow label="Notes" value={customer.notes || "-"} />
-      </dl>
+    <FormModal open={open} title={customer.name || "Customer"} onClose={onClose} panelClassName="max-w-4xl">
+      <div className="space-y-4">
+        <CustomerQuickSummaryPanel customer={customer} open={open} role={role} />
+        <dl className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <DetailRow label="Added By" value={customer.createdBy || customer.assignedTo || "-"} />
+          <DetailRow label="Added On" value={customer.createdAtLabel || "-"} />
+          <DetailRow label="Contact Person" value={customer.contactPerson || "-"} />
+          <DetailRow label="Phone" value={customer.phone || "-"} />
+          <DetailRow label="WhatsApp" value={customer.whatsapp || "-"} />
+          <DetailRow label="Email" value={customer.email || "-"} />
+          <DetailRow label="Website" value={customer.website || "-"} />
+          <DetailRow label="Industry" value={customer.industry || "-"} />
+          <DetailRow label="Address" value={customer.address || "-"} />
+          <DetailRow label="Assigned User" value={customer.assignedTo || "-"} />
+          <DetailRow label="Lead Count" value={String(customer.totalLeads ?? 0)} />
+          <DetailRow label="Last Communication" value={customer.lastCommunication || "-"} />
+          <DetailRow label="Status" value={customer.status || "-"} />
+          <DetailRow label="Notes" value={customer.notes || "-"} />
+        </dl>
+      </div>
     </FormModal>
   );
 }
@@ -2773,6 +3061,7 @@ function CustomerEditModal({
   return (
     <FormModal open={open} title="Edit Customer" onClose={onClose} panelClassName="max-w-xl">
       <form onSubmit={handleSubmit} className="space-y-4">
+        <CustomerQuickSummaryPanel customer={customer} open={open} role={workspace.user.role} compact />
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block space-y-1.5">
             <span className="text-xs font-semibold text-slate-700">Industry</span>
@@ -4812,7 +5101,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
             <Input
               value={filters.search}
               onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
-              placeholder="Search company, contact, phone..."
+              placeholder="Search company, phone, call, follow-up, quotation..."
             />
           </label>
           <label className="space-y-1.5">
@@ -4968,7 +5257,7 @@ export function CustomersPage({ role, workspace }: { role: Role; workspace: CrmW
           });
         }}
       />
-      <CustomerViewModal open={Boolean(viewCustomer)} customer={viewCustomer} onClose={() => setViewCustomer(null)} />
+      <CustomerViewModal role={role} open={Boolean(viewCustomer)} customer={viewCustomer} onClose={() => setViewCustomer(null)} />
       <CustomerEditModal workspace={workspace} customer={editCustomer} open={Boolean(editCustomer)} onDone={handleEditDone} onClose={() => setEditCustomer(null)} />
       <FormModal open={Boolean(deleteCustomer)} title="Delete Customer" onClose={() => !deleting && setDeleteCustomer(null)} panelClassName="max-w-md">
         {deleteCustomer ? (
@@ -5455,6 +5744,16 @@ function toEditableTaskRow(task: TodayWorkQueueItem): TodayTaskApiRow {
   } as TodayTaskApiRow;
 }
 
+export function toEditableCompletedTaskRow(task: CompletedWorkItem): TodayTaskApiRow {
+  return {
+    ...task,
+    id: task.taskId ?? task.sourceId,
+    status: "Completed",
+    statusKey: "COMPLETED",
+    isPrevious: false,
+  } as TodayTaskApiRow;
+}
+
 export function todayWorkCounts(rows: TodayWorkQueueItem[]) {
   return {
     all: rows.length,
@@ -5626,6 +5925,15 @@ function MiniAvatar({ label }: { label: string }) {
   );
 }
 
+function dedupeRowsById<T extends { id: string }>(rows: T[]) {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    if (seen.has(row.id)) return false;
+    seen.add(row.id);
+    return true;
+  });
+}
+
 export function TaskCreateModal({
   open,
   onClose,
@@ -5650,6 +5958,7 @@ export function TaskCreateModal({
   const [customerPhone, setCustomerPhone] = React.useState("");
   const [customerCity, setCustomerCity] = React.useState("");
   const [description, setDescription] = React.useState("");
+  const [notes, setNotes] = React.useState("");
   const [productId, setProductId] = React.useState("");
   const [assignedToId, setAssignedToId] = React.useState("");
   const [priority, setPriority] = React.useState<Exclude<TodayTaskPriorityFilter, "ALL">>("MEDIUM");
@@ -5659,6 +5968,7 @@ export function TaskCreateModal({
   const [pending, setPending] = React.useState(false);
   const [message, setMessage] = React.useState("");
   const isEditing = Boolean(initialTask?.id);
+  const isCompletedEdit = isEditing && initialTask?.statusKey === "COMPLETED";
   const taskTitleOptions = ["Call", "Follow-up", "Demo Send", "Quotation", "Sale"];
   const assignableMembers = React.useMemo(() => {
     if (role === "MARKETER") return [];
@@ -5701,6 +6011,7 @@ export function TaskCreateModal({
     setCustomerPhone("");
     setCustomerCity("");
     setDescription(initialTask?.description && initialTask.description !== "-" ? initialTask.description : "");
+    setNotes(initialTask?.notes && initialTask.notes !== "-" ? initialTask.notes : "");
     setProductId(initialTask?.productId ?? "");
     setAssignedToId(initialTask?.assignedToId ?? defaultAssigneeId);
     setPriority(initialTask?.priorityKey ?? "MEDIUM");
@@ -5747,6 +6058,7 @@ export function TaskCreateModal({
           companyId,
           companyName: trimmedCompanyLabel,
           description,
+          notes,
           productId,
           assignedToId,
           priority,
@@ -5859,9 +6171,6 @@ export function TaskCreateModal({
           <p className="text-sm font-semibold text-slate-700">
             If the customer does not exist yet, simply type a new company name here.
           </p>
-          <p className="mt-1 text-xs text-slate-500">
-            When the task is saved, that company will be added to Customers automatically. Fill the optional fields below to save a more complete customer record.
-          </p>
           <p className="hidden">
             Existing customer না থাকলে নতুন company name type করলেই save হবে.
           </p>
@@ -5895,24 +6204,30 @@ export function TaskCreateModal({
             </label>
           </div>
         </div>
-        <label className="block space-y-1.5">
-          <span className="text-sm font-semibold text-slate-700">Task Details</span>
-          <textarea
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            placeholder="What should the marketer do?"
-            className="min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-          />
-        </label>
+        {isCompletedEdit ? (
+          <label className="block space-y-1.5">
+            <span className="text-sm font-semibold text-slate-700">Task Note</span>
+            <textarea
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              placeholder="Customer callback, update, ba special context ekhane likhun"
+              className="min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+            />
+          </label>
+        ) : (
+          <label className="block space-y-1.5">
+            <span className="text-sm font-semibold text-slate-700">Task Details</span>
+            <textarea
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder="What should the marketer do?"
+              className="min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+            />
+          </label>
+        )}
         <div className="rounded-2xl border border-blue-200 bg-blue-50/80 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-sm font-black text-slate-900">Task Schedule</p>
-              <p className="mt-1 text-xs font-semibold text-slate-600">
-                Call, Follow-up, Demo Send, Quotation, Sale sob task-er jonno future date and time set korte parben.
-              </p>
-            </div>
-            <Badge variant="neutral">Required</Badge>
+          <div>
+            <p className="text-sm font-black text-slate-900">Task Schedule</p>
           </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <label className="space-y-1.5">
@@ -5923,9 +6238,6 @@ export function TaskCreateModal({
                 onChange={(event) => setTaskDate(event.target.value)}
                 required
               />
-              <p className="text-xs text-slate-500">
-                Step 1: age date select korun.
-              </p>
             </label>
             <label className="space-y-1.5">
               <span className="text-sm font-semibold text-slate-700">Scheduled Time</span>
@@ -5935,14 +6247,8 @@ export function TaskCreateModal({
                 onChange={(event) => setTaskTime(event.target.value)}
                 required
               />
-              <p className="text-xs text-slate-500">
-                Step 2: tarpor exact time set korlei schedule ready.
-              </p>
             </label>
           </div>
-          <p className="mt-3 text-xs text-slate-500">
-            Aajke task add koreo agamikal ba porer kono din-er exact time set korte parben.
-          </p>
         </div>
         <div className={cn("grid gap-3", role === "MARKETER" ? "sm:grid-cols-2" : "sm:grid-cols-2 xl:grid-cols-3")}>
           <label className="space-y-1.5">
@@ -6632,8 +6938,14 @@ export function TodayWorkQueueList({
                   </Badge>
                   <TaskPriorityBadge priority={task.priorityKey} />
                 </div>
-                <p className="mt-1.5 text-sm font-medium leading-5 text-slate-700 line-clamp-2">{task.description !== "-" ? task.description : task.method}</p>
-                {task.notes !== "-" ? <p className="mt-1 truncate text-xs font-medium text-slate-500"><span className="font-semibold text-slate-600">Note:</span> {task.notes}</p> : null}
+                {task.description !== "-" ? (
+                  <div className="mt-2 rounded-2xl border border-slate-200/80 bg-white/80 p-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
+                    <p className="mt-1.5 line-clamp-3 text-sm font-medium leading-6 text-slate-700">{task.description}</p>
+                  </div>
+                ) : (
+                  <p className="mt-1.5 text-sm font-medium leading-5 text-slate-700 line-clamp-2">{task.method}</p>
+                )}
               </div>
               <div className="flex shrink-0 flex-col gap-1.5">
                 <Button
@@ -6698,7 +7010,7 @@ export function CompletedWorkList({
   loading,
   viewerRole,
   emptyMessage,
-  onAddFollowUp,
+  onEditCompletedTask,
   onOpen,
   previewCount,
 }: {
@@ -6706,17 +7018,17 @@ export function CompletedWorkList({
   loading: boolean;
   viewerRole: Role;
   emptyMessage: string;
-  onAddFollowUp: (task: CompletedWorkItem) => void;
+  onEditCompletedTask?: (task: CompletedWorkItem) => void;
   onOpen?: (task: CompletedWorkItem) => void;
   previewCount?: number;
 }) {
   const [expanded, setExpanded] = React.useState(false);
   const hiddenCount = previewCount ? Math.max(rows.length - previewCount, 0) : 0;
   const compactHeightClassName = previewCount === 5
-    ? "max-h-[320px]"
+    ? "max-h-[400px]"
     : previewCount === 6
-      ? "max-h-[460px]"
-      : "max-h-[360px]";
+      ? "max-h-[560px]"
+      : "max-h-[420px]";
 
   if (loading) {
     return (
@@ -6732,12 +7044,13 @@ export function CompletedWorkList({
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className={cn("flex-1 space-y-2 pr-1", previewCount ? (expanded ? "max-h-none overflow-visible" : `${compactHeightClassName} overflow-y-auto`) : "")}>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className={cn("min-h-0 flex-1 space-y-2 pr-1", previewCount ? (expanded ? "max-h-none overflow-visible" : `${compactHeightClassName} overflow-y-auto`) : "")}>
         {rows.map((task, index) => {
           const isLatest = index === 0;
           const crmStep = normalizeCrmPipelineStep(task.title) ?? (task.sourceType === "FOLLOW_UP" ? "Follow-up" : null);
           const hideTaskTitle = shouldHidePipelineTitle(task.title, crmStep);
+          const hasPhoneNumber = Boolean(task.companyPrimaryPhone && task.companyPrimaryPhone !== "No phone number");
           return (
           <div
             key={task.id}
@@ -6779,6 +7092,15 @@ export function CompletedWorkList({
                     <p className="mt-0.5 truncate text-[15px] font-bold text-slate-700">
                       <EntityLink href={task.companyHref} className="text-[15px] font-bold text-slate-800" stopPropagation>{task.companyName}</EntityLink>
                     </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
+                      <span className={cn(
+                        "inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5",
+                        hasPhoneNumber ? "border-blue-100 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-50 text-slate-400",
+                      )}>
+                        <Phone className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{task.companyPrimaryPhone}</span>
+                      </span>
+                    </div>
                     <p className="mt-0.5 text-[11px] font-semibold text-slate-500">Scheduled: {task.taskDateLabel}{task.timeLabel ? ` ${task.timeLabel}` : ""}</p>
                   </div>
                   <button
@@ -6800,23 +7122,37 @@ export function CompletedWorkList({
                   {viewerRole !== "MARKETER" ? <span>Assigned: {task.assignedTo}</span> : null}
                   <span>Completed by {task.completedBy}</span>
                 </div>
-                <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-slate-700">{task.description !== "-" ? task.description : task.method}</p>
-                {task.notes !== "-" ? <p className="mt-1 truncate text-xs font-medium text-slate-500"><span className="font-semibold text-slate-600">Note:</span> {task.notes}</p> : null}
+                {task.description !== "-" ? (
+                  <div className="mt-2 rounded-2xl border border-slate-200/80 bg-white/80 p-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
+                    <p className="mt-1.5 line-clamp-3 text-sm leading-6 text-slate-700">{task.description}</p>
+                  </div>
+                ) : (
+                  <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-slate-700">{task.method}</p>
+                )}
+                {task.notes !== "-" ? (
+                  <div className="mt-2 rounded-2xl border border-emerald-200/80 bg-emerald-50/75 p-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">Task Note</p>
+                    <p className="mt-1.5 line-clamp-3 text-sm leading-6 text-slate-700">{task.notes}</p>
+                  </div>
+                ) : null}
                 <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
                   <p className="text-[11px] font-bold text-slate-500">{task.completedAtLabel}</p>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-7 rounded-lg gap-1 px-2.5 text-[11px]"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onAddFollowUp(task);
-                    }}
-                  >
-                    <Plus className="h-3 w-3" />
-                    Add Follow-up
-                  </Button>
+                  {task.sourceType === "TASK" && onEditCompletedTask ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 rounded-lg gap-1 px-2.5 text-[11px]"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onEditCompletedTask(task);
+                      }}
+                    >
+                      <Edit className="h-3 w-3" />
+                      Edit
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -6825,7 +7161,7 @@ export function CompletedWorkList({
         })}
       </div>
       {previewCount && hiddenCount > 0 ? (
-        <div className="mt-auto flex justify-center pt-4">
+        <div className="mt-auto flex justify-center pt-1">
           <Button type="button" variant="outline" size="sm" className="rounded-xl px-4 text-xs" onClick={() => setExpanded((value) => !value)}>
             {expanded ? "Show Less" : `View All (${hiddenCount} more)`}
           </Button>
@@ -6848,7 +7184,7 @@ function MarketerTaskBoards({
   onDelete,
   onEditFollowUp,
   onDeleteFollowUp,
-  onAddFollowUp,
+  onEditCompletedTask,
 }: {
   employees: TaskWorkspaceEmployee[];
   pendingRows: TodayWorkQueueItem[];
@@ -6862,7 +7198,7 @@ function MarketerTaskBoards({
   onDelete?: (item: TodayTaskApiRow) => void;
   onEditFollowUp?: (item: TodayWorkQueueItem) => void;
   onDeleteFollowUp?: (item: TodayWorkQueueItem) => void;
-  onAddFollowUp: (task: CompletedWorkItem) => void;
+  onEditCompletedTask?: (task: CompletedWorkItem) => void;
 }) {
   const marketerBoards = React.useMemo(() => {
     return employees
@@ -6934,7 +7270,7 @@ function MarketerTaskBoards({
                   loading={loading}
                   viewerRole={viewerRole}
                   emptyMessage="No completed work for this marketer yet."
-                  onAddFollowUp={onAddFollowUp}
+                  onEditCompletedTask={onEditCompletedTask}
                   onOpen={(item) => onOpen?.(item)}
                   previewCount={3}
                 />
@@ -6975,6 +7311,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
   const [activeFilter, setActiveFilter] = React.useState<TodayWorkFilter>("all");
   const { refreshTaskCount } = useTaskCounterContext();
   const scheduledRefreshTimers = React.useRef<number[]>([]);
+  const crmDayRefreshTimer = React.useRef<number | null>(null);
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -7002,8 +7339,8 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
         throw new Error(typeof completedResult.message === "string" ? completedResult.message : "Failed to load completed tasks.");
       }
 
-      setActiveTasks(sortTodayWorkQueue(todayResult.rows as TodayWorkQueueItem[]));
-      setCompletedTasks(completedResult.rows as CompletedWorkItem[]);
+      setActiveTasks(sortTodayWorkQueue(dedupeRowsById(todayResult.rows as TodayWorkQueueItem[])));
+      setCompletedTasks(dedupeRowsById(completedResult.rows as CompletedWorkItem[]));
     } catch (error) {
       setError(error instanceof Error ? error.message : "Failed to load tasks.");
     } finally {
@@ -7034,8 +7371,39 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
         window.clearTimeout(timer);
       }
       scheduledRefreshTimers.current = [];
+      if (crmDayRefreshTimer.current !== null) {
+        window.clearTimeout(crmDayRefreshTimer.current);
+        crmDayRefreshTimer.current = null;
+      }
     };
   }, []);
+
+  const scheduleNextCrmDayRefresh = React.useCallback(() => {
+    if (crmDayRefreshTimer.current !== null) {
+      window.clearTimeout(crmDayRefreshTimer.current);
+    }
+
+    const nextCrmDayStart = getCrmDayWindow(new Date()).to;
+    const delay = Math.max(0, nextCrmDayStart.getTime() - Date.now());
+
+    crmDayRefreshTimer.current = window.setTimeout(() => {
+      crmDayRefreshTimer.current = null;
+      void loadTasks();
+      void refreshTaskCount();
+      scheduleNextCrmDayRefresh();
+    }, delay + 250);
+  }, [loadTasks, refreshTaskCount]);
+
+  React.useEffect(() => {
+    scheduleNextCrmDayRefresh();
+
+    return () => {
+      if (crmDayRefreshTimer.current !== null) {
+        window.clearTimeout(crmDayRefreshTimer.current);
+        crmDayRefreshTimer.current = null;
+      }
+    };
+  }, [scheduleNextCrmDayRefresh]);
 
   const scheduleQueueRefreshAt = React.useCallback((isoDate?: string | null) => {
     if (!isoDate) return;
@@ -7127,6 +7495,13 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
     () => completedTasks.filter((task) => task.assignedToId === workspace.user.id || task.assignedById === workspace.user.id),
     [completedTasks, workspace.user.id],
   );
+
+  const handleEditCompletedTask = React.useCallback((task: CompletedWorkItem) => {
+    if (task.sourceType !== "TASK") return;
+    setEditingTask(toEditableCompletedTaskRow(task));
+    setDetailItem(null);
+    setOpen(true);
+  }, []);
 
   const handleAddFollowUp = React.useCallback((task: CompletedWorkItem) => {
     setFollowUpTask({
@@ -7322,7 +7697,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
                   loading={loading}
                   viewerRole={role}
                   emptyMessage="No completed personal work yet."
-                  onAddFollowUp={handleAddFollowUp}
+                  onEditCompletedTask={handleEditCompletedTask}
                   onOpen={setDetailItem}
                   previewCount={5}
                 />
@@ -7360,7 +7735,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
                   loading={loading}
                   viewerRole={role}
                   emptyMessage="No completed marketer work yet."
-                  onAddFollowUp={handleAddFollowUp}
+                  onEditCompletedTask={handleEditCompletedTask}
                   onOpen={setDetailItem}
                   previewCount={6}
                 />
@@ -7379,7 +7754,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
               onEditFollowUp={setEditingFollowUp}
               onDeleteFollowUp={(task) => void handleFollowUpDelete(task)}
               onComplete={handleCompleteRequest}
-              onAddFollowUp={handleAddFollowUp}
+              onEditCompletedTask={handleEditCompletedTask}
             />
           </>
         ) : (
@@ -7416,7 +7791,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
                   loading={loading}
                   viewerRole={role}
                   emptyMessage={role === "ADMIN" ? "No completed assigned or created work yet." : "No completed work yet."}
-                  onAddFollowUp={handleAddFollowUp}
+                  onEditCompletedTask={handleEditCompletedTask}
                   onOpen={setDetailItem}
                   previewCount={6}
                 />
@@ -7436,7 +7811,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
                 onEditFollowUp={setEditingFollowUp}
                 onDeleteFollowUp={(task) => void handleFollowUpDelete(task)}
                 onComplete={handleCompleteRequest}
-                onAddFollowUp={handleAddFollowUp}
+                onEditCompletedTask={handleEditCompletedTask}
               />
             ) : null}
           </>
@@ -7606,6 +7981,22 @@ export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorks
   const [selected, setSelected] = React.useState<FollowUpRow | null>(null);
   const resolvedFollowUpPage = followUpPage ?? fallbackFollowUpPageData(workspace);
   const filters = resolvedFollowUpPage.filters;
+  const [dateFilterValue, setDateFilterValue] = React.useState(filters.dateFilter);
+  const filterFormRef = React.useRef<HTMLFormElement | null>(null);
+
+  React.useEffect(() => {
+    setDateFilterValue(filters.dateFilter);
+  }, [filters.dateFilter]);
+
+  const isCustomDateRange = dateFilterValue === "custom";
+  const selectedCustomer = React.useMemo(() => {
+    if (!selected) return null;
+    const selectedCustomerName = selected.customer.trim().toLowerCase();
+    return workspace.companies.find((customer) => {
+      if (selected.companyId && customer.id === selected.companyId) return true;
+      return selectedCustomerName.length > 0 && customer.name.trim().toLowerCase() === selectedCustomerName;
+    }) ?? null;
+  }, [selected, workspace.companies]);
   const pageHref = (page: number) => {
     const params = new URLSearchParams();
     if (filters.search) params.set("search", filters.search);
@@ -7628,14 +8019,25 @@ export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorks
         <StatCard title="Completed" value={String(workspace.followUpSummary.completed)} helper="Finished" icon={Check} tone="bg-slate-100 text-slate-700" />
       </div>
       <Card className="p-4">
-        <form method="get" className="grid gap-3 lg:grid-cols-[1.25fr_180px_160px_160px_auto] lg:items-end">
+        <form ref={filterFormRef} method="get" className="grid gap-3 lg:grid-cols-[1.25fr_180px_160px_160px_auto] lg:items-end">
           <label className="space-y-1.5">
             <span className="text-xs font-bold uppercase text-slate-500">Search</span>
             <Input name="search" defaultValue={filters.search ?? ""} placeholder="Company, lead, phone, email..." />
           </label>
           <label className="space-y-1.5">
             <span className="text-xs font-bold uppercase text-slate-500">Date Filter</span>
-            <select name="dateFilter" defaultValue={filters.dateFilter} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100">
+            <select
+              name="dateFilter"
+              value={dateFilterValue}
+              onChange={(event) => {
+                const nextValue = event.target.value as typeof filters.dateFilter;
+                setDateFilterValue(nextValue);
+                if (nextValue !== "custom") {
+                  filterFormRef.current?.requestSubmit();
+                }
+              }}
+              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+            >
               <option value="all">All Follow-ups</option>
               <option value="today">Today</option>
               <option value="tomorrow">Tomorrow</option>
@@ -7646,8 +8048,8 @@ export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorks
               <option value="completed">Completed</option>
             </select>
           </label>
-          <TextField label="From" name="from" type="date" defaultValue={filters.from} />
-          <TextField label="To" name="to" type="date" defaultValue={filters.to} />
+          <TextField label="From" name="from" type="date" defaultValue={filters.from} readOnly={!isCustomDateRange} disabled={!isCustomDateRange} />
+          <TextField label="To" name="to" type="date" defaultValue={filters.to} readOnly={!isCustomDateRange} disabled={!isCustomDateRange} />
           <div className="flex flex-wrap gap-2">
             <input type="hidden" name="page" value="1" />
             <input type="hidden" name="pageSize" value={resolvedFollowUpPage.pageSize} />
@@ -7764,41 +8166,104 @@ export function FollowUpsPage({ workspace, followUpPage }: { workspace: CrmWorks
         </div>
       </div>
 
-      <DetailsDrawer open={Boolean(selected)} title={selected ? `${selected.customer} follow-up` : "Follow-up detail"} onClose={() => setSelected(null)}>
+      <FormModal
+        open={Boolean(selected)}
+        title={selected ? `${selected.customer} Follow-up` : "Follow-up detail"}
+        onClose={() => setSelected(null)}
+        panelClassName="max-w-5xl"
+      >
         {selected ? (
           <div className="space-y-4">
-            <div className="grid gap-3">
-              <InfoLine label="Follow-up Date" value={selected.followUpDate} />
-              <InfoLine label="Company / Customer" value={<EntityLink href={selected.companyId ? `/customers/${selected.companyId}` : selected.href} className="font-bold">{selected.customer}</EntityLink>} />
-              <InfoLine label="Lead" value={<EntityLink href={selected.leadId ? `/leads/${selected.leadId}` : undefined} className="font-bold">{selected.lead}</EntityLink>} />
-              <InfoLine label="Assigned Marketer" value={selected.assignedTo} />
-              <InfoLine label="Last Communication Type" value={selected.lastCommunicationType} />
-              <InfoLine label="Created By" value={selected.createdBy} />
-              <InfoLine label="Created At" value={selected.createdAt} />
-              {selected.completedAt !== "-" ? <InfoLine label="Completed At" value={selected.completedAt} /> : null}
+            {selectedCustomer ? (
+              <CustomerQuickSummaryPanel customer={selectedCustomer} open={Boolean(selected)} role={workspace.user.role} compact />
+            ) : (
+              <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-slate-50 p-4">
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-blue-600">Quick CRM Context</p>
+                <p className="mt-2 text-sm font-semibold text-slate-700">Ei follow-up er sathe kono linked customer profile paoa jayni, tai full activity snapshot dekhano gelo na.</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <StatusBadge value={selected.lastCommunicationType} />
+                  <StatusBadge value={selected.priority} />
+                  <StatusBadge value={selected.bucket} />
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Follow-up Note</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-700">{selected.note}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Next Action / Plan</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-700">{selected.nextDiscussionPlan}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Linked CRM Records</p>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                      <p className="text-xs font-bold uppercase text-slate-500">Company / Customer</p>
+                      <div className="mt-1.5 text-sm font-bold text-slate-800">
+                        <EntityLink href={selected.companyId ? `/customers/${selected.companyId}` : selected.href} className="font-bold">{selected.customer}</EntityLink>
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                      <p className="text-xs font-bold uppercase text-slate-500">Lead</p>
+                      <div className="mt-1.5 text-sm font-bold text-slate-800">
+                        <EntityLink href={selected.leadId ? `/leads/${selected.leadId}` : undefined} className="font-bold">{selected.lead}</EntityLink>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Timeline Snapshot</p>
+                  <div className="mt-3 space-y-3">
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                      <p className="text-xs font-bold uppercase text-slate-500">Follow-up Date</p>
+                      <p className="mt-1.5 text-sm font-bold text-slate-800">{selected.followUpDate}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                      <p className="text-xs font-bold uppercase text-slate-500">Assigned Marketer</p>
+                      <p className="mt-1.5 text-sm font-bold text-slate-800">{selected.assignedTo}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                      <p className="text-xs font-bold uppercase text-slate-500">Created</p>
+                      <p className="mt-1.5 text-sm font-bold text-slate-800">{selected.createdAt}</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">By {selected.createdBy}</p>
+                    </div>
+                    {selected.completedAt !== "-" ? (
+                      <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
+                        <p className="text-xs font-bold uppercase text-emerald-700">Completed At</p>
+                        <p className="mt-1.5 text-sm font-bold text-emerald-800">{selected.completedAt}</p>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">Status Overview</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <StatusBadge value={selected.lastCommunicationType} />
+                    <StatusBadge value={selected.priority} />
+                    <StatusBadge value={selected.bucket} />
+                  </div>
+                </div>
+
+                {selected.bucket !== "Completed" ? (
+                  <form action={updateFollowUpStatusAction} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <input type="hidden" name="id" value={selected.id} />
+                    <input type="hidden" name="status" value="COMPLETED" />
+                    <Button type="submit" className="w-full">Mark Completed</Button>
+                  </form>
+                ) : null}
+              </div>
             </div>
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-bold uppercase text-slate-500">Follow-up Note</p>
-              <p className="mt-2 text-sm leading-6 text-slate-700">{selected.note}</p>
-            </div>
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-bold uppercase text-slate-500">Next Action</p>
-              <p className="mt-2 text-sm leading-6 text-slate-700">{selected.nextDiscussionPlan}</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <StatusBadge value={selected.priority} />
-              <StatusBadge value={selected.bucket} />
-            </div>
-            {selected.bucket !== "Completed" ? (
-              <form action={updateFollowUpStatusAction}>
-                <input type="hidden" name="id" value={selected.id} />
-                <input type="hidden" name="status" value="COMPLETED" />
-                <Button type="submit" className="w-full">Mark Completed</Button>
-              </form>
-            ) : null}
           </div>
         ) : null}
-      </DetailsDrawer>
+      </FormModal>
       <FormModal open={open} title="Add Follow-up" onClose={() => setOpen(false)}>
         <FollowUpForm workspace={workspace} onDone={() => setOpen(false)} />
       </FormModal>

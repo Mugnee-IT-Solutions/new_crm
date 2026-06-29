@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getCustomerQuickContext } from "@/lib/crm-data";
 import { hasCustomerAccess, resolveCustomerOwnerId } from "@/lib/customer-ownership";
 import { getPrisma } from "@/lib/prisma";
 import { requireRequestUser } from "@/lib/request-user";
@@ -205,7 +206,7 @@ function selectCustomerPayload(customer: {
   };
 }
 
-export async function GET(_: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireRequestUser(["ADMIN", "SUPERVISOR", "MARKETER"]);
     if (!auth.ok) {
@@ -242,7 +243,23 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
       return NextResponse.json({ success: false, message: "Customer not found." }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, customer: selectCustomerPayload(customer) });
+    const { searchParams } = new URL(request.url);
+    const includeHistory = searchParams.get("includeHistory") === "1";
+
+    if (!includeHistory) {
+      return NextResponse.json({ success: true, customer: selectCustomerPayload(customer) });
+    }
+
+    const detail = await getCustomerQuickContext(id, auth.user.role, auth.user);
+
+    return NextResponse.json({
+      success: true,
+      customer: selectCustomerPayload(customer),
+      profileCustomer: detail.customer,
+      history: detail.history,
+      journey: detail.journey,
+      counts: detail.counts,
+    });
   } catch (error) {
     return NextResponse.json(
       {
