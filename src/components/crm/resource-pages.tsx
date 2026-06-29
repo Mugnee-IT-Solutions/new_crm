@@ -124,6 +124,14 @@ type TaskWorkspaceData = {
   products: TaskWorkspaceProduct[];
 };
 
+function normalizeInitialTodayWorkRows(rows?: TodayWorkQueueItem[]) {
+  return sortTodayWorkQueue(dedupeRowsById(rows ?? []));
+}
+
+function normalizeInitialCompletedWorkRows(rows?: CompletedWorkItem[]) {
+  return dedupeRowsById(rows ?? []);
+}
+
 function pageActions(items: { label: string; icon: typeof Plus; variant?: "default" | "outline"; onClick?: () => void; href?: string }[]) {
   return items.map(({ label, icon: Icon, variant = "outline", onClick, href }) => {
     const className = cn(
@@ -6764,6 +6772,7 @@ export function TodayWorkQueueList({
   rows,
   loading,
   viewerRole,
+  readOnly = false,
   emptyMessage,
   activeItemId,
   onComplete,
@@ -6777,6 +6786,7 @@ export function TodayWorkQueueList({
   rows: TodayWorkQueueItem[];
   loading: boolean;
   viewerRole: Role;
+  readOnly?: boolean;
   emptyMessage: string;
   activeItemId?: string | null;
   onComplete: (item: TodayWorkQueueItem) => void;
@@ -6852,14 +6862,16 @@ export function TodayWorkQueueList({
             )}
           >
             <div className="flex min-w-0 items-start gap-2.5">
-              <input
-                type="checkbox"
-                checked={false}
-                onClick={(event) => event.stopPropagation()}
-                onChange={() => onComplete(task)}
-                className="mt-2.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                aria-label={`Complete ${task.title}`}
-              />
+              {!readOnly ? (
+                <input
+                  type="checkbox"
+                  checked={false}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={() => onComplete(task)}
+                  className="mt-2.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  aria-label={`Complete ${task.title}`}
+                />
+              ) : null}
               <MiniAvatar label={task.companyName || task.title} />
               <div className="min-w-0 flex-1">
                 {crmStep ? (
@@ -6948,47 +6960,51 @@ export function TodayWorkQueueList({
                 )}
               </div>
               <div className="flex shrink-0 flex-col gap-1.5">
-                <Button
-                  type="button"
-                  size="sm"
-                  className="mt-0.5 h-7 rounded-lg px-2.5 text-[11px] shadow-sm"
-                  disabled={Boolean(activeItemId && activeItemId === task.id)}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onComplete(task);
-                  }}
-                >
-                  Complete
-                </Button>
-                {task.sourceType === "TASK" ? (
+                {!readOnly ? (
                   <>
-                    <Button type="button" size="sm" variant="outline" className="h-7 rounded-lg px-2.5 text-[11px]" onClick={(event) => {
-                      event.stopPropagation();
-                      onEdit?.(toEditableTaskRow(task));
-                    }}>
-                      Edit
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="mt-0.5 h-7 rounded-lg px-2.5 text-[11px] shadow-sm"
+                      disabled={Boolean(activeItemId && activeItemId === task.id)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onComplete(task);
+                      }}
+                    >
+                      Complete
                     </Button>
-                    <Button type="button" size="sm" variant="outline" className="h-7 rounded-lg px-2.5 text-[11px] text-red-600" onClick={(event) => {
-                      event.stopPropagation();
-                      onDelete?.(toEditableTaskRow(task));
-                    }}>
-                      Delete
-                    </Button>
-                  </>
-                ) : task.sourceType === "FOLLOW_UP" ? (
-                  <>
-                    <Button type="button" size="sm" variant="outline" className="h-7 rounded-lg px-2.5 text-[11px]" onClick={(event) => {
-                      event.stopPropagation();
-                      onEditFollowUp?.(task);
-                    }}>
-                      Edit
-                    </Button>
-                    <Button type="button" size="sm" variant="outline" className="h-7 rounded-lg px-2.5 text-[11px] text-red-600" onClick={(event) => {
-                      event.stopPropagation();
-                      onDeleteFollowUp?.(task);
-                    }}>
-                      Delete
-                    </Button>
+                    {task.sourceType === "TASK" ? (
+                      <>
+                        <Button type="button" size="sm" variant="outline" className="h-7 rounded-lg px-2.5 text-[11px]" onClick={(event) => {
+                          event.stopPropagation();
+                          onEdit?.(toEditableTaskRow(task));
+                        }}>
+                          Edit
+                        </Button>
+                        <Button type="button" size="sm" variant="outline" className="h-7 rounded-lg px-2.5 text-[11px] text-red-600" onClick={(event) => {
+                          event.stopPropagation();
+                          onDelete?.(toEditableTaskRow(task));
+                        }}>
+                          Delete
+                        </Button>
+                      </>
+                    ) : task.sourceType === "FOLLOW_UP" ? (
+                      <>
+                        <Button type="button" size="sm" variant="outline" className="h-7 rounded-lg px-2.5 text-[11px]" onClick={(event) => {
+                          event.stopPropagation();
+                          onEditFollowUp?.(task);
+                        }}>
+                          Edit
+                        </Button>
+                        <Button type="button" size="sm" variant="outline" className="h-7 rounded-lg px-2.5 text-[11px] text-red-600" onClick={(event) => {
+                          event.stopPropagation();
+                          onDeleteFollowUp?.(task);
+                        }}>
+                          Delete
+                        </Button>
+                      </>
+                    ) : null}
                   </>
                 ) : null}
                 <InlineContactShortcuts
@@ -7009,6 +7025,7 @@ export function CompletedWorkList({
   rows,
   loading,
   viewerRole,
+  readOnly = false,
   emptyMessage,
   onEditCompletedTask,
   onOpen,
@@ -7017,6 +7034,7 @@ export function CompletedWorkList({
   rows: CompletedWorkItem[];
   loading: boolean;
   viewerRole: Role;
+  readOnly?: boolean;
   emptyMessage: string;
   onEditCompletedTask?: (task: CompletedWorkItem) => void;
   onOpen?: (task: CompletedWorkItem) => void;
@@ -7138,7 +7156,7 @@ export function CompletedWorkList({
                 ) : null}
                 <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
                   <p className="text-[11px] font-bold text-slate-500">{task.completedAtLabel}</p>
-                  {task.sourceType === "TASK" && onEditCompletedTask ? (
+                  {!readOnly && task.sourceType === "TASK" && onEditCompletedTask ? (
                     <Button
                       type="button"
                       size="sm"
@@ -7249,13 +7267,10 @@ function MarketerTaskBoards({
                   rows={pending}
                   loading={loading}
                   viewerRole={viewerRole}
+                  readOnly
                   emptyMessage="No pending work for this marketer."
                   activeItemId={activeItemId}
                   onOpen={(item) => onOpen?.(item)}
-                  onEdit={onEdit}
-                  onDelete={onDelete}
-                  onEditFollowUp={onEditFollowUp}
-                  onDeleteFollowUp={onDeleteFollowUp}
                   onComplete={onComplete}
                   maxHeightClassName="max-h-[360px]"
                 />
@@ -7269,8 +7284,8 @@ function MarketerTaskBoards({
                   rows={completed}
                   loading={loading}
                   viewerRole={viewerRole}
+                  readOnly
                   emptyMessage="No completed work for this marketer yet."
-                  onEditCompletedTask={onEditCompletedTask}
                   onOpen={(item) => onOpen?.(item)}
                   previewCount={3}
                 />
@@ -7283,16 +7298,27 @@ function MarketerTaskBoards({
   );
 }
 
-function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: TaskWorkspaceData }) {
+function TodayTasksExecutionView({
+  role,
+  workspace,
+  initialActiveTasks,
+  initialCompletedTasks,
+}: {
+  role: Role;
+  workspace: TaskWorkspaceData;
+  initialActiveTasks?: TodayWorkQueueItem[];
+  initialCompletedTasks?: CompletedWorkItem[];
+}) {
+  const hasInitialRows = initialActiveTasks !== undefined && initialCompletedTasks !== undefined;
   const [open, setOpen] = React.useState(false);
   const [editingTask, setEditingTask] = React.useState<TodayTaskApiRow | null>(null);
   const [editingFollowUp, setEditingFollowUp] = React.useState<TodayWorkQueueItem | null>(null);
   const [detailItem, setDetailItem] = React.useState<(TodayWorkQueueItem | CompletedWorkItem) | null>(null);
-  const [loading, setLoading] = React.useState(true);
+  const [loading, setLoading] = React.useState(!hasInitialRows);
   const [error, setError] = React.useState("");
   const [actionError, setActionError] = React.useState("");
-  const [activeTasks, setActiveTasks] = React.useState<TodayWorkQueueItem[]>([]);
-  const [completedTasks, setCompletedTasks] = React.useState<CompletedWorkItem[]>([]);
+  const [activeTasks, setActiveTasks] = React.useState<TodayWorkQueueItem[]>(() => normalizeInitialTodayWorkRows(initialActiveTasks));
+  const [completedTasks, setCompletedTasks] = React.useState<CompletedWorkItem[]>(() => normalizeInitialCompletedWorkRows(initialCompletedTasks));
   const [completionItem, setCompletionItem] = React.useState<TodayWorkQueueItem | null>(null);
   const [confirmTask, setConfirmTask] = React.useState<TodayTaskApiRow | null>(null);
   const [confirmPending, setConfirmPending] = React.useState(false);
@@ -7315,6 +7341,13 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+
+  React.useEffect(() => {
+    if (!hasInitialRows) return;
+    setActiveTasks(normalizeInitialTodayWorkRows(initialActiveTasks));
+    setCompletedTasks(normalizeInitialCompletedWorkRows(initialCompletedTasks));
+    setLoading(false);
+  }, [hasInitialRows, initialActiveTasks, initialCompletedTasks]);
 
   const loadTasks = React.useCallback(async () => {
     setLoading(true);
@@ -7349,11 +7382,12 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
   }, []);
 
   React.useEffect(() => {
+    if (hasInitialRows) return;
     void loadTasks();
-  }, [loadTasks]);
+  }, [hasInitialRows, loadTasks]);
 
   React.useEffect(() => {
-    if (role === "MARKETER") return;
+    if (role !== "MARKETER") return;
 
     const handleLiveSync = () => {
       void loadTasks();
@@ -7379,6 +7413,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
   }, []);
 
   const scheduleNextCrmDayRefresh = React.useCallback(() => {
+    if (role !== "MARKETER") return;
     if (crmDayRefreshTimer.current !== null) {
       window.clearTimeout(crmDayRefreshTimer.current);
     }
@@ -7392,9 +7427,10 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
       void refreshTaskCount();
       scheduleNextCrmDayRefresh();
     }, delay + 250);
-  }, [loadTasks, refreshTaskCount]);
+  }, [loadTasks, refreshTaskCount, role]);
 
   React.useEffect(() => {
+    if (role !== "MARKETER") return;
     scheduleNextCrmDayRefresh();
 
     return () => {
@@ -7403,9 +7439,10 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
         crmDayRefreshTimer.current = null;
       }
     };
-  }, [scheduleNextCrmDayRefresh]);
+  }, [role, scheduleNextCrmDayRefresh]);
 
   const scheduleQueueRefreshAt = React.useCallback((isoDate?: string | null) => {
+    if (role !== "MARKETER") return;
     if (!isoDate) return;
 
     const triggerAt = new Date(isoDate).getTime();
@@ -7425,7 +7462,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
     }, delay + 250);
 
     scheduledRefreshTimers.current.push(timer);
-  }, [loadTasks, refreshTaskCount]);
+  }, [loadTasks, refreshTaskCount, role]);
 
   const handleCreated = (row: TodayTaskApiRow) => {
     setEditingTask(null);
@@ -7494,6 +7531,10 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
   const adminManagedCompletedTasks = React.useMemo(
     () => completedTasks.filter((task) => task.assignedToId === workspace.user.id || task.assignedById === workspace.user.id),
     [completedTasks, workspace.user.id],
+  );
+  const canManageAssignedItem = React.useCallback(
+    (item: { assignedToId: string }) => role === "MARKETER" || item.assignedToId === workspace.user.id,
+    [role, workspace.user.id],
   );
 
   const handleEditCompletedTask = React.useCallback((task: CompletedWorkItem) => {
@@ -7714,13 +7755,10 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
                   rows={marketerVisibleTasks}
                   loading={loading}
                   viewerRole={role}
+                  readOnly
                   emptyMessage="No marketer tasks due right now."
                   activeItemId={completionItem?.id ?? null}
                   onOpen={setDetailItem}
-                  onEdit={setEditingTask}
-                  onDelete={(task) => void handleTaskDelete(task)}
-                  onEditFollowUp={setEditingFollowUp}
-                  onDeleteFollowUp={(task) => void handleFollowUpDelete(task)}
                   onComplete={handleCompleteRequest}
                 />
               </DashboardCard>
@@ -7734,8 +7772,8 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
                   rows={marketerCompletedTasks}
                   loading={loading}
                   viewerRole={role}
+                  readOnly
                   emptyMessage="No completed marketer work yet."
-                  onEditCompletedTask={handleEditCompletedTask}
                   onOpen={setDetailItem}
                   previewCount={6}
                 />
@@ -7749,12 +7787,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
               viewerRole={role}
               activeItemId={completionItem?.id ?? null}
               onOpen={(item) => setDetailItem(item)}
-              onEdit={setEditingTask}
-              onDelete={(task) => void handleTaskDelete(task)}
-              onEditFollowUp={setEditingFollowUp}
-              onDeleteFollowUp={(task) => void handleFollowUpDelete(task)}
               onComplete={handleCompleteRequest}
-              onEditCompletedTask={handleEditCompletedTask}
             />
           </>
         ) : (
@@ -7806,12 +7839,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
                 viewerRole={role}
                 activeItemId={completionItem?.id ?? null}
                 onOpen={(item) => setDetailItem(item)}
-                onEdit={setEditingTask}
-                onDelete={(task) => void handleTaskDelete(task)}
-                onEditFollowUp={setEditingFollowUp}
-                onDeleteFollowUp={(task) => void handleFollowUpDelete(task)}
                 onComplete={handleCompleteRequest}
-                onEditCompletedTask={handleEditCompletedTask}
               />
             ) : null}
           </>
@@ -7913,7 +7941,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
               <StatusBadge value={detailItem.priority} />
               {"queueLabel" in detailItem ? <StatusBadge value={detailItem.queueLabel} /> : <StatusBadge value={detailItem.status} />}
             </div>
-            {"sourceType" in detailItem && detailItem.sourceType === "TASK" && detailItem.statusKey === "PENDING" ? (
+            {"sourceType" in detailItem && detailItem.sourceType === "TASK" && detailItem.statusKey === "PENDING" && canManageAssignedItem(detailItem) ? (
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"
@@ -7929,7 +7957,7 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
                   Delete Task
                 </Button>
               </div>
-            ) : "sourceType" in detailItem && detailItem.sourceType === "FOLLOW_UP" && detailItem.statusKey === "PENDING" ? (
+            ) : "sourceType" in detailItem && detailItem.sourceType === "FOLLOW_UP" && detailItem.statusKey === "PENDING" && canManageAssignedItem(detailItem) ? (
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"
@@ -7952,8 +7980,18 @@ function TodayTasksExecutionView({ role, workspace }: { role: Role; workspace: T
   );
 }
 
-export function TasksPage({ role, workspace }: { role: Role; workspace: CrmWorkspace }) {
-  return <TodayTasksExecutionView role={role} workspace={workspace} />;
+export function TasksPage({
+  role,
+  workspace,
+  initialActiveTasks,
+  initialCompletedTasks,
+}: {
+  role: Role;
+  workspace: CrmWorkspace;
+  initialActiveTasks?: TodayWorkQueueItem[];
+  initialCompletedTasks?: CompletedWorkItem[];
+}) {
+  return <TodayTasksExecutionView role={role} workspace={workspace} initialActiveTasks={initialActiveTasks} initialCompletedTasks={initialCompletedTasks} />;
 }
 
 function fallbackFollowUpPageData(workspace: CrmWorkspace): FollowUpPageData {
