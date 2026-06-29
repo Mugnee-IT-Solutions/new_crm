@@ -41,7 +41,7 @@ import { useTaskCounterContext } from "@/components/app/app-shell";
 import type { CrmWorkspace } from "@/lib/crm-data";
 import { formatCrmDate, getCrmDayWindow, getCrmPeriodWindow } from "@/lib/crm-time";
 import { cn, initials, rolePath, type Role } from "@/lib/utils";
-import { CompletedWorkList, FollowUpEditModal, InlineContactShortcuts, toEditableCompletedTaskRow, type TodayTaskApiRow, TaskCreateModal, TodayWorkQueueList, todayWorkCounts, matchesTodayWorkFilter, sortTodayWorkQueue, WorkCompletionModal, type TodayWorkFilter } from "@/components/crm/resource-pages";
+import { CompletedWorkList, FollowUpEditModal, InlineContactShortcuts, toEditableCompletedFollowUpItem, toEditableCompletedTaskRow, type EditableFollowUpModalItem, type TodayTaskApiRow, TaskCreateModal, TodayWorkQueueList, todayWorkCounts, matchesTodayWorkFilter, sortTodayWorkQueue, WorkCompletionModal, type TodayWorkFilter } from "@/components/crm/resource-pages";
 import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
 import { updateFollowUpStatusAction, updateTaskStatusAction } from "@/lib/crm-actions";
 import { FormModal } from "@/components/shared/form-modal";
@@ -2475,6 +2475,12 @@ function marketerActivityIcon(title: string, detail: string) {
   return { icon: CheckCircle2, tone: "bg-slate-100 text-slate-700" };
 }
 
+type MarketerDashboardTaskSnapshot = {
+  activeTasks: TodayWorkQueueItem[];
+  upcomingTasks: TodayTaskApiRow[];
+  completedTasks: CompletedWorkItem[];
+};
+
 function MarketerKpiGrid({ workspace }: { workspace: CrmWorkspace }) {
   const todaysTasks = Number(workspace.stats.find((item) => item.title === "Today's Tasks")?.value ?? 0);
   const pendingTasks = Number(workspace.stats.find((item) => item.title === "Pending Tasks")?.value ?? 0);
@@ -2510,18 +2516,24 @@ function MarketerKpiGrid({ workspace }: { workspace: CrmWorkspace }) {
   );
 }
 
-function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
-  const [loading, setLoading] = React.useState(true);
+function MarketerTodayTaskSection({
+  workspace,
+  initialTaskSnapshot,
+}: {
+  workspace: CrmWorkspace;
+  initialTaskSnapshot?: MarketerDashboardTaskSnapshot;
+}) {
+  const [loading, setLoading] = React.useState(() => !initialTaskSnapshot);
   const [error, setError] = React.useState("");
   const [actionError, setActionError] = React.useState("");
   const [activeFilter, setActiveFilter] = React.useState<MarketerTaskFilter>("all");
-  const [activeTasks, setActiveTasks] = React.useState<TodayWorkQueueItem[]>([]);
-  const [upcomingTasks, setUpcomingTasks] = React.useState<TodayTaskApiRow[]>([]);
-  const [completedTasks, setCompletedTasks] = React.useState<CompletedWorkItem[]>([]);
+  const [activeTasks, setActiveTasks] = React.useState<TodayWorkQueueItem[]>(() => sortTodayWorkQueue(dedupeRowsById(initialTaskSnapshot?.activeTasks ?? [])));
+  const [upcomingTasks, setUpcomingTasks] = React.useState<TodayTaskApiRow[]>(() => dedupeRowsById(initialTaskSnapshot?.upcomingTasks ?? []));
+  const [completedTasks, setCompletedTasks] = React.useState<CompletedWorkItem[]>(() => dedupeRowsById(initialTaskSnapshot?.completedTasks ?? []));
   const [completedStageFilter, setCompletedStageFilter] = React.useState<"all" | "Call" | "Follow-up" | "Demo Send" | "Quotation" | "Sale Won" | "Lead Lost">("all");
   const [completionItem, setCompletionItem] = React.useState<TodayWorkQueueItem | null>(null);
   const [editingTask, setEditingTask] = React.useState<TodayTaskApiRow | null>(null);
-  const [editingFollowUp, setEditingFollowUp] = React.useState<TodayWorkQueueItem | null>(null);
+  const [editingFollowUp, setEditingFollowUp] = React.useState<EditableFollowUpModalItem | null>(null);
   const [dueReminderItem, setDueReminderItem] = React.useState<TodayWorkQueueItem | null>(null);
   const { refreshTaskCount } = useTaskCounterContext();
   const scheduledRefreshTimers = React.useRef<number[]>([]);
@@ -2662,6 +2674,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   }, []);
 
   React.useEffect(() => {
+    if (initialTaskSnapshot) return;
     const timer = window.setTimeout(() => {
       void loadTasks();
     }, 0);
@@ -2669,7 +2682,7 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [loadTasks]);
+  }, [initialTaskSnapshot, loadTasks]);
 
   React.useEffect(() => {
     return () => {
@@ -2842,8 +2855,14 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   ];
 
   const handleEditCompletedTask = React.useCallback((task: CompletedWorkItem) => {
-    if (task.sourceType !== "TASK") return;
-    setEditingTask(toEditableCompletedTaskRow(task));
+    if (task.sourceType === "TASK") {
+      setEditingTask(toEditableCompletedTaskRow(task));
+      return;
+    }
+
+    if (task.sourceType === "FOLLOW_UP") {
+      setEditingFollowUp(toEditableCompletedFollowUpItem(task));
+    }
   }, []);
 
   const handleTaskDelete = React.useCallback(async (task: TodayTaskApiRow) => {
@@ -3110,10 +3129,17 @@ function MarketerTodayTaskSection({ workspace }: { workspace: CrmWorkspace }) {
   );
 }
 
-function MarketerFollowUpCenter({ workspace }: { workspace: CrmWorkspace }) {
-  const [loading, setLoading] = React.useState(true);
+function MarketerFollowUpCenter({
+  workspace,
+  initialRows,
+}: {
+  workspace: CrmWorkspace;
+  initialRows?: TodayTaskApiRow[];
+}) {
+  const hasInitialRows = initialRows !== undefined;
+  const [loading, setLoading] = React.useState(() => !hasInitialRows);
   const [error, setError] = React.useState("");
-  const [rows, setRows] = React.useState<TodayTaskApiRow[]>([]);
+  const [rows, setRows] = React.useState<TodayTaskApiRow[]>(() => dedupeRowsById(initialRows ?? []));
   const crmDayRefreshTimer = React.useRef<number | null>(null);
 
   const loadUpcoming = React.useCallback(async () => {
@@ -3135,8 +3161,9 @@ function MarketerFollowUpCenter({ workspace }: { workspace: CrmWorkspace }) {
   }, []);
 
   React.useEffect(() => {
+    if (hasInitialRows) return;
     void loadUpcoming();
-  }, [loadUpcoming]);
+  }, [hasInitialRows, loadUpcoming]);
 
   const scheduleNextCrmDayRefresh = React.useCallback(() => {
     if (crmDayRefreshTimer.current !== null) {
@@ -3292,7 +3319,13 @@ function MarketerRecentActivities({ workspace }: { workspace: CrmWorkspace }) {
   );
 }
 
-export function MarketerDashboard({ workspace }: { workspace: CrmWorkspace }) {
+export function MarketerDashboard({
+  workspace,
+  initialTaskSnapshot,
+}: {
+  workspace: CrmWorkspace;
+  initialTaskSnapshot?: MarketerDashboardTaskSnapshot;
+}) {
   const greeting = useDashboardGreeting(workspace.user.name, "MARKETER");
 
   return (
@@ -3305,9 +3338,9 @@ export function MarketerDashboard({ workspace }: { workspace: CrmWorkspace }) {
 
       <MarketerKpiGrid workspace={workspace} />
 
-      <MarketerTodayTaskSection workspace={workspace} />
+      <MarketerTodayTaskSection workspace={workspace} initialTaskSnapshot={initialTaskSnapshot} />
 
-      <MarketerFollowUpCenter workspace={workspace} />
+      <MarketerFollowUpCenter workspace={workspace} initialRows={initialTaskSnapshot?.upcomingTasks} />
       <MarketerRecentActivities workspace={workspace} />
     </>
   );

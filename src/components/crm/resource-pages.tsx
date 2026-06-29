@@ -2738,7 +2738,7 @@ function useCustomerQuickContext(customerId: string | null | undefined, open: bo
   };
 }
 
-type EditableFollowUpModalItem = Pick<TodayWorkQueueItem, "sourceId" | "sourceType" | "title" | "companyName" | "method" | "taskDateIso" | "description" | "notes">;
+export type EditableFollowUpModalItem = Pick<TodayWorkQueueItem, "sourceId" | "sourceType" | "title" | "companyName" | "method" | "taskDateIso" | "description" | "notes">;
 
 function toEditableFollowUpModalItem(followUp: FollowUpRow): EditableFollowUpModalItem {
   return {
@@ -2750,6 +2750,19 @@ function toEditableFollowUpModalItem(followUp: FollowUpRow): EditableFollowUpMod
     taskDateIso: followUp.followUpDateIso,
     description: followUp.note,
     notes: followUp.nextDiscussionPlan,
+  };
+}
+
+export function toEditableCompletedFollowUpItem(task: CompletedWorkItem): EditableFollowUpModalItem {
+  return {
+    sourceId: task.sourceId,
+    sourceType: "FOLLOW_UP",
+    title: task.title,
+    companyName: task.companyName,
+    method: task.method,
+    taskDateIso: task.taskDateIso,
+    description: task.description !== "-" ? task.description : task.method,
+    notes: task.notes !== "-" ? task.notes : "",
   };
 }
 
@@ -7368,7 +7381,7 @@ export function CompletedWorkList({
                 ) : null}
                 <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
                   <p className="text-[11px] font-bold text-slate-500">{task.completedAtLabel}</p>
-                  {!readOnly && task.sourceType === "TASK" && onEditCompletedTask ? (
+                  {!readOnly && onEditCompletedTask ? (
                     <Button
                       type="button"
                       size="sm"
@@ -7524,7 +7537,7 @@ function TodayTasksExecutionView({
   const hasInitialRows = initialActiveTasks !== undefined && initialCompletedTasks !== undefined;
   const [open, setOpen] = React.useState(false);
   const [editingTask, setEditingTask] = React.useState<TodayTaskApiRow | null>(null);
-  const [editingFollowUp, setEditingFollowUp] = React.useState<TodayWorkQueueItem | null>(null);
+  const [editingFollowUp, setEditingFollowUp] = React.useState<EditableFollowUpModalItem | null>(null);
   const [detailItem, setDetailItem] = React.useState<(TodayWorkQueueItem | CompletedWorkItem) | null>(null);
   const [loading, setLoading] = React.useState(!hasInitialRows);
   const [error, setError] = React.useState("");
@@ -7750,10 +7763,17 @@ function TodayTasksExecutionView({
   );
 
   const handleEditCompletedTask = React.useCallback((task: CompletedWorkItem) => {
-    if (task.sourceType !== "TASK") return;
-    setEditingTask(toEditableCompletedTaskRow(task));
-    setDetailItem(null);
-    setOpen(true);
+    if (task.sourceType === "TASK") {
+      setEditingTask(toEditableCompletedTaskRow(task));
+      setDetailItem(null);
+      setOpen(true);
+      return;
+    }
+
+    if (task.sourceType === "FOLLOW_UP") {
+      setEditingFollowUp(toEditableCompletedFollowUpItem(task));
+      setDetailItem(null);
+    }
   }, []);
 
   const handleTaskEdit = React.useCallback((task: TodayTaskApiRow) => {
