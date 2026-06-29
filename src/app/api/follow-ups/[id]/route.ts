@@ -73,15 +73,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ success: false, message: "Follow-up not found or you do not have access." }, { status: 404 });
     }
 
-    if (existing.completedAt || existing.status === "COMPLETED") {
-      return NextResponse.json({ success: false, message: "Completed follow-up cannot be edited." }, { status: 400 });
-    }
-
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
     const nextStatus = followUpDate < today ? "OVERDUE" : followUpDate < tomorrow ? "TODAY" : "UPCOMING";
+    const isCompleted = Boolean(existing.completedAt || existing.status === "COMPLETED");
 
     const updated = await prisma.followUp.update({
       where: { id: existing.id },
@@ -90,16 +87,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         note: body.note?.trim() || "Follow-up",
         nextDiscussionPlan: body.nextDiscussionPlan?.trim() || null,
         followUpDate,
-        status: nextStatus,
-        reminderSentAt: null,
+        ...(isCompleted ? {} : { status: nextStatus, reminderSentAt: null }),
       },
       select: { id: true, followUpDate: true },
     });
 
     await prisma.activityTimeline.create({
       data: {
-        title: "Follow-up Updated",
-        description: body.note?.trim() || "Follow-up updated",
+        title: isCompleted ? "Completed Follow-up Updated" : "Follow-up Updated",
+        description: body.note?.trim() || (isCompleted ? "Completed follow-up updated" : "Follow-up updated"),
         entity: "FollowUp",
         entityId: updated.id,
         userId: auth.user.id,
@@ -112,7 +108,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     await prisma.activityLog.create({
       data: {
         userId: auth.user.id,
-        action: "Follow-up Updated",
+        action: isCompleted ? "Completed Follow-up Updated" : "Follow-up Updated",
         entity: "FollowUp",
         entityId: updated.id,
       },

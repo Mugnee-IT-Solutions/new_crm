@@ -2738,7 +2738,23 @@ function useCustomerQuickContext(customerId: string | null | undefined, open: bo
   };
 }
 
-export type EditableFollowUpModalItem = Pick<TodayWorkQueueItem, "sourceId" | "sourceType" | "title" | "companyName" | "method" | "taskDateIso" | "description" | "notes">;
+export type EditableFollowUpModalItem = Pick<
+  TodayWorkQueueItem,
+  | "sourceId"
+  | "sourceType"
+  | "title"
+  | "companyName"
+  | "companyPrimaryPhone"
+  | "method"
+  | "taskDateIso"
+  | "description"
+  | "notes"
+  | "productName"
+  | "priority"
+  | "priorityKey"
+> & {
+  statusKey: "PENDING" | "COMPLETED";
+};
 
 function toEditableFollowUpModalItem(followUp: FollowUpRow): EditableFollowUpModalItem {
   return {
@@ -2746,10 +2762,15 @@ function toEditableFollowUpModalItem(followUp: FollowUpRow): EditableFollowUpMod
     sourceType: "FOLLOW_UP",
     title: followUp.lead !== "-" ? followUp.lead : "Follow-up",
     companyName: followUp.customer,
+    companyPrimaryPhone: "No phone number",
     method: followUp.method,
     taskDateIso: followUp.followUpDateIso,
     description: followUp.note,
     notes: followUp.nextDiscussionPlan,
+    productName: "-",
+    priority: "Medium",
+    priorityKey: "MEDIUM",
+    statusKey: "PENDING",
   };
 }
 
@@ -2759,10 +2780,15 @@ export function toEditableCompletedFollowUpItem(task: CompletedWorkItem): Editab
     sourceType: "FOLLOW_UP",
     title: task.title,
     companyName: task.companyName,
+    companyPrimaryPhone: task.companyPrimaryPhone,
     method: task.method,
     taskDateIso: task.taskDateIso,
     description: task.description !== "-" ? task.description : task.method,
     notes: task.notes !== "-" ? task.notes : "",
+    productName: task.productName,
+    priority: task.priority,
+    priorityKey: task.priorityKey,
+    statusKey: task.statusKey,
   };
 }
 
@@ -6676,6 +6702,11 @@ export function FollowUpEditModal({
   const [nextDiscussionPlan, setNextDiscussionPlan] = React.useState("");
   const [pending, setPending] = React.useState(false);
   const [message, setMessage] = React.useState("");
+  const isCompletedItem = item?.statusKey === "COMPLETED";
+  const modalTitle = isCompletedItem ? "Edit Task" : "Edit Follow-up";
+  const productLabel = item?.productName && item.productName !== "-" ? item.productName : "No product selected";
+  const phoneLabel = item?.companyPrimaryPhone && item.companyPrimaryPhone !== "-" ? item.companyPrimaryPhone : "No phone number";
+  const priorityLabel = item?.priority ?? "Medium";
 
   React.useEffect(() => {
     if (!item || item.sourceType !== "FOLLOW_UP") {
@@ -6747,13 +6778,41 @@ export function FollowUpEditModal({
   };
 
   return (
-    <FormModal open={Boolean(item && item.sourceType === "FOLLOW_UP")} title="Edit Follow-up" onClose={onClose} panelClassName="max-w-xl">
+    <FormModal open={Boolean(item && item.sourceType === "FOLLOW_UP")} title={modalTitle} onClose={onClose} panelClassName="max-w-2xl">
       {item && item.sourceType === "FOLLOW_UP" ? (
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-            <p className="text-sm font-black text-slate-900">{item.title}</p>
-            <p className="mt-1 text-xs font-semibold text-slate-500">{item.companyName}</p>
-          </div>
+          {isCompletedItem ? (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1.5">
+                  <span className="text-sm font-semibold text-slate-700">Task Title</span>
+                  <Input value={item.title} readOnly className="font-semibold" />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="text-sm font-semibold text-slate-700">Product</span>
+                  <Input value={productLabel} readOnly className="font-semibold" />
+                </label>
+              </div>
+              <div className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/80 p-4">
+                <p className="text-sm font-semibold text-slate-700">Completed follow-up er saved info ekhane task popup-style e dekhte ar update korte parben.</p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                  <label className="space-y-1.5 sm:col-span-2">
+                    <span className="text-sm font-semibold text-slate-700">Company Name</span>
+                    <Input value={item.companyName} readOnly className="font-semibold" />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-semibold text-slate-700">Phone</span>
+                    <Input value={phoneLabel} readOnly className="font-semibold" />
+                  </label>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+              <p className="text-sm font-black text-slate-900">{item.title}</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">{item.companyName}</p>
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1.5">
               <span className="text-sm font-semibold text-slate-700">Method</span>
@@ -6770,16 +6829,22 @@ export function FollowUpEditModal({
               </select>
             </label>
             <label className="space-y-1.5">
-              <span className="text-sm font-semibold text-slate-700">Follow-up Date</span>
+              <span className="text-sm font-semibold text-slate-700">{isCompletedItem ? "Scheduled Date" : "Follow-up Date"}</span>
               <Input type="date" value={followUpDate} onChange={(event) => setFollowUpDate(event.target.value)} required />
             </label>
             <label className="space-y-1.5">
-              <span className="text-sm font-semibold text-slate-700">Follow-up Time</span>
+              <span className="text-sm font-semibold text-slate-700">{isCompletedItem ? "Scheduled Time" : "Follow-up Time"}</span>
               <Input type="time" value={followUpTime} onChange={(event) => setFollowUpTime(event.target.value)} />
             </label>
+            {isCompletedItem ? (
+              <label className="space-y-1.5">
+                <span className="text-sm font-semibold text-slate-700">Priority</span>
+                <Input value={priorityLabel} readOnly className="font-semibold" />
+              </label>
+            ) : null}
           </div>
           <label className="block space-y-1.5">
-            <span className="text-sm font-semibold text-slate-700">Follow-up Note</span>
+            <span className="text-sm font-semibold text-slate-700">{isCompletedItem ? "Task Note" : "Follow-up Note"}</span>
             <textarea
               value={note}
               onChange={(event) => setNote(event.target.value)}
@@ -6799,8 +6864,8 @@ export function FollowUpEditModal({
           </label>
           {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
           <div className="flex flex-wrap gap-2">
-            <Button type="submit" disabled={pending}>{pending ? "Saving..." : "Update Follow-up"}</Button>
-            <Button type="button" variant="destructive" onClick={handleDelete} disabled={pending}>Delete</Button>
+            <Button type="submit" disabled={pending}>{pending ? "Saving..." : isCompletedItem ? "Update Task" : "Update Follow-up"}</Button>
+            {!isCompletedItem ? <Button type="button" variant="destructive" onClick={handleDelete} disabled={pending}>Delete</Button> : null}
             <Button type="button" variant="outline" onClick={onClose} disabled={pending}>Cancel</Button>
           </div>
         </form>
@@ -7896,17 +7961,7 @@ function TodayTasksExecutionView({
         const completedFollowUp = completedTasks.find((item) => item.sourceType === "FOLLOW_UP" && item.sourceId === editFollowUpId);
         if (completedFollowUp) {
           setDetailItem(null);
-          setFollowUpTask({
-            id: completedFollowUp.sourceId,
-            title: completedFollowUp.title,
-            companyId: completedFollowUp.companyId,
-            companyName: completedFollowUp.companyName,
-            leadId: completedFollowUp.leadId,
-            leadName: completedFollowUp.leadName,
-            taskId: completedFollowUp.taskId ?? null,
-            defaultStep: normalizeCrmPipelineStep(completedFollowUp.title) ?? "Follow-up",
-            defaultMethod: completedFollowUp.method,
-          });
+          setEditingFollowUp(toEditableCompletedFollowUpItem(completedFollowUp));
           handled = true;
         }
       }

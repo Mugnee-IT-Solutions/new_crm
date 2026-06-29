@@ -274,6 +274,7 @@ export function AppHeader({
   const [searchQuery, setSearchQuery] = React.useState("");
   const deferredSearchQuery = React.useDeferredValue(searchQuery);
   const [searchResults, setSearchResults] = React.useState<ActivitySearchResultRow[]>([]);
+  const [customerSearchMatches, setCustomerSearchMatches] = React.useState<CustomerLookupRow[]>([]);
   const [searchLoading, setSearchLoading] = React.useState(false);
   const [searchError, setSearchError] = React.useState<string | null>(null);
   const [customerQuickViewId, setCustomerQuickViewId] = React.useState<string | null>(null);
@@ -453,37 +454,90 @@ export function AppHeader({
   React.useEffect(() => {
     const query = deferredSearchQuery.trim();
 
-    if (!searchOpen || !query) return;
+    if (!searchOpen || !query) {
+      setSearchResults([]);
+      setCustomerSearchMatches([]);
+      setSearchLoading(false);
+      setSearchError(null);
+      return;
+    }
 
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       try {
         setSearchLoading(true);
         setSearchError(null);
-        const params = new URLSearchParams({
+        const activityParams = new URLSearchParams({
           q: query,
           limit: "8",
         });
-        const response = await fetch(`/api/search/activities?${params.toString()}`, {
-          cache: "no-store",
-          signal: controller.signal,
+        const customerParams = new URLSearchParams({
+          search: query,
+          limit: "6",
         });
-        const payload = await response.json() as {
-          success?: boolean;
-          message?: string;
-          rows?: ActivitySearchResultRow[];
-        };
 
-        if (!response.ok || !payload.success) {
-          throw new Error(payload.message ?? "Activity search failed.");
+        const [activityResult, customerResult] = await Promise.allSettled([
+          fetch(`/api/search/activities?${activityParams.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+          fetch(`/api/customers/list?${customerParams.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        ]);
+
+        let activityRows: ActivitySearchResultRow[] = [];
+        let customerRows: CustomerLookupRow[] = [];
+        let activityError: string | null = null;
+        let customerError: string | null = null;
+
+        if (activityResult.status === "fulfilled") {
+          const payload = await activityResult.value.json() as {
+            success?: boolean;
+            message?: string;
+            rows?: ActivitySearchResultRow[];
+          };
+
+          if (!activityResult.value.ok || !payload.success) {
+            activityError = payload.message ?? "Activity search failed.";
+          } else {
+            activityRows = Array.isArray(payload.rows) ? payload.rows : [];
+          }
+        } else if (!controller.signal.aborted) {
+          activityError = "Activity search failed.";
+        }
+
+        if (customerResult.status === "fulfilled") {
+          const payload = await customerResult.value.json() as {
+            success?: boolean;
+            message?: string;
+            rows?: CustomerLookupRow[];
+          };
+
+          if (!customerResult.value.ok || !payload.success) {
+            customerError = payload.message ?? "Customer search failed.";
+          } else {
+            customerRows = Array.isArray(payload.rows) ? payload.rows : [];
+          }
+        } else if (!controller.signal.aborted) {
+          customerError = "Customer search failed.";
         }
 
         React.startTransition(() => {
-          setSearchResults(Array.isArray(payload.rows) ? payload.rows : []);
+          setSearchResults(activityRows);
+          setCustomerSearchMatches(customerRows);
         });
+
+        if (activityError && customerError) {
+          setSearchError(activityError);
+        } else {
+          setSearchError(null);
+        }
       } catch (error) {
         if (controller.signal.aborted) return;
         setSearchResults([]);
+        setCustomerSearchMatches([]);
         setSearchError(error instanceof Error ? error.message : "Activity search failed.");
       } finally {
         if (!controller.signal.aborted) {
@@ -568,6 +622,11 @@ export function AppHeader({
 
                 if (event.key === "Enter" && trimmedSearchQuery) {
                   event.preventDefault();
+                  const bestCustomerMatch = pickBestCustomerMatch(trimmedSearchQuery, customerSearchMatches);
+                  if (bestCustomerMatch?.id) {
+                    openCustomerQuickView(bestCustomerMatch.id);
+                    return;
+                  }
                   const topCustomerMatch = searchResults.find((item) => item.customerId);
                   if (topCustomerMatch?.customerId) {
                     openCustomerQuickView(topCustomerMatch.customerId);
@@ -654,8 +713,38 @@ export function AppHeader({
                       <div className="rounded-2xl bg-slate-50 px-4 py-5 text-sm font-semibold text-slate-500">Searching live CRM activities...</div>
                     ) : searchError ? (
                       <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-5 text-sm font-semibold text-red-700">{searchError}</div>
-                    ) : searchResults.length ? (
+                    ) : searchResults.length || customerSearchMatches.length ? (
                       <div className="space-y-1.5">
+                        {customerSearchMatches.length ? (
+                          <div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-2">
+                            <p className="px-2 pb-2 text-[11px] font-black uppercase tracking-[0.18em] text-blue-700">
+                              Matching Companies
+                            </p>
+                            <div className="space-y-1.5">
+                              {customerSearchMatches.map((item) => (
+                                <button
+                                  key={`customer-match:${item.id}`}
+                                  type="button"
+                                  onClick={() => openCustomerQuickView(item.id)}
+                                  className="block w-full rounded-2xl border border-transparent bg-white px-3 py-3 text-left transition hover:border-blue-200 hover:bg-blue-50/60"
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <p className="truncate text-sm font-bold text-slate-900">{item.companyName}</p>
+                                        <Badge variant="default">Quick View</Badge>
+                                      </div>
+                                      <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                                        {[item.contactPerson, item.phone].filter(Boolean).join(" • ") || "Open customer popup with history, task, and follow-up context"}
+                                      </p>
+                                    </div>
+                                    <span className="shrink-0 text-xs font-bold text-blue-600">Open popup</span>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
                         {searchResults.map((item) => (
                           item.customerId ? (
                             <button
