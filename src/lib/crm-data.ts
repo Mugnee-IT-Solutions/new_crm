@@ -4076,6 +4076,7 @@ export async function getDashboardWorkspace(role: Role, user: ShellUser, options
     leadRecords,
     companyRecords,
     followUpRecords,
+    todayQueueRows,
     productRecords,
     quotationRecords,
     activityLogs,
@@ -4123,6 +4124,9 @@ export async function getDashboardWorkspace(role: Role, user: ShellUser, options
         take: 60,
       })
       : Promise.resolve([] as Array<Record<string, unknown>>),
+    user.id
+      ? getTodayWorkQueue({ id: user.id, role, name: user.name })
+      : Promise.resolve([]),
     isSupervisor
       ? prisma.productService.findMany({
         include: productInclude,
@@ -4557,6 +4561,7 @@ export async function getDashboardWorkspace(role: Role, user: ShellUser, options
     }
     : undefined;
 
+  const activeTodayWorkCount = todayQueueRows.length;
   const unifiedTodayWorkCount = todayTaskBadgeCount + followUpBadgeCount;
   const pendingTasks = role === "MARKETER" ? pendingTaskCount : todayTaskBadgeCount;
   const wonSales = leadRows.filter((lead) => lead.status === "Won Sale").length;
@@ -4575,7 +4580,7 @@ export async function getDashboardWorkspace(role: Role, user: ShellUser, options
   const stats =
     role === "MARKETER"
       ? [
-        { title: "Today's Tasks", value: String(unifiedTodayWorkCount), helper: "Unified work queue", tone: "bg-blue-100 text-blue-700" },
+        { title: "Today's Tasks", value: String(activeTodayWorkCount), helper: "Unified work queue", tone: "bg-blue-100 text-blue-700" },
         { title: "Pending Tasks", value: String(pendingTasks), helper: "Need completion", tone: "bg-red-100 text-red-700" },
         { title: "Follow-ups Due", value: String(followUpSummary.overdue + followUpSummary.today), helper: "Overdue and today", tone: "bg-indigo-100 text-indigo-700" },
         { title: "New Leads", value: String(leadRows.filter((lead) => lead.status === "New Lead").length), helper: "Assigned leads", tone: "bg-emerald-100 text-emerald-700" },
@@ -4636,7 +4641,7 @@ export async function getDashboardWorkspace(role: Role, user: ShellUser, options
       followUps: followUpBadgeCount,
       leads: leadCount,
       customers: customerCount,
-      tasks: unifiedTodayWorkCount,
+      tasks: activeTodayWorkCount,
       todaysPlan: todaysPlanCount + unifiedTodayWorkCount,
       products: activeProductCount,
       rewards: rewardAggregate._sum.points ?? 0,

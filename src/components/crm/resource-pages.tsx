@@ -6108,11 +6108,7 @@ function dateTimeLocalValue(date = new Date()) {
 
 function defaultTaskDateTimeValue(now = new Date()) {
   const base = new Date(now);
-  if (base.getHours() < 10) {
-    base.setHours(10, 0, 0, 0);
-  } else {
-    base.setSeconds(0, 0);
-  }
+  base.setHours(10, 0, 0, 0);
   return dateTimeLocalValue(base);
 }
 
