@@ -47,6 +47,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs } from "@/components/ui/tabs";
 import { LeadStatusDonut, ProductBarChart, SalesLineChart } from "@/components/charts/crm-charts";
+import { FollowUpEditModal, type EditableFollowUpModalItem } from "@/components/crm/follow-up-edit-modal";
 import { ChartCard } from "@/components/shared/chart-card";
 import { DashboardCard } from "@/components/shared/dashboard-card";
 import { DataTable } from "@/components/shared/data-table";
@@ -96,6 +97,8 @@ import { getCrmDayWindow, getCrmPeriodWindow } from "@/lib/crm-time";
 import { type ReportFormat } from "@/lib/report-definitions";
 import { cn, formatCurrency, initials, rolePath, type Role, type ShellUser } from "@/lib/utils";
 
+export { FollowUpEditModal, type EditableFollowUpModalItem } from "@/components/crm/follow-up-edit-modal";
+
 type ActionResult = { ok?: boolean; message?: string; [key: string]: unknown } | unknown;
 
 type ServerAction = (formData: FormData) => Promise<ActionResult>;
@@ -128,8 +131,20 @@ function normalizeInitialTodayWorkRows(rows?: TodayWorkQueueItem[]) {
   return sortTodayWorkQueue(dedupeRowsById(rows ?? []));
 }
 
+export function sortCompletedWorkRows(rows: CompletedWorkItem[]) {
+  return [...rows].sort((left, right) => {
+    const completedDiff = new Date(right.completedAtIso).getTime() - new Date(left.completedAtIso).getTime();
+    if (completedDiff !== 0) return completedDiff;
+
+    const scheduledDiff = new Date(right.taskDateIso).getTime() - new Date(left.taskDateIso).getTime();
+    if (scheduledDiff !== 0) return scheduledDiff;
+
+    return right.id.localeCompare(left.id);
+  });
+}
+
 function normalizeInitialCompletedWorkRows(rows?: CompletedWorkItem[]) {
-  return dedupeRowsById(rows ?? []);
+  return sortCompletedWorkRows(dedupeRowsById(rows ?? []));
 }
 
 function pageActions(items: { label: string; icon: typeof Plus; variant?: "default" | "outline"; onClick?: () => void; href?: string }[]) {
@@ -2738,32 +2753,19 @@ function useCustomerQuickContext(customerId: string | null | undefined, open: bo
   };
 }
 
-export type EditableFollowUpModalItem = Pick<
-  TodayWorkQueueItem,
-  | "sourceId"
-  | "sourceType"
-  | "title"
-  | "companyName"
-  | "companyPrimaryPhone"
-  | "companyId"
-  | "method"
-  | "taskDateIso"
-  | "description"
-  | "notes"
-  | "productId"
-  | "productName"
-  | "priority"
-  | "priorityKey"
-> & {
-  taskId?: string | null;
-  statusKey: "PENDING" | "COMPLETED";
-};
-
 function toEditableFollowUpModalItem(followUp: FollowUpRow): EditableFollowUpModalItem {
   return {
     sourceId: followUp.id,
     sourceType: "FOLLOW_UP",
-    title: followUp.lead !== "-" ? followUp.lead : "Follow-up",
+    taskId: followUp.taskId ?? null,
+    linkedTaskTitle: followUp.taskTitle ?? null,
+    linkedTaskNotes: followUp.taskNotes ?? null,
+    linkedTaskReminder: followUp.taskReminder ?? null,
+    linkedTaskProductId: followUp.taskProductId ?? null,
+    linkedTaskProductName: followUp.taskProductName ?? null,
+    linkedTaskPriorityKey: followUp.taskPriorityKey,
+    linkedTaskDateIso: followUp.taskDateIso ?? null,
+    title: followUp.taskTitle ?? (followUp.lead !== "-" ? followUp.lead : "Follow-up"),
     companyName: followUp.customer,
     companyPrimaryPhone: "No phone number",
     companyId: followUp.companyId ?? null,
@@ -2779,11 +2781,46 @@ function toEditableFollowUpModalItem(followUp: FollowUpRow): EditableFollowUpMod
   };
 }
 
+function toEditablePendingFollowUpItem(task: TodayWorkQueueItem): EditableFollowUpModalItem {
+  return {
+    sourceId: task.sourceId,
+    sourceType: "FOLLOW_UP",
+    taskId: task.taskId ?? null,
+    linkedTaskTitle: task.linkedTaskTitle ?? null,
+    linkedTaskNotes: task.linkedTaskNotes ?? null,
+    linkedTaskReminder: task.linkedTaskReminder ?? null,
+    linkedTaskProductId: task.linkedTaskProductId ?? null,
+    linkedTaskProductName: task.linkedTaskProductName ?? null,
+    linkedTaskPriorityKey: task.linkedTaskPriorityKey,
+    linkedTaskDateIso: task.linkedTaskDateIso ?? null,
+    title: task.linkedTaskTitle ?? task.title,
+    companyName: task.companyName,
+    companyPrimaryPhone: task.companyPrimaryPhone,
+    companyId: task.companyId ?? null,
+    method: task.method,
+    taskDateIso: task.taskDateIso,
+    description: task.description !== "-" ? task.description : "",
+    notes: task.notes !== "-" ? task.notes : "",
+    productId: task.linkedTaskProductId ?? task.productId ?? null,
+    productName: task.linkedTaskProductName ?? task.productName,
+    priority: task.priority,
+    priorityKey: task.priorityKey,
+    statusKey: "PENDING",
+  };
+}
+
 export function toEditableCompletedFollowUpItem(task: CompletedWorkItem): EditableFollowUpModalItem {
   return {
     sourceId: task.sourceId,
     sourceType: "FOLLOW_UP",
     taskId: task.taskId ?? null,
+    linkedTaskTitle: task.linkedTaskTitle ?? null,
+    linkedTaskNotes: task.linkedTaskNotes ?? null,
+    linkedTaskReminder: task.linkedTaskReminder ?? null,
+    linkedTaskProductId: task.linkedTaskProductId ?? null,
+    linkedTaskProductName: task.linkedTaskProductName ?? null,
+    linkedTaskPriorityKey: task.linkedTaskPriorityKey,
+    linkedTaskDateIso: task.linkedTaskDateIso ?? null,
     title: task.title,
     companyName: task.companyName,
     companyPrimaryPhone: task.companyPrimaryPhone,
@@ -6046,7 +6083,7 @@ export function todayWorkCounts(rows: TodayWorkQueueItem[]) {
   return {
     all: rows.length,
     tasks: rows.filter((row) => row.queueType === "TASK").length,
-    "due-follow-ups": rows.filter((row) => row.queueType === "DUE_FOLLOW_UP").length,
+    "due-follow-ups": rows.filter((row) => row.sourceType === "FOLLOW_UP").length,
     overdue: rows.filter((row) => row.queueType === "OVERDUE").length,
     "carry-forward": rows.filter((row) => row.queueType === "CARRY_FORWARD").length,
   } satisfies Record<TodayWorkFilter, number>;
@@ -6055,7 +6092,7 @@ export function todayWorkCounts(rows: TodayWorkQueueItem[]) {
 export function matchesTodayWorkFilter(row: TodayWorkQueueItem, filter: TodayWorkFilter) {
   if (filter === "all") return true;
   if (filter === "tasks") return row.queueType === "TASK";
-  if (filter === "due-follow-ups") return row.queueType === "DUE_FOLLOW_UP";
+  if (filter === "due-follow-ups") return row.sourceType === "FOLLOW_UP";
   if (filter === "overdue") return row.queueType === "OVERDUE";
   return row.queueType === "CARRY_FORWARD";
 }
@@ -6713,229 +6750,6 @@ export function TaskFollowUpModal({
   );
 }
 
-export function FollowUpEditModal({
-  item,
-  workspace,
-  onClose,
-  onSaved,
-  onDeleted,
-}: {
-  item: EditableFollowUpModalItem | null;
-  workspace: Pick<TaskWorkspaceData, "products">;
-  onClose: () => void;
-  onSaved: (result?: ActionResult) => void;
-  onDeleted: (result?: ActionResult) => void;
-}) {
-  const taskTitleOptions = ["Call", "Follow-up", "Demo Send", "Quotation", "Sale"];
-  const [method, setMethod] = React.useState("Phone Call");
-  const [followUpDate, setFollowUpDate] = React.useState(dateTimeLocalValue().slice(0, 10));
-  const [followUpTime, setFollowUpTime] = React.useState("");
-  const [note, setNote] = React.useState("");
-  const [nextDiscussionPlan, setNextDiscussionPlan] = React.useState("");
-  const [taskTitle, setTaskTitle] = React.useState("Follow-up");
-  const [selectedProductId, setSelectedProductId] = React.useState("");
-  const [pending, setPending] = React.useState(false);
-  const [message, setMessage] = React.useState("");
-  const isCompletedItem = item?.statusKey === "COMPLETED";
-  const modalTitle = isCompletedItem ? "Edit Task" : "Edit Follow-up";
-  const phoneLabel = item?.companyPrimaryPhone && item.companyPrimaryPhone !== "-" ? item.companyPrimaryPhone : "No phone number";
-  const priorityLabel = item?.priority ?? "Medium";
-  const linkedProductOption = React.useMemo(() => {
-    if (!item?.productName || item.productName === "-" || !isCompletedItem) return null;
-    if (workspace.products.some((product) => product.id === selectedProductId || product.name === item.productName)) return null;
-    return { id: "__linked_product__", name: item.productName };
-  }, [isCompletedItem, item?.productName, selectedProductId, workspace.products]);
-  const visibleProducts = React.useMemo(
-    () => linkedProductOption ? [linkedProductOption, ...workspace.products] : workspace.products,
-    [linkedProductOption, workspace.products],
-  );
-
-  React.useEffect(() => {
-    if (!item || item.sourceType !== "FOLLOW_UP") {
-      setMethod("Phone Call");
-      setFollowUpDate(dateTimeLocalValue().slice(0, 10));
-      setFollowUpTime("");
-      setNote("");
-      setNextDiscussionPlan("");
-      setTaskTitle("Follow-up");
-      setSelectedProductId("");
-      setMessage("");
-      return;
-    }
-    setMethod(item.method || "Phone Call");
-    const baseDate = new Date(item.taskDateIso);
-    setFollowUpDate(dateTimeLocalValue(baseDate).slice(0, 10));
-    const hasTime = baseDate.getHours() !== 0 || baseDate.getMinutes() !== 0 || baseDate.getSeconds() !== 0 || baseDate.getMilliseconds() !== 0;
-    setFollowUpTime(hasTime ? dateTimeLocalValue(baseDate).slice(11, 16) : "");
-    setNote(item.description !== "-" ? item.description : "");
-    setNextDiscussionPlan(item.notes !== "-" ? item.notes : "");
-    const normalizedTaskTitle = normalizeCrmPipelineStep(item.title);
-    setTaskTitle(normalizedTaskTitle === "Sale Won" ? "Sale" : normalizedTaskTitle === "Lead Lost" ? "Follow-up" : normalizedTaskTitle ?? "Follow-up");
-    const matchedProductId = item.productId
-      ?? workspace.products.find((product) => product.name === item.productName)?.id
-      ?? (item.productName && item.productName !== "-" ? "__linked_product__" : "");
-    setSelectedProductId(matchedProductId);
-    setMessage("");
-  }, [item, workspace.products]);
-
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!item || item.sourceType !== "FOLLOW_UP") return;
-    setPending(true);
-    setMessage("");
-    try {
-      const followUpDateValue = followUpDate && followUpTime ? `${followUpDate}T${followUpTime}` : followUpDate;
-      const response = await fetch(`/api/follow-ups/${item.sourceId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          method,
-          followUpDate: followUpDateValue,
-          note,
-          nextDiscussionPlan,
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(typeof result.message === "string" ? result.message : "Follow-up update failed.");
-      }
-      onSaved(result);
-      onClose();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Follow-up update failed.");
-    } finally {
-      setPending(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!item || item.sourceType !== "FOLLOW_UP") return;
-    setPending(true);
-    setMessage("");
-    try {
-      const response = await fetch(`/api/follow-ups/${item.sourceId}`, { method: "DELETE" });
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(typeof result.message === "string" ? result.message : "Follow-up delete failed.");
-      }
-      onDeleted(result);
-      onClose();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Follow-up delete failed.");
-    } finally {
-      setPending(false);
-    }
-  };
-
-  return (
-    <FormModal open={Boolean(item && item.sourceType === "FOLLOW_UP")} title={modalTitle} onClose={onClose} panelClassName="max-w-2xl">
-      {item && item.sourceType === "FOLLOW_UP" ? (
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {isCompletedItem ? (
-            <>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1.5">
-                  <span className="text-sm font-semibold text-slate-700">Task Title</span>
-                  <select
-                    value={taskTitle}
-                    onChange={(event) => setTaskTitle(event.target.value)}
-                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-                  >
-                    {taskTitleOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                  </select>
-                </label>
-                <label className="space-y-1.5">
-                  <span className="text-sm font-semibold text-slate-700">Product</span>
-                  <select
-                    value={selectedProductId}
-                    onChange={(event) => setSelectedProductId(event.target.value)}
-                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-                  >
-                    <option value="">Select product</option>
-                    {visibleProducts.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
-                  </select>
-                </label>
-              </div>
-              <div className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/80 p-4">
-                <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                  <label className="space-y-1.5 sm:col-span-2">
-                    <span className="text-sm font-semibold text-slate-700">Company Name</span>
-                    <Input value={item.companyName} readOnly className="font-semibold" />
-                  </label>
-                  <label className="space-y-1.5">
-                    <span className="text-sm font-semibold text-slate-700">Phone</span>
-                    <Input value={phoneLabel} readOnly className="font-semibold" />
-                  </label>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-              <p className="text-sm font-black text-slate-900">{item.title}</p>
-              <p className="mt-1 text-xs font-semibold text-slate-500">{item.companyName}</p>
-            </div>
-          )}
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1.5">
-              <span className="text-sm font-semibold text-slate-700">Method</span>
-              <select
-                value={method}
-                onChange={(event) => setMethod(event.target.value)}
-                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-              >
-                <option>Phone Call</option>
-                <option>WhatsApp</option>
-                <option>Email</option>
-                <option>Physical Visit</option>
-                <option>Meeting</option>
-              </select>
-            </label>
-            <label className="space-y-1.5">
-              <span className="text-sm font-semibold text-slate-700">{isCompletedItem ? "Scheduled Date" : "Follow-up Date"}</span>
-              <Input type="date" value={followUpDate} onChange={(event) => setFollowUpDate(event.target.value)} required />
-            </label>
-            <label className="space-y-1.5">
-              <span className="text-sm font-semibold text-slate-700">{isCompletedItem ? "Scheduled Time" : "Follow-up Time"}</span>
-              <Input type="time" value={followUpTime} onChange={(event) => setFollowUpTime(event.target.value)} />
-            </label>
-            {isCompletedItem ? (
-              <label className="space-y-1.5">
-                <span className="text-sm font-semibold text-slate-700">Priority</span>
-                <Input value={priorityLabel} readOnly className="font-semibold" />
-              </label>
-            ) : null}
-          </div>
-          <label className="block space-y-1.5">
-            <span className="text-sm font-semibold text-slate-700">{isCompletedItem ? "Task Note" : "Follow-up Note"}</span>
-            <textarea
-              value={note}
-              onChange={(event) => setNote(event.target.value)}
-              placeholder="Follow-up note"
-              className="min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-              required
-            />
-          </label>
-          <label className="block space-y-1.5">
-            <span className="text-sm font-semibold text-slate-700">Next Discussion Plan</span>
-            <textarea
-              value={nextDiscussionPlan}
-              onChange={(event) => setNextDiscussionPlan(event.target.value)}
-              placeholder="Next discussion plan"
-              className="min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-            />
-          </label>
-          {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
-          <div className="flex flex-wrap gap-2">
-            <Button type="submit" disabled={pending}>{pending ? "Saving..." : isCompletedItem ? "Update Task" : "Update Follow-up"}</Button>
-            {!isCompletedItem ? <Button type="button" variant="destructive" onClick={handleDelete} disabled={pending}>Delete</Button> : null}
-            <Button type="button" variant="outline" onClick={onClose} disabled={pending}>Cancel</Button>
-          </div>
-        </form>
-      ) : null}
-    </FormModal>
-  );
-}
-
 export function WorkCompletionModal({
   item,
   onClose,
@@ -7089,7 +6903,7 @@ function TodayWorkFilterChips({
   const filterChips: { key: TodayWorkFilter; label: string }[] = [
     { key: "all", label: "All" },
     { key: "tasks", label: "Tasks" },
-    { key: "due-follow-ups", label: "Due Follow-ups" },
+    { key: "due-follow-ups", label: "Follow-ups" },
     { key: "overdue", label: "Overdue" },
     { key: "carry-forward", label: "Carry Forward" },
   ];
@@ -7421,6 +7235,7 @@ export function CompletedWorkList({
           const crmStep = normalizeCrmPipelineStep(task.title) ?? (task.sourceType === "FOLLOW_UP" ? "Follow-up" : null);
           const hideTaskTitle = shouldHidePipelineTitle(task.title, crmStep);
           const hasPhoneNumber = Boolean(task.companyPrimaryPhone && task.companyPrimaryPhone !== "No phone number");
+          const scheduledLabel = `${task.taskDateLabel}${task.timeLabel ? ` ${task.timeLabel}` : ""}`;
           return (
           <div
             key={task.id}
@@ -7471,7 +7286,7 @@ export function CompletedWorkList({
                         <span className="truncate">{task.companyPrimaryPhone}</span>
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[11px] font-semibold text-slate-500">Scheduled: {task.taskDateLabel}{task.timeLabel ? ` ${task.timeLabel}` : ""}</p>
+                    <p className="mt-0.5 text-[11px] font-semibold text-emerald-700">Completed: {task.completedAtLabel}</p>
                   </div>
                   <button
                     type="button"
@@ -7507,7 +7322,7 @@ export function CompletedWorkList({
                   </div>
                 ) : null}
                 <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[11px] font-bold text-slate-500">{task.completedAtLabel}</p>
+                  <p className="text-[11px] font-bold text-slate-500">Scheduled: {scheduledLabel}</p>
                   {!readOnly && onEditCompletedTask ? (
                     <Button
                       type="button"
@@ -7725,7 +7540,7 @@ function TodayTasksExecutionView({
       }
 
       setActiveTasks(sortTodayWorkQueue(dedupeRowsById(todayResult.rows as TodayWorkQueueItem[])));
-      setCompletedTasks(dedupeRowsById(completedResult.rows as CompletedWorkItem[]));
+      setCompletedTasks(sortCompletedWorkRows(dedupeRowsById(completedResult.rows as CompletedWorkItem[])));
     } catch (error) {
       setError(error instanceof Error ? error.message : "Failed to load tasks.");
     } finally {
@@ -8023,7 +7838,7 @@ function TodayTasksExecutionView({
     if (!handled && editFollowUpId) {
       const pendingFollowUp = activeTasks.find((item) => item.sourceType === "FOLLOW_UP" && item.sourceId === editFollowUpId);
       if (pendingFollowUp) {
-        setEditingFollowUp(pendingFollowUp);
+        setEditingFollowUp(toEditablePendingFollowUpItem(pendingFollowUp));
         setDetailItem(null);
         handled = true;
       } else {
@@ -8331,7 +8146,7 @@ function TodayTasksExecutionView({
                 <Button
                   type="button"
                   onClick={() => {
-                    setEditingFollowUp(detailItem as TodayWorkQueueItem);
+                    setEditingFollowUp(toEditablePendingFollowUpItem(detailItem as TodayWorkQueueItem));
                     setDetailItem(null);
                   }}
                 >

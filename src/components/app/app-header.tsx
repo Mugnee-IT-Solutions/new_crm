@@ -10,10 +10,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useNotificationCenterContext } from "@/components/app/app-shell";
+import { TaskCreateModal } from "@/components/crm/resource-pages";
 import { FormModal } from "@/components/shared/form-modal";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { formatCrmDate } from "@/lib/crm-time";
-import type { CompanyRow, CustomerHistory, CustomerJourneySummary } from "@/lib/crm-data";
+import type { CompanyRow, CustomerHistory, CustomerJourneySummary, FollowUpRow, TaskRow } from "@/lib/crm-data";
 import { cn, initials, roleLabels, rolePath, type Role, type ShellUser } from "@/lib/utils";
 
 function notificationPageHref(role: Role) {
@@ -77,20 +78,123 @@ function pickBestCustomerMatch(query: string, rows: CustomerLookupRow[]) {
   return rows[0] ?? null;
 }
 
+type HeaderQuickEditTaskItem = NonNullable<React.ComponentProps<typeof TaskCreateModal>["initialTask"]>;
+
+type CustomerQuickViewIntent = {
+  mode: "snapshot" | "direct-edit";
+  taskId?: string;
+  followUpId?: string;
+};
+
+function priorityKeyFromLabel(priority?: string | null): HeaderQuickEditTaskItem["priorityKey"] {
+  const normalized = priority?.trim().toUpperCase();
+  if (normalized === "LOW") return "LOW";
+  if (normalized === "HIGH") return "HIGH";
+  if (normalized === "IMPORTANT") return "IMPORTANT";
+  return "MEDIUM";
+}
+
+function normalizeTaskPriorityKey(priority?: TaskRow["priorityKey"] | null): HeaderQuickEditTaskItem["priorityKey"] {
+  if (priority === "URGENT" || priority === "IMPORTANT") return "IMPORTANT";
+  if (priority === "HIGH") return "HIGH";
+  if (priority === "LOW") return "LOW";
+  return "MEDIUM";
+}
+
+function normalizeTaskStatusKey(status?: TaskRow["statusKey"] | null): HeaderQuickEditTaskItem["statusKey"] {
+  if (status === "COMPLETED") return "COMPLETED";
+  return "PENDING";
+}
+
+function buildEditableTaskItemFromTask(
+  task: TaskRow | undefined,
+  customer: CompanyRow | undefined,
+): HeaderQuickEditTaskItem | null {
+  if (!task?.id) return null;
+
+  return {
+    id: task.id,
+    title: task.title,
+    companyName: task.companyName || task.relatedTo || customer?.name || "-",
+    companyId: task.companyId ?? customer?.id ?? null,
+    description: task.description !== "-" ? task.description : "",
+    notes: task.notes !== "-" ? task.notes : "",
+    productId: task.productId ?? null,
+    assignedToId: undefined,
+    priorityKey: normalizeTaskPriorityKey(task.priorityKey),
+    taskDateIso: task.taskDateIso,
+    reminder: task.reminder !== "-" ? task.reminder : "",
+    statusKey: normalizeTaskStatusKey(task.statusKey),
+  };
+}
+
+function buildEditableTaskItemFromFollowUp(
+  followUp: FollowUpRow | undefined,
+  customer: CompanyRow | undefined,
+): HeaderQuickEditTaskItem | null {
+  if (!followUp?.taskId) return null;
+
+  return {
+    id: followUp.taskId,
+    title: followUp.taskTitle ?? (followUp.lead !== "-" ? followUp.lead : "Follow-up"),
+    companyName: followUp.customer,
+    companyId: followUp.companyId ?? customer?.id ?? null,
+    description: "",
+    notes: followUp.taskNotes ?? "",
+    productId: followUp.taskProductId ?? null,
+    assignedToId: undefined,
+    priorityKey: followUp.taskPriorityKey ?? priorityKeyFromLabel(followUp.priority),
+    taskDateIso: followUp.taskDateIso ?? followUp.followUpDateIso,
+    reminder: followUp.taskReminder ?? "",
+    statusKey: "COMPLETED",
+  };
+}
+
+function buildEditableQuickViewTaskItem(
+  payload: CustomerQuickContextPayload | null,
+  intent: CustomerQuickViewIntent | null,
+): HeaderQuickEditTaskItem | null {
+  const customer = payload?.profileCustomer;
+  const history = payload?.history;
+  if (!history) return null;
+
+  const matchedTask = intent?.taskId
+    ? history.tasks.find((task) => task.id === intent.taskId)
+    : undefined;
+  const matchedFollowUp = intent?.followUpId
+    ? history.followUps.find((followUp) => followUp.id === intent.followUpId)
+    : undefined;
+  const linkedFollowUp = matchedTask
+    ? history.followUps.find((followUp) => followUp.taskId === matchedTask.id)
+    : undefined;
+
+  return (
+    buildEditableTaskItemFromFollowUp(matchedFollowUp, customer) ??
+    buildEditableTaskItemFromFollowUp(linkedFollowUp, customer) ??
+    buildEditableTaskItemFromTask(matchedTask, customer) ??
+    buildEditableTaskItemFromFollowUp(history.followUps[0], customer) ??
+    buildEditableTaskItemFromTask(history.tasks[0], customer)
+  );
+}
+
 function CustomerQuickSearchModal({
   role,
   customerId,
   payload,
+  latestTaskItem,
   loading,
   error,
+  onEditTask,
   onNavigate,
   onClose,
 }: {
   role: Role;
   customerId: string | null;
   payload: CustomerQuickContextPayload | null;
+  latestTaskItem: HeaderQuickEditTaskItem | null;
   loading: boolean;
   error: string | null;
+  onEditTask: (item: HeaderQuickEditTaskItem) => void;
   onNavigate: (href: string) => void;
   onClose: () => void;
 }) {
@@ -200,7 +304,19 @@ function CustomerQuickSearchModal({
                   <MessageSquare className="h-4 w-4" />
                   Activity Log
                 </Button>
-                <Button type="button" variant="outline" className="w-full justify-start" onClick={() => onNavigate(latestFollowUpHref)} disabled={!latestFollowUpHref}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    if (latestTaskItem) {
+                      onEditTask(latestTaskItem);
+                      return;
+                    }
+                    onNavigate(latestFollowUpHref);
+                  }}
+                  disabled={!latestTaskItem && !latestFollowUpHref}
+                >
                   <CalendarClock className="h-4 w-4" />
                   Edit Follow-up
                 </Button>
@@ -281,6 +397,10 @@ export function AppHeader({
   const [customerQuickView, setCustomerQuickView] = React.useState<CustomerQuickContextPayload | null>(null);
   const [customerQuickViewLoading, setCustomerQuickViewLoading] = React.useState(false);
   const [customerQuickViewError, setCustomerQuickViewError] = React.useState<string | null>(null);
+  const [customerQuickViewRefreshKey, setCustomerQuickViewRefreshKey] = React.useState(0);
+  const [customerQuickViewIntent, setCustomerQuickViewIntent] = React.useState<CustomerQuickViewIntent | null>(null);
+  const [editingTask, setEditingTask] = React.useState<HeaderQuickEditTaskItem | null>(null);
+  const [quickEditProducts, setQuickEditProducts] = React.useState<Array<{ id: string; name: string }>>([]);
   const searchRef = React.useRef<HTMLDivElement | null>(null);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
   const notificationRef = React.useRef<HTMLDivElement | null>(null);
@@ -309,19 +429,31 @@ export function AppHeader({
     return `${rolePath(role, "communication")}${queryString ? `?${queryString}` : ""}`;
   }, [role, trimmedSearchQuery]);
 
-  const openCustomerQuickView = React.useCallback((customerId: string) => {
-    setSearchOpen(false);
-    setOpen(false);
-    setProfileOpen(false);
-    setCustomerQuickViewId(customerId);
-  }, []);
-
-  const closeCustomerQuickView = React.useCallback(() => {
+  const resetCustomerQuickViewState = React.useCallback(() => {
     setCustomerQuickViewId(null);
     setCustomerQuickView(null);
     setCustomerQuickViewLoading(false);
     setCustomerQuickViewError(null);
+    setCustomerQuickViewRefreshKey(0);
+    setCustomerQuickViewIntent(null);
   }, []);
+
+  const openCustomerQuickView = React.useCallback((customerId: string, intent: CustomerQuickViewIntent = { mode: "snapshot" }) => {
+    setSearchOpen(false);
+    setOpen(false);
+    setProfileOpen(false);
+    setEditingTask(null);
+    setCustomerQuickView(null);
+    setCustomerQuickViewError(null);
+    setCustomerQuickViewIntent(intent);
+    setCustomerQuickViewRefreshKey(0);
+    setCustomerQuickViewId(customerId);
+  }, []);
+
+  const closeCustomerQuickView = React.useCallback(() => {
+    setEditingTask(null);
+    resetCustomerQuickViewState();
+  }, [resetCustomerQuickViewState]);
 
   const navigateFromQuickView = React.useCallback((href: string) => {
     if (!href) return;
@@ -354,7 +486,7 @@ export function AppHeader({
       const match = pickBestCustomerMatch(trimmedQuery, payload.rows);
       if (!match?.id) return false;
 
-      openCustomerQuickView(match.id);
+      openCustomerQuickView(match.id, { mode: "direct-edit" });
       return true;
     } catch {
       return false;
@@ -455,11 +587,13 @@ export function AppHeader({
     const query = deferredSearchQuery.trim();
 
     if (!searchOpen || !query) {
-      setSearchResults([]);
-      setCustomerSearchMatches([]);
-      setSearchLoading(false);
-      setSearchError(null);
-      return;
+      const frame = window.requestAnimationFrame(() => {
+        setSearchResults([]);
+        setCustomerSearchMatches([]);
+        setSearchLoading(false);
+        setSearchError(null);
+      });
+      return () => window.cancelAnimationFrame(frame);
     }
 
     const controller = new AbortController();
@@ -584,7 +718,63 @@ export function AppHeader({
 
     void load();
     return () => controller.abort();
-  }, [customerQuickViewId]);
+  }, [customerQuickViewId, customerQuickViewRefreshKey]);
+
+  React.useEffect(() => {
+    if (!editingTask) return;
+
+    const controller = new AbortController();
+    const loadProducts = async () => {
+      try {
+        const response = await fetch("/api/products", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = await response.json() as {
+          success?: boolean;
+          rows?: Array<{ id?: string; name?: string }>;
+        };
+        if (!response.ok || !payload.success || !Array.isArray(payload.rows)) return;
+        setQuickEditProducts(payload.rows
+          .filter((row): row is { id: string; name: string } => typeof row.id === "string" && typeof row.name === "string")
+          .map((row) => ({ id: row.id, name: row.name })));
+      } catch {
+        // keep previous product choices if the quick lookup temporarily fails
+      }
+    };
+
+    void loadProducts();
+    return () => controller.abort();
+  }, [editingTask]);
+
+  const quickViewTaskItem = React.useMemo(
+    () => buildEditableQuickViewTaskItem(customerQuickView, customerQuickViewIntent),
+    [customerQuickView, customerQuickViewIntent],
+  );
+  const showCustomerQuickViewModal = Boolean(customerQuickViewId)
+    && (
+      customerQuickViewIntent?.mode !== "direct-edit"
+      || Boolean(customerQuickViewError)
+      || (!customerQuickViewLoading && !quickViewTaskItem)
+    );
+
+  React.useEffect(() => {
+    if (customerQuickViewIntent?.mode !== "direct-edit") return;
+    if (customerQuickViewLoading || customerQuickViewError || !quickViewTaskItem) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      setEditingTask(quickViewTaskItem);
+      resetCustomerQuickViewState();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    customerQuickViewError,
+    customerQuickViewIntent,
+    customerQuickViewLoading,
+    quickViewTaskItem,
+    resetCustomerQuickViewState,
+  ]);
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/85 backdrop-blur-xl">
@@ -624,12 +814,16 @@ export function AppHeader({
                   event.preventDefault();
                   const bestCustomerMatch = pickBestCustomerMatch(trimmedSearchQuery, customerSearchMatches);
                   if (bestCustomerMatch?.id) {
-                    openCustomerQuickView(bestCustomerMatch.id);
+                    openCustomerQuickView(bestCustomerMatch.id, { mode: "direct-edit" });
                     return;
                   }
                   const topCustomerMatch = searchResults.find((item) => item.customerId);
                   if (topCustomerMatch?.customerId) {
-                    openCustomerQuickView(topCustomerMatch.customerId);
+                    openCustomerQuickView(topCustomerMatch.customerId, {
+                      mode: "direct-edit",
+                      taskId: topCustomerMatch.taskId,
+                      followUpId: topCustomerMatch.followUpId,
+                    });
                     return;
                   }
                   const openedFromQuery = await openCustomerQuickViewFromQuery(trimmedSearchQuery);
@@ -725,7 +919,7 @@ export function AppHeader({
                                 <button
                                   key={`customer-match:${item.id}`}
                                   type="button"
-                                  onClick={() => openCustomerQuickView(item.id)}
+                                  onClick={() => openCustomerQuickView(item.id, { mode: "direct-edit" })}
                                   className="block w-full rounded-2xl border border-transparent bg-white px-3 py-3 text-left transition hover:border-blue-200 hover:bg-blue-50/60"
                                 >
                                   <div className="flex items-start justify-between gap-3">
@@ -750,7 +944,11 @@ export function AppHeader({
                             <button
                               key={item.id}
                               type="button"
-                              onClick={() => openCustomerQuickView(item.customerId!)}
+                              onClick={() => openCustomerQuickView(item.customerId!, {
+                                mode: "direct-edit",
+                                taskId: item.taskId,
+                                followUpId: item.followUpId,
+                              })}
                               className="block w-full rounded-2xl border border-transparent px-3 py-3 text-left transition hover:border-blue-200 hover:bg-blue-50/60"
                             >
                               <div className="flex items-start justify-between gap-3">
@@ -1000,14 +1198,42 @@ export function AppHeader({
           </Button>
         </div>
       </div>
-      <CustomerQuickSearchModal
-        role={role}
-        customerId={customerQuickViewId}
-        payload={customerQuickView}
-        loading={customerQuickViewLoading}
-        error={customerQuickViewError}
-        onNavigate={navigateFromQuickView}
-        onClose={closeCustomerQuickView}
+      {showCustomerQuickViewModal ? (
+        <CustomerQuickSearchModal
+          role={role}
+          customerId={customerQuickViewId}
+          payload={customerQuickView}
+          latestTaskItem={quickViewTaskItem}
+          loading={customerQuickViewLoading}
+          error={customerQuickViewError}
+          onEditTask={setEditingTask}
+          onNavigate={navigateFromQuickView}
+          onClose={closeCustomerQuickView}
+        />
+      ) : null}
+      <TaskCreateModal
+        open={Boolean(editingTask)}
+        onClose={() => setEditingTask(null)}
+        onCreated={() => {
+          setCustomerQuickViewRefreshKey((current) => current + 1);
+        }}
+        onDeleted={() => {
+          setCustomerQuickViewRefreshKey((current) => current + 1);
+        }}
+        role="MARKETER"
+        workspace={{
+          user: {
+            id: user.id ?? "",
+            name: user.name,
+            email: user.email ?? "",
+            mobile: user.mobile ?? "",
+            role: user.role,
+            designation: user.designation ?? "",
+          },
+          employees: [],
+          products: quickEditProducts,
+        }}
+        initialTask={editingTask}
       />
     </header>
   );

@@ -56,6 +56,14 @@ export type TodayWorkQueueItem = {
   id: string;
   sourceId: string;
   sourceType: "TASK" | "FOLLOW_UP";
+  taskId?: string | null;
+  linkedTaskTitle?: string | null;
+  linkedTaskNotes?: string | null;
+  linkedTaskReminder?: string | null;
+  linkedTaskProductId?: string | null;
+  linkedTaskProductName?: string | null;
+  linkedTaskPriorityKey?: "IMPORTANT" | "HIGH" | "MEDIUM" | "LOW";
+  linkedTaskDateIso?: string | null;
   queueType: TodayWorkQueueType;
   queueLabel: "Task" | "Follow-up" | "Overdue" | "Carry Forward";
   title: string;
@@ -749,6 +757,19 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
           },
         },
         assignedTo: { select: { name: true, role: true } },
+        task: {
+          select: {
+            id: true,
+            title: true,
+            notes: true,
+            reminder: true,
+            priority: true,
+            productId: true,
+            taskDate: true,
+            taskTime: true,
+            product: { select: { name: true } },
+          },
+        },
       },
       orderBy: [
         { followUpDate: "asc" },
@@ -841,9 +862,17 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
       id: `follow-up-${followUp.id}`,
       sourceId: followUp.id,
       sourceType: "FOLLOW_UP",
+      taskId: followUp.task?.id ?? null,
+      linkedTaskTitle: followUp.task?.title ?? null,
+      linkedTaskNotes: cleanQueueText(followUp.task?.notes) || null,
+      linkedTaskReminder: cleanQueueText(followUp.task?.reminder) || null,
+      linkedTaskProductId: followUp.task?.productId ?? null,
+      linkedTaskProductName: cleanQueueText(followUp.task?.product?.name) || null,
+      linkedTaskPriorityKey: followUp.task?.priority ? toPriorityKey(followUp.task.priority) : undefined,
+      linkedTaskDateIso: (followUp.task?.taskTime ?? followUp.task?.taskDate)?.toISOString() ?? null,
       queueType: isOverdue ? "OVERDUE" : "DUE_FOLLOW_UP",
       queueLabel: isOverdue ? "Overdue" : "Follow-up",
-      title,
+      title: cleanQueueText(followUp.task?.title) || title,
       companyName,
       companyPrimaryPhone,
       companyId,
@@ -853,7 +882,7 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
       description,
       notes: nextPlan || "-",
       reminder: "-",
-      productName: "-",
+      productName: cleanQueueText(followUp.task?.product?.name) || "-",
       method: cleanQueueText(followUp.method) || "Follow-up",
       assignedToId: followUp.assignedToId ?? "",
       assignedTo: followUp.assignedTo?.name ?? "-",

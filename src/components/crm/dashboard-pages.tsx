@@ -41,7 +41,7 @@ import { useTaskCounterContext } from "@/components/app/app-shell";
 import type { CrmWorkspace } from "@/lib/crm-data";
 import { formatCrmDate, getCrmDayWindow, getCrmPeriodWindow } from "@/lib/crm-time";
 import { cn, initials, rolePath, type Role } from "@/lib/utils";
-import { CompletedWorkList, FollowUpEditModal, InlineContactShortcuts, toEditableCompletedFollowUpItem, toEditableCompletedTaskRow, type EditableFollowUpModalItem, type TodayTaskApiRow, TaskCreateModal, TodayWorkQueueList, todayWorkCounts, matchesTodayWorkFilter, sortTodayWorkQueue, WorkCompletionModal, type TodayWorkFilter } from "@/components/crm/resource-pages";
+import { CompletedWorkList, FollowUpEditModal, InlineContactShortcuts, sortCompletedWorkRows, toEditableCompletedFollowUpItem, toEditableCompletedTaskRow, type EditableFollowUpModalItem, type TodayTaskApiRow, TaskCreateModal, TodayWorkQueueList, todayWorkCounts, matchesTodayWorkFilter, sortTodayWorkQueue, WorkCompletionModal, type TodayWorkFilter } from "@/components/crm/resource-pages";
 import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
 import { updateFollowUpStatusAction, updateTaskStatusAction } from "@/lib/crm-actions";
 import { FormModal } from "@/components/shared/form-modal";
@@ -2529,7 +2529,7 @@ function MarketerTodayTaskSection({
   const [activeFilter, setActiveFilter] = React.useState<MarketerTaskFilter>("all");
   const [activeTasks, setActiveTasks] = React.useState<TodayWorkQueueItem[]>(() => sortTodayWorkQueue(dedupeRowsById(initialTaskSnapshot?.activeTasks ?? [])));
   const [upcomingTasks, setUpcomingTasks] = React.useState<TodayTaskApiRow[]>(() => dedupeRowsById(initialTaskSnapshot?.upcomingTasks ?? []));
-  const [completedTasks, setCompletedTasks] = React.useState<CompletedWorkItem[]>(() => dedupeRowsById(initialTaskSnapshot?.completedTasks ?? []));
+  const [completedTasks, setCompletedTasks] = React.useState<CompletedWorkItem[]>(() => sortCompletedWorkRows(dedupeRowsById(initialTaskSnapshot?.completedTasks ?? [])));
   const [completedStageFilter, setCompletedStageFilter] = React.useState<"all" | "Call" | "Follow-up" | "Demo Send" | "Quotation" | "Sale Won" | "Lead Lost">("all");
   const [completionItem, setCompletionItem] = React.useState<TodayWorkQueueItem | null>(null);
   const [editingTask, setEditingTask] = React.useState<TodayTaskApiRow | null>(null);
@@ -2663,7 +2663,7 @@ function MarketerTodayTaskSection({
       const sortedRows = sortTodayWorkQueue(dedupeRowsById(todayResult.rows as TodayWorkQueueItem[]));
       setActiveTasks(sortedRows);
       setUpcomingTasks(dedupeRowsById(upcomingResult.rows as TodayTaskApiRow[]));
-      setCompletedTasks(dedupeRowsById(completedResult.rows as CompletedWorkItem[]));
+      setCompletedTasks(sortCompletedWorkRows(dedupeRowsById(completedResult.rows as CompletedWorkItem[])));
       return sortedRows;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load tasks.");
@@ -2849,7 +2849,7 @@ function MarketerTodayTaskSection({
   const chips: { key: MarketerTaskFilter; label: string }[] = [
     { key: "all", label: "All" },
     { key: "tasks", label: "Tasks" },
-    { key: "due-follow-ups", label: "Due Follow-ups" },
+    { key: "due-follow-ups", label: "Follow-ups" },
     { key: "overdue", label: "Overdue" },
     { key: "carry-forward", label: "Carry Forward" },
   ];
@@ -3849,7 +3849,7 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
         const rightTime = right.createdAtValue ? new Date(right.createdAtValue).getTime() : 0;
         return rightTime - leftTime;
       });
-    return filtered.slice(0, 48);
+    return filtered;
   }, [callActivities, periodWindow.from, periodWindow.to]);
 
   const totalCallsInPeriod = React.useMemo(() => {
@@ -3916,24 +3916,35 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
       contentClassName="p-5"
     >
       {rows.length ? (
-        <div className="max-h-[560px] overflow-x-auto overflow-y-auto pr-1">
-          <table className="min-w-[860px] w-full text-sm">
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3">
+            <p className="text-sm font-semibold text-slate-600">
+              Showing <span className="font-black text-slate-950">{rows.length}</span> call logs for {performancePeriodLabels[callPeriod].toLowerCase()}.
+            </p>
+            <p className="text-xs font-semibold text-slate-500">
+              Scroll inside this panel to browse older call notes.
+            </p>
+          </div>
+          <div className="max-h-[720px] min-h-[360px] overflow-auto rounded-2xl border border-slate-100 pr-1 [scrollbar-gutter:stable]">
+          <table className="min-w-[1120px] w-full text-sm">
             <thead className="sticky top-0 z-[1] bg-white text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
               <tr>
                 <th className="px-3 py-3 font-black">Company</th>
                 <th className="px-3 py-3 font-black">Marketer</th>
+                <th className="px-3 py-3 font-black">Method</th>
                 <th className="px-3 py-3 font-black">Note</th>
+                <th className="px-3 py-3 font-black">Next Step</th>
                 <th className="px-3 py-3 font-black">Time</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {rows.map((item) => (
-                <tr key={item.id} className="transition hover:bg-slate-50/70">
+                <tr key={item.id} className="align-top transition hover:bg-slate-50/70">
                   <td className="px-3 py-3 font-semibold text-slate-900">
                     <button
                       type="button"
                       className={cn(
-                        "text-left font-semibold",
+                        "text-left font-semibold leading-6",
                         item.customerHref ? "text-blue-700 hover:underline" : "text-slate-900",
                       )}
                       onClick={() => {
@@ -3947,14 +3958,28 @@ function AdminCallTrackingPanel({ workspace }: { workspace: CrmWorkspace }) {
                     </button>
                   </td>
                   <td className="px-3 py-3 text-slate-700">{item.employeeName ?? item.createdBy ?? "-"}</td>
-                  <td className="max-w-[420px] truncate px-3 py-3 text-slate-700" title={item.discussionSummary ?? item.notes ?? ""}>
-                    {item.discussionSummary ?? item.notes ?? "-"}
+                  <td className="px-3 py-3 text-slate-700">{item.contactMethod ?? item.badgeLabel ?? "-"}</td>
+                  <td className="max-w-[480px] px-3 py-3 text-slate-700">
+                    <p className="whitespace-normal break-words leading-6">
+                      {item.discussionSummary ?? item.notes ?? "-"}
+                    </p>
+                    {item.notes && item.notes !== "-" && item.notes !== item.discussionSummary ? (
+                      <p className="mt-1 whitespace-normal break-words text-xs font-semibold text-slate-500">
+                        Next note: {item.notes}
+                      </p>
+                    ) : null}
                   </td>
-                  <td className="px-3 py-3 text-slate-600">{item.time}</td>
+                  <td className="max-w-[240px] px-3 py-3 text-slate-600">
+                    <p className="whitespace-normal break-words leading-6">
+                      {item.nextFollowUpDate ?? "-"}
+                    </p>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-3 text-slate-600">{item.time}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       ) : (
         <SupervisorEmptyState

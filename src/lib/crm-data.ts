@@ -124,6 +124,14 @@ export type FollowUpRow = {
   id: string;
   companyId?: string | null;
   leadId?: string | null;
+  taskId?: string | null;
+  taskTitle?: string | null;
+  taskNotes?: string | null;
+  taskReminder?: string | null;
+  taskProductId?: string | null;
+  taskProductName?: string | null;
+  taskPriorityKey?: "IMPORTANT" | "HIGH" | "MEDIUM" | "LOW";
+  taskDateIso?: string | null;
   href?: string;
   customer: string;
   lead: string;
@@ -336,6 +344,13 @@ function inferActivityPipelineBadge(...values: Array<string | null | undefined>)
   if (/\b(sale won|won sale|closed won|lead converted|win|won|conversion)\b/.test(normalized)) return "WIN";
   if (/\b(lead lost|deal lost|closed lost|lost|failed|rejected)\b/.test(normalized)) return "LOST";
   return undefined;
+}
+
+function toTaskPriorityKey(priority: string | null | undefined) {
+  if (priority === "URGENT") return "IMPORTANT" as const;
+  if (priority === "HIGH") return "HIGH" as const;
+  if (priority === "LOW") return "LOW" as const;
+  return "MEDIUM" as const;
 }
 
 export type CommunicationHistoryRow = {
@@ -1047,6 +1062,24 @@ const followUpInclude = {
       name: true,
     },
   },
+  task: {
+    select: {
+      id: true,
+      title: true,
+      notes: true,
+      reminder: true,
+      priority: true,
+      productId: true,
+      taskDate: true,
+      taskTime: true,
+      product: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  },
   timelineItems: {
     include: {
       user: {
@@ -1667,6 +1700,14 @@ function mapFollowUpRow(followUp: FollowUpRecord): FollowUpRow {
     id: followUp.id,
     companyId: followUp.companyId,
     leadId: followUp.leadId,
+    taskId: followUp.task?.id ?? null,
+    taskTitle: followUp.task?.title ?? null,
+    taskNotes: followUp.task?.notes ?? null,
+    taskReminder: followUp.task?.reminder ?? null,
+    taskProductId: followUp.task?.productId ?? null,
+    taskProductName: followUp.task?.product?.name ?? null,
+    taskPriorityKey: followUp.task?.priority ? toTaskPriorityKey(followUp.task.priority) : undefined,
+    taskDateIso: (followUp.task?.taskTime ?? followUp.task?.taskDate)?.toISOString() ?? null,
     href: linkedEntityHref({ leadId: followUp.leadId, companyId: followUp.companyId }),
     customer: followUp.company?.name ?? followUp.lead?.customerName ?? "-",
     lead: followUp.lead?.title ?? "-",
