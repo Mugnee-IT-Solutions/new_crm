@@ -5729,6 +5729,11 @@ export function CustomerProfilePage({
     setFeedback({ type: "error", message: "Valid customer email not found" });
   }, []);
 
+  const customerAddress =
+    (typeof active.address === "string" ? active.address.trim() : "") ||
+    (typeof active.cityOrZilla === "string" ? active.cityOrZilla.trim() : "") ||
+    "-";
+
   return (
     <>
       <FloatingFeedback feedback={feedback} />
@@ -5815,7 +5820,7 @@ export function CustomerProfilePage({
             <DetailRow label="Phone" value={phoneDetails} />
             <DetailRow label="Email" value={active.email || "-"} />
             <DetailRow label="Industry" value={active.industry || "-"} />
-            <DetailRow label="Address" value={active.address || "-"} />
+            <DetailRow label="Address" value={customerAddress} />
             <DetailRow label="Website" value={active.website || "-"} />
             <DetailRow label="Assigned Marketer" value={primaryAssignedTo} />
             <DetailRow label="Customer Note" value={active.notes || "-"} />
