@@ -23,6 +23,7 @@ import {
   PhoneCall,
   PhoneForwarded,
   Plus,
+  Search,
   Target,
   Trophy,
   Users,
@@ -32,6 +33,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { ProductBarChart, SalesLineChart } from "@/components/charts/crm-charts";
 import { AnimatedPanel } from "@/components/shared/animated-panel";
 import { DashboardCard } from "@/components/shared/dashboard-card";
@@ -2531,6 +2533,8 @@ function MarketerTodayTaskSection({
   const [upcomingTasks, setUpcomingTasks] = React.useState<TodayTaskApiRow[]>(() => dedupeRowsById(initialTaskSnapshot?.upcomingTasks ?? []));
   const [completedTasks, setCompletedTasks] = React.useState<CompletedWorkItem[]>(() => sortCompletedWorkRows(dedupeRowsById(initialTaskSnapshot?.completedTasks ?? [])));
   const [completedStageFilter, setCompletedStageFilter] = React.useState<"all" | "Call" | "Follow-up" | "Demo Send" | "Quotation" | "Sale Won" | "Lead Lost">("all");
+  const [activeSearchQuery, setActiveSearchQuery] = React.useState("");
+  const [completedSearchQuery, setCompletedSearchQuery] = React.useState("");
   const [completionItem, setCompletionItem] = React.useState<TodayWorkQueueItem | null>(null);
   const [editingTask, setEditingTask] = React.useState<TodayTaskApiRow | null>(null);
   const [editingFollowUp, setEditingFollowUp] = React.useState<EditableFollowUpModalItem | null>(null);
@@ -2810,8 +2814,32 @@ function MarketerTodayTaskSection({
 
   const counts = React.useMemo(() => todayWorkCounts(activeTasks), [activeTasks]);
   const filteredItems = React.useMemo(
-    () => activeTasks.filter((item) => matchesTodayWorkFilter(item, activeFilter)),
-    [activeFilter, activeTasks],
+    () => {
+      const normalizedQuery = activeSearchQuery.trim().toLowerCase();
+
+      return activeTasks.filter((item) => {
+        if (!matchesTodayWorkFilter(item, activeFilter)) return false;
+        if (!normalizedQuery) return true;
+
+        const haystack = [
+          item.title,
+          item.companyName,
+          item.companyPrimaryPhone,
+          item.companyCity ?? "",
+          item.description,
+          item.notes,
+          item.method,
+          item.productName,
+          item.leadName ?? "",
+          item.assignedAtLabel,
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        return haystack.includes(normalizedQuery);
+      });
+    },
+    [activeFilter, activeSearchQuery, activeTasks],
   );
 
   const completedStageCounts = React.useMemo(() => {
@@ -2834,9 +2862,34 @@ function MarketerTodayTaskSection({
   }, [completedPipelineStage, completedTasks]);
 
   const filteredCompletedTasks = React.useMemo(() => {
-    if (completedStageFilter === "all") return completedTasks;
-    return completedTasks.filter((task) => completedPipelineStage(task) === completedStageFilter);
-  }, [completedPipelineStage, completedStageFilter, completedTasks]);
+    const normalizedQuery = completedSearchQuery.trim().toLowerCase();
+
+    return completedTasks.filter((task) => {
+      if (completedStageFilter !== "all" && completedPipelineStage(task) !== completedStageFilter) {
+        return false;
+      }
+
+      if (!normalizedQuery) return true;
+
+      const haystack = [
+        task.title,
+        task.companyName,
+        task.companyPrimaryPhone,
+        task.companyCity ?? "",
+        task.description,
+        task.notes,
+        task.method,
+        task.productName,
+        task.leadName ?? "",
+        task.completedBy,
+        task.assignedTo,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(normalizedQuery);
+    });
+  }, [completedPipelineStage, completedSearchQuery, completedStageFilter, completedTasks]);
   const upcomingTaskSummary = React.useMemo(() => {
     const { tomorrowTasks, laterTasks } = bucketUpcomingTasks(upcomingTasks);
     return {
@@ -2914,13 +2967,24 @@ function MarketerTodayTaskSection({
             <DashboardCard
               title="Today's Tasks"
               action={
-                <CreateTodayTaskButton
-                  workspace={workspace}
-                  label="Add Task"
-                  size="sm"
-                  className="h-8 rounded-xl"
-                  onCreated={handleCreated}
-                />
+                <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+                  <div className="relative min-w-[190px] flex-1 sm:w-[220px] sm:min-w-0">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                    <Input
+                      value={activeSearchQuery}
+                      onChange={(event) => setActiveSearchQuery(event.target.value)}
+                      placeholder="Search task, phone, jila..."
+                      className="h-8 rounded-full border-slate-200 pl-8 text-xs"
+                    />
+                  </div>
+                  <CreateTodayTaskButton
+                    workspace={workspace}
+                    label="Add Task"
+                    size="sm"
+                    className="h-8 rounded-xl"
+                    onCreated={handleCreated}
+                  />
+                </div>
               }
             >
               {upcomingTaskSummary.all ? (
@@ -2984,7 +3048,7 @@ function MarketerTodayTaskSection({
                 rows={filteredItems}
                 loading={loading}
                 viewerRole={role}
-                emptyMessage="No work items in this view."
+                emptyMessage={activeSearchQuery.trim() ? "No matching work item found." : "No work items in this view."}
                 activeItemId={completionItem?.id ?? null}
                 onEdit={setEditingTask}
                 onDelete={(task) => void handleTaskDelete(task)}
@@ -3002,8 +3066,8 @@ function MarketerTodayTaskSection({
           <DashboardCard
             title="Completed Tasks"
             action={
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <div className="flex flex-wrap items-center gap-2">
+              <div className="w-full space-y-2 sm:w-auto">
+                <div className="flex flex-wrap items-center justify-end gap-1.5">
                   {(["all", "Call", "Follow-up", "Demo Send", "Quotation", "Sale Won", "Lead Lost"] as const).map((stage) => {
                     const active = completedStageFilter === stage;
                     const count = stage === "all" ? completedStageCounts.all : completedStageCounts[stage];
@@ -3026,7 +3090,18 @@ function MarketerTodayTaskSection({
                     );
                   })}
                 </div>
-                <Badge variant="neutral">{completedTasks.length} Completed</Badge>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <div className="relative min-w-[200px] flex-1 sm:w-[240px] sm:min-w-0">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                    <Input
+                      value={completedSearchQuery}
+                      onChange={(event) => setCompletedSearchQuery(event.target.value)}
+                      placeholder="Search company, phone, jila..."
+                      className="h-8 rounded-full border-slate-200 pl-8 text-xs"
+                    />
+                  </div>
+                  <Badge variant="neutral">{completedTasks.length} Completed</Badge>
+                </div>
               </div>
             }
           >
@@ -3034,8 +3109,9 @@ function MarketerTodayTaskSection({
               rows={filteredCompletedTasks}
               loading={loading}
               viewerRole={role}
-              emptyMessage="No completed tasks yet."
+              emptyMessage={completedSearchQuery.trim() ? "No matching completed task found." : "No completed tasks yet."}
               onEditCompletedTask={handleEditCompletedTask}
+              onOpen={handleEditCompletedTask}
               previewCount={6}
             />
           </DashboardCard>

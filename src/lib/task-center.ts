@@ -23,6 +23,7 @@ export type TaskListItem = {
   title: string;
   companyName: string;
   companyPrimaryPhone: string;
+  companyCity?: string | null;
   companyId?: string | null;
   productId?: string | null;
   companyHref?: string | null;
@@ -69,6 +70,7 @@ export type TodayWorkQueueItem = {
   title: string;
   companyName: string;
   companyPrimaryPhone: string;
+  companyCity?: string | null;
   companyId?: string | null;
   productId?: string | null;
   companyHref?: string | null;
@@ -119,6 +121,7 @@ export type CompletedWorkItem = {
   title: string;
   companyName: string;
   companyPrimaryPhone: string;
+  companyCity?: string | null;
   companyId?: string | null;
   productId?: string | null;
   companyHref?: string | null;
@@ -176,7 +179,7 @@ type TaskQueryRecord = {
   createdAt: Date;
   updatedAt: Date;
   isPrevious: boolean;
-  company: { name: string; phone: string | null } | null;
+  company: { name: string; phone: string | null; city: string | null } | null;
   product: { name: string } | null;
   assignedTo: { name: string; role: string | null } | null;
   assignedBy: { name: string; role: string | null } | null;
@@ -197,7 +200,7 @@ type FollowUpQueryRecord = {
   createdAt: Date;
   updatedAt: Date;
   completedAt: Date | null;
-  company: { name: string; phone: string | null } | null;
+  company: { name: string; phone: string | null; city: string | null } | null;
   lead: {
     id: string;
     title: string | null;
@@ -366,6 +369,7 @@ function mapTaskRecord(task: TaskQueryRecord, role: Role): TaskListItem {
     title: task.title,
     companyName: companyDisplayName(task),
     companyPrimaryPhone: normalizeQueuePhone(task.company?.phone),
+    companyCity: task.company?.city?.trim() || null,
     companyId: task.companyId,
     productId: task.productId,
     companyHref: dashboardReturnHref(role, task.companyId ? `/customers/${task.companyId}` : null),
@@ -747,13 +751,13 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
         ],
       },
       include: {
-        company: { select: { id: true, name: true, phone: true } },
+        company: { select: { id: true, name: true, phone: true, city: true } },
         lead: {
           select: {
             id: true,
             title: true,
             customerName: true,
-            company: { select: { id: true, name: true, phone: true } },
+            company: { select: { id: true, name: true, phone: true, city: true } },
           },
         },
         assignedTo: { select: { name: true, role: true } },
@@ -798,6 +802,7 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
         title: mapped.title,
         companyName: mapped.companyName,
         companyPrimaryPhone: normalizeQueuePhone(task.company?.phone),
+        companyCity: task.company?.city?.trim() || null,
         companyId: mapped.companyId,
         productId: mapped.productId,
         companyHref: mapped.companyHref,
@@ -875,6 +880,7 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
       title: cleanQueueText(followUp.task?.title) || title,
       companyName,
       companyPrimaryPhone,
+      companyCity: company?.city?.trim() || null,
       companyId,
       companyHref: companyId ? dashboardReturnHref(actor.role, `/customers/${companyId}`) : followUp.leadId ? `/leads/${followUp.leadId}` : null,
       leadId: followUp.leadId,
@@ -982,13 +988,13 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
         ],
       },
       include: {
-        company: { select: { id: true, name: true, phone: true } },
+        company: { select: { id: true, name: true, phone: true, city: true } },
         lead: {
           select: {
             id: true,
             title: true,
             customerName: true,
-            company: { select: { id: true, name: true, phone: true } },
+            company: { select: { id: true, name: true, phone: true, city: true } },
           },
         },
         assignedTo: { select: { name: true, role: true } },
@@ -1034,6 +1040,7 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
       title: mapped.title,
       companyName: mapped.companyName,
       companyPrimaryPhone: mapped.companyPrimaryPhone,
+      companyCity: mapped.companyCity ?? null,
       companyId: mapped.companyId,
       productId: mapped.productId,
       companyHref: mapped.companyHref,
@@ -1099,6 +1106,7 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
       title: linkedTaskTitle || title,
       companyName,
       companyPrimaryPhone,
+      companyCity: company?.city?.trim() || null,
       companyId,
       productId: followUp.task?.productId ?? null,
       companyHref: companyId ? dashboardReturnHref(actor.role, `/customers/${companyId}`) : followUp.leadId ? `/leads/${followUp.leadId}` : null,
@@ -1139,6 +1147,7 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
       item.title,
       item.companyName,
       item.companyPrimaryPhone,
+      item.companyCity ?? "",
       item.description,
       item.method,
       item.leadName ?? "",

@@ -7036,31 +7036,6 @@ export function TodayWorkQueueList({
               ) : null}
               <MiniAvatar label={task.companyName || task.title} />
               <div className="min-w-0 flex-1">
-                {crmStep ? (
-                  <div className="mb-2 space-y-1.5">
-                    <CrmPipelineStrip
-                      activeStep={crmStep}
-                      highlight={task.queueType === "DUE_FOLLOW_UP" || task.queueType === "OVERDUE" || task.priorityKey === "IMPORTANT"}
-                    />
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-[11px] font-black", stageBadgeTone)}>
-                        Current step: {crmStep}
-                      </span>
-                      {isLiveFollowUp ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-orange-300 bg-orange-100 px-2 py-0.5 text-[10px] font-black text-orange-800 shadow-sm">
-                          <Clock3 className="h-3 w-3" />
-                          Live follow-up now
-                        </span>
-                      ) : null}
-                      {isUpcomingFollowUp ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-white px-2 py-0.5 text-[10px] font-bold text-amber-700">
-                          <Clock3 className="h-3 w-3" />
-                          Upcoming follow-up
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
                 <div className="space-y-0.5">
                   <div className="flex min-w-0 items-start justify-between gap-3">
                     {!hideTaskTitle ? (
@@ -7098,7 +7073,33 @@ export function TodayWorkQueueList({
                       {task.companyPrimaryPhone || "No phone number"}
                     </p>
                   </div>
+                  <p className="mt-1 text-[11px] font-semibold text-slate-500">Added: {task.assignedAtLabel}</p>
                 </div>
+                {crmStep ? (
+                  <div className="mt-2 space-y-1.5">
+                    <CrmPipelineStrip
+                      activeStep={crmStep}
+                      highlight={task.queueType === "DUE_FOLLOW_UP" || task.queueType === "OVERDUE" || task.priorityKey === "IMPORTANT"}
+                    />
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-[11px] font-black", stageBadgeTone)}>
+                        Current step: {crmStep}
+                      </span>
+                      {isLiveFollowUp ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-orange-300 bg-orange-100 px-2 py-0.5 text-[10px] font-black text-orange-800 shadow-sm">
+                          <Clock3 className="h-3 w-3" />
+                          Live follow-up now
+                        </span>
+                      ) : null}
+                      {isUpcomingFollowUp ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-white px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                          <Clock3 className="h-3 w-3" />
+                          Upcoming follow-up
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   <span className="truncate text-[11px] font-semibold text-slate-600">{task.method}</span>
                   {task.productName !== "-" ? <span className="truncate text-[11px] font-semibold text-blue-700">Product: {task.productName}</span> : null}
@@ -7254,22 +7255,17 @@ export function CompletedWorkList({
             <div className="flex items-start gap-2.5">
               <MiniAvatar label={task.companyName || task.title} />
               <div className="min-w-0 flex-1">
-                {crmStep ? (
-                  <div className="mb-2">
-                    <CrmPipelineStrip activeStep={crmStep} />
-                  </div>
-                ) : null}
                 <div className="flex min-w-0 items-start justify-between gap-3">
                   <div className="min-w-0">
+                    {isLatest ? <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">Latest completed</p> : null}
                     {!hideTaskTitle ? (
                       <button type="button" onClick={(event) => {
                         event.stopPropagation();
                         onOpen?.(task);
-                      }} className="truncate text-left text-base font-black text-slate-900 hover:text-blue-700">
+                      }} className="mt-0.5 truncate text-left text-base font-black text-slate-900 hover:text-blue-700">
                         {task.title}
                       </button>
                     ) : null}
-                    {isLatest ? <p className="mt-0.5 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">Latest completed</p> : null}
                     <p className="mt-0.5 truncate text-[15px] font-bold text-slate-700">
                       <EntityLink href={task.companyHref} className="text-[15px] font-bold text-slate-800" stopPropagation>{task.companyName}</EntityLink>
                     </p>
@@ -7296,6 +7292,11 @@ export function CompletedWorkList({
                     <Check className="h-3.5 w-3.5" />
                   </button>
                 </div>
+                {crmStep ? (
+                  <div className="mt-2">
+                    <CrmPipelineStrip activeStep={crmStep} />
+                  </div>
+                ) : null}
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-slate-500">
                   {task.method !== "Task" && task.method !== "-" ? <span>{task.method}</span> : null}
                   {task.productName !== "-" ? <span className="text-blue-700">Product: {task.productName}</span> : null}
