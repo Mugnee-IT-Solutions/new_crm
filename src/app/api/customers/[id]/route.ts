@@ -52,6 +52,36 @@ function trimText(value: unknown) {
   return value.trim();
 }
 
+function readRawString(row: Record<string, unknown>, keys: string[]) {
+  const normalizeKey = (value: string) => value.trim().replace(/\s+/g, " ").replace(/\s*\/\s*/g, " / ").toLowerCase();
+  const normalized = new Map<string, unknown>();
+  for (const [rawKey, rawValue] of Object.entries(row)) {
+    normalized.set(normalizeKey(rawKey), rawValue);
+  }
+
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string") {
+      const normalizedValue = value.trim();
+      if (normalizedValue) return normalizedValue;
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+  }
+
+  for (const key of keys) {
+    const value = normalized.get(normalizeKey(key));
+    if (typeof value === "string") {
+      const normalizedValue = value.trim();
+      if (normalizedValue) return normalizedValue;
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+  }
+
+  return "";
+}
+
 function parseDate(value: unknown) {
   if (!value) return undefined;
 
@@ -187,13 +217,18 @@ function selectCustomerPayload(customer: {
   phoneNumbers: { id: string; number: string; label: string; whatsapp: boolean }[];
   leads: { id: string; title: string; status: string; createdAt: Date }[];
 }) {
+  const raw = (customer.rawData && typeof customer.rawData === "object" && !Array.isArray(customer.rawData))
+    ? customer.rawData as Record<string, unknown>
+    : {};
+  const resolvedAddress = trimText(customer.address) || readRawString(raw, ["Address", "Company Address", "Full Address", "Location"]);
+
   return {
     id: customer.id,
     name: customer.name,
     contactPerson: customer.contactPerson,
     phone: customer.phone,
     industry: customer.industry,
-    address: customer.address,
+    address: resolvedAddress || null,
     website: customer.website,
     notes: customer.notes,
     rawData: (customer as { rawData?: unknown }).rawData,

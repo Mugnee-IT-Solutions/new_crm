@@ -56,6 +56,8 @@ type CustomerLookupRow = {
   companyName?: string;
   contactPerson?: string | null;
   phone?: string | null;
+  cityOrZilla?: string | null;
+  address?: string | null;
 };
 
 function normalizeCustomerSearchText(value?: string | null) {
@@ -203,6 +205,11 @@ function CustomerQuickSearchModal({
   const activityHref = customer?.name
     ? `${rolePath(role, "communication")}?activity=${encodeURIComponent(customer.name)}`
     : rolePath(role, "communication");
+  const customerAddress = customer?.address && customer.address !== "-"
+    ? customer.address
+    : customer?.cityOrZilla && customer.cityOrZilla !== "-"
+      ? customer.cityOrZilla
+      : "-";
   const latestTaskId = payload?.history?.tasks[0]?.id;
   const latestFollowUpId = payload?.history?.followUps[0]?.id;
   const latestTaskHref = latestTaskId ? `${rolePath(role, "tasks")}?editTaskId=${encodeURIComponent(latestTaskId)}` : "";
@@ -231,6 +238,7 @@ function CustomerQuickSearchModal({
               <div>
                 <p className="text-[11px] font-black uppercase tracking-[0.18em] text-blue-600">Customer Snapshot</p>
                 <h3 className="mt-1 text-xl font-black text-slate-950">{customer.name}</h3>
+                <p className="mt-2 text-sm font-semibold text-slate-600">{customerAddress}</p>
                 <p className="mt-2 text-sm text-slate-600">
                   {payload?.journey?.stageSummary || "Recent communication, follow-up, ar task snapshot ekhane dekhano hocche."}
                 </p>
@@ -329,6 +337,7 @@ function CustomerQuickSearchModal({
               <div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
                 <p><span className="font-bold text-slate-900">Phone:</span> {customer.phone || "-"}</p>
                 <p className="mt-1"><span className="font-bold text-slate-900">Email:</span> {customer.email || "-"}</p>
+                <p className="mt-1"><span className="font-bold text-slate-900">Address:</span> {customerAddress}</p>
                 <p className="mt-1"><span className="font-bold text-slate-900">Assigned:</span> {customer.assignedTo || "-"}</p>
               </div>
             </div>
@@ -915,27 +924,36 @@ export function AppHeader({
                               Matching Companies
                             </p>
                             <div className="space-y-1.5">
-                              {customerSearchMatches.map((item) => (
-                                <button
-                                  key={`customer-match:${item.id}`}
-                                  type="button"
-                                  onClick={() => openCustomerQuickView(item.id, { mode: "direct-edit" })}
-                                  className="block w-full rounded-2xl border border-transparent bg-white px-3 py-3 text-left transition hover:border-blue-200 hover:bg-blue-50/60"
-                                >
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0 flex-1">
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <p className="truncate text-sm font-bold text-slate-900">{item.companyName}</p>
-                                        <Badge variant="default">Quick View</Badge>
+                              {customerSearchMatches.map((item) => {
+                                const searchMatchAddress = item.address?.trim() || item.cityOrZilla?.trim() || "";
+
+                                return (
+                                  <button
+                                    key={`customer-match:${item.id}`}
+                                    type="button"
+                                    onClick={() => openCustomerQuickView(item.id, { mode: "direct-edit" })}
+                                    className="block w-full rounded-2xl border border-transparent bg-white px-3 py-3 text-left transition hover:border-blue-200 hover:bg-blue-50/60"
+                                  >
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="min-w-0 flex-1">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <p className="truncate text-sm font-bold text-slate-900">{item.companyName}</p>
+                                          <Badge variant="default">Quick View</Badge>
+                                        </div>
+                                        <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                                          {[item.contactPerson, item.phone].filter(Boolean).join(" • ") || "Open customer popup with history, task, and follow-up context"}
+                                        </p>
+                                        {searchMatchAddress ? (
+                                          <p className="mt-1 line-clamp-2 text-xs text-slate-600">
+                                            {searchMatchAddress}
+                                          </p>
+                                        ) : null}
                                       </div>
-                                      <p className="mt-1 truncate text-xs font-semibold text-slate-500">
-                                        {[item.contactPerson, item.phone].filter(Boolean).join(" • ") || "Open customer popup with history, task, and follow-up context"}
-                                      </p>
+                                      <span className="shrink-0 text-xs font-bold text-blue-600">Open popup</span>
                                     </div>
-                                    <span className="shrink-0 text-xs font-bold text-blue-600">Open popup</span>
-                                  </div>
-                                </button>
-                              ))}
+                                  </button>
+                                );
+                              })}
                             </div>
                           </div>
                         ) : null}

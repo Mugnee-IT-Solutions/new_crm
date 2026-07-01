@@ -101,6 +101,10 @@ function inferCityFromAddress(address?: string | null) {
   return "";
 }
 
+function resolveAddressFromRaw(raw: Record<string, unknown>) {
+  return readRawString(raw, ["Address", "Company Address", "Full Address", "Location"]);
+}
+
 function parseDate(value: unknown) {
   if (!value) return undefined;
 
@@ -361,8 +365,10 @@ export async function GET(request: Request) {
           | undefined;
         const rawPhone2 = readRawString(raw, ["Phone 2", "Phone2", "Phone 2_1", "Phone_2", "Second Phone"]);
         const rawCity = readRawString(raw, ["City / Zilla", "City/Zilla", "City", "Zilla"]);
+        const rawAddress = resolveAddressFromRaw(raw);
         const createdBy = readRawString(raw, ["Created By", "createdBy", "Added By", "addedBy"]);
         const createdByRole = readRawString(raw, ["Created By Role", "createdByRole", "Added By Role", "addedByRole"]);
+        const resolvedAddress = row.address?.trim() || rawAddress || "-";
         const activity = deriveActivityLabel({
           leadStatuses: row.leads.map((item) => item.status),
           followUpStatuses: row.followUps.map((item) => item.status),
@@ -382,7 +388,8 @@ export async function GET(request: Request) {
           phone: row.phone || row.phoneNumbers[0]?.number || "",
           whatsapp: row.phoneNumbers.find((item) => item.whatsapp)?.number ?? "",
           phone2: row.phone2 || rawPhone2 || "",
-          cityOrZilla: row.city || rawCity || inferCityFromAddress(row.address) || "-",
+          cityOrZilla: row.city || rawCity || inferCityFromAddress(resolvedAddress === "-" ? "" : resolvedAddress) || "-",
+          address: resolvedAddress,
         };
       }),
     });

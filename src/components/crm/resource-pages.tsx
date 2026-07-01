@@ -6774,6 +6774,10 @@ export function WorkCompletionModal({
   const [nextFollowUpTime, setNextFollowUpTime] = React.useState("");
   const suggestedStep = rating > 0 ? suggestedCrmPipelineStep(rating) : initialNextStep;
   const showNextFollowUpSchedule = nextStep === "Follow-up";
+  const hideConversationSummary = item?.sourceType === "TASK" && item.description !== "-";
+  const taskDetails = item?.description && item.description !== "-" ? item.description : item?.method && item.method !== "-" ? item.method : "No task detail saved yet.";
+  const taskNote = item?.notes && item.notes !== "-" ? item.notes : "";
+  const hasTaskNote = Boolean(taskNote);
 
   React.useEffect(() => {
     if (!item) {
@@ -6815,6 +6819,18 @@ export function WorkCompletionModal({
           <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
             <p className="text-sm font-black text-slate-900">{item.title}</p>
             <p className="mt-1 text-xs font-semibold text-slate-500">{item.companyName}</p>
+          </div>
+          <div className={cn("grid gap-3", hasTaskNote ? "md:grid-cols-2" : "grid-cols-1")}>
+            <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
+              <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">{taskDetails}</p>
+            </div>
+            {hasTaskNote ? (
+              <div className="min-w-0 rounded-2xl border border-emerald-200/80 bg-emerald-50/70 p-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">Task Note</p>
+                <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">{taskNote}</p>
+              </div>
+            ) : null}
           </div>
           <input type="hidden" name="id" value={item.sourceId} />
           <input type="hidden" name="rating" value={rating > 0 ? String(rating) : ""} />
@@ -6885,7 +6901,14 @@ export function WorkCompletionModal({
               <CrmPipelineStrip activeStep={nextStep} highlight />
             </div>
           </div>
-          <TextAreaField label="Conversation Summary" name="conversationSummary" required defaultValue={item.description !== "-" ? item.description : ""} />
+          <TextAreaField
+            label="Notes"
+            name="notes"
+            defaultValue=""
+          />
+          {!hideConversationSummary ? (
+            <TextAreaField label="Conversation Summary" name="conversationSummary" required defaultValue="" />
+          ) : null}
         </ActionForm>
       ) : null}
     </FormModal>
@@ -7121,10 +7144,10 @@ export function TodayWorkQueueList({
                 {task.description !== "-" ? (
                   <div className="mt-2 rounded-2xl border border-slate-200/80 bg-white/80 p-3">
                     <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
-                    <p className="mt-1.5 line-clamp-3 text-sm font-medium leading-6 text-slate-700">{task.description}</p>
+                    <p className="mt-1.5 max-h-28 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm font-medium leading-6 text-slate-700">{task.description}</p>
                   </div>
                 ) : (
-                  <p className="mt-1.5 text-sm font-medium leading-5 text-slate-700 line-clamp-2">{task.method}</p>
+                  <p className="mt-1.5 max-h-20 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm font-medium leading-5 text-slate-700">{task.method}</p>
                 )}
               </div>
               <div className="flex shrink-0 flex-col gap-1.5">
@@ -7238,6 +7261,8 @@ export function CompletedWorkList({
           const hideTaskTitle = shouldHidePipelineTitle(task.title, crmStep);
           const hasPhoneNumber = Boolean(task.companyPrimaryPhone && task.companyPrimaryPhone !== "No phone number");
           const scheduledLabel = `${task.taskDateLabel}${task.timeLabel ? ` ${task.timeLabel}` : ""}`;
+          const taskDetails = task.description !== "-" ? task.description : task.method;
+          const hasTaskNote = task.notes !== "-";
           return (
           <div
             key={task.id}
@@ -7309,20 +7334,18 @@ export function CompletedWorkList({
                   {viewerRole !== "MARKETER" ? <span>Assigned: {task.assignedTo}</span> : null}
                   <span>Completed by {task.completedBy}</span>
                 </div>
-                {task.description !== "-" ? (
-                  <div className="mt-2 rounded-2xl border border-slate-200/80 bg-white/80 p-3">
+                <div className={cn("mt-2 grid gap-2", hasTaskNote ? "md:grid-cols-2" : "grid-cols-1")}>
+                  <div className="min-w-0 rounded-2xl border border-slate-200/80 bg-white/80 p-3">
                     <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
-                    <p className="mt-1.5 line-clamp-3 text-sm leading-6 text-slate-700">{task.description}</p>
+                    <p className="mt-1.5 max-h-28 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm leading-6 text-slate-700">{taskDetails}</p>
                   </div>
-                ) : (
-                  <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-slate-700">{task.method}</p>
-                )}
-                {task.notes !== "-" ? (
-                  <div className="mt-2 rounded-2xl border border-emerald-200/80 bg-emerald-50/75 p-3">
-                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">Task Note</p>
-                    <p className="mt-1.5 line-clamp-3 text-sm leading-6 text-slate-700">{task.notes}</p>
-                  </div>
-                ) : null}
+                  {hasTaskNote ? (
+                    <div className="min-w-0 rounded-2xl border border-emerald-200/80 bg-emerald-50/75 p-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">Task Note</p>
+                      <p className="mt-1.5 max-h-28 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm leading-6 text-slate-700">{task.notes}</p>
+                    </div>
+                  ) : null}
+                </div>
                 <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
                   <p className="text-[11px] font-bold text-slate-500">Scheduled: {scheduledLabel}</p>
                   {!readOnly && onEditCompletedTask ? (

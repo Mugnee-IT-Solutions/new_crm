@@ -181,6 +181,10 @@ function textValue(value: FormDataEntryValue | null) {
   return nextValue || "";
 }
 
+function normalizeText(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
 function readTemplateText(formData: FormData, key: string) {
   return cleanText(formData.get(key));
 }
@@ -1797,10 +1801,6 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
     return { ok: false, message: "Task reference is missing." };
   }
 
-  if (!conversationSummary) {
-    return { ok: false, message: "Conversation summary is required." };
-  }
-
   if (!(await hasTaskAccess(prisma, user, id))) {
     return { ok: false, message: "You are not allowed to complete this task." };
   }
@@ -1829,6 +1829,8 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
   if (task.status === "COMPLETED" || task.completedAt) {
     return { ok: false, message: "This task has already been completed." };
   }
+
+  const resolvedConversationSummary = conversationSummary || notes || discussionTopic || task.title;
 
   const [resolvedCompany, resolvedLead] = await Promise.all([
     task.companyId
@@ -1866,6 +1868,7 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
         completedAt,
         completedById: user.id,
         isPrevious: false,
+        notes: notes ? normalizeText(notes) : null,
       },
     });
 
@@ -1876,7 +1879,7 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
         task: { connect: { id: task.id } },
         user: { connect: { id: user.id } },
         method,
-        note: conversationSummary,
+        note: resolvedConversationSummary,
         discussionTopic,
         productDiscussed: productDiscussed ?? task.product?.name ?? undefined,
         communicationAt: completedAt,
@@ -1895,7 +1898,7 @@ export async function completeTaskWithFollowUpAction(formData: FormData) {
         ...(task.assignedToId ? { assignedTo: { connect: { id: task.assignedToId } } } : { assignedTo: { connect: { id: user.id } } }),
         task: { connect: { id: task.id } },
         method,
-        note: conversationSummary,
+        note: resolvedConversationSummary,
         nextDiscussionPlan: notes ?? discussionTopic,
         priority: "MEDIUM",
         followUpDate: scheduledFollowUpDate!,
