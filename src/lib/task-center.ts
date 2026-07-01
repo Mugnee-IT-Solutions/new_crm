@@ -53,12 +53,23 @@ export type TaskListItem = {
 
 export type TodayWorkQueueType = "TASK" | "DUE_FOLLOW_UP" | "OVERDUE" | "CARRY_FORWARD";
 
+export type WorkStepNote = {
+  id: string;
+  stepLabel: string;
+  note: string;
+  createdAtIso: string;
+  createdAtLabel: string;
+  source: "TASK" | "COMMUNICATION";
+  actorName?: string | null;
+};
+
 export type TodayWorkQueueItem = {
   id: string;
   sourceId: string;
   sourceType: "TASK" | "FOLLOW_UP";
   taskId?: string | null;
   linkedTaskTitle?: string | null;
+  linkedTaskDescription?: string | null;
   linkedTaskNotes?: string | null;
   linkedTaskReminder?: string | null;
   linkedTaskProductId?: string | null;
@@ -95,6 +106,7 @@ export type TodayWorkQueueItem = {
   taskDateIso: string;
   taskDateLabel: string;
   timeLabel: string;
+  stepNotes: WorkStepNote[];
   isPrevious: boolean;
   isOverdue: boolean;
   isDueFollowUp: boolean;
@@ -146,6 +158,7 @@ export type CompletedWorkItem = {
   taskDateIso: string;
   taskDateLabel: string;
   timeLabel: string;
+  stepNotes: WorkStepNote[];
   completedAtIso: string;
   completedAtLabel: string;
   completedBy: string;
@@ -208,6 +221,27 @@ type FollowUpQueryRecord = {
     company: { id: string; name: string; phone: string | null } | null;
   } | null;
   assignedTo: { name: string; role: string | null } | null;
+};
+
+type TaskStepHistoryTaskRecord = {
+  id: string;
+  title: string;
+  description: string | null;
+  notes: string | null;
+  taskDate: Date;
+  taskTime: Date | null;
+  createdAt: Date;
+};
+
+type TaskStepHistoryCommunicationRecord = {
+  id: string;
+  taskId: string | null;
+  method: string;
+  note: string;
+  discussionTopic: string | null;
+  followUpNote: string | null;
+  communicationAt: Date;
+  user: { name: string } | null;
 };
 
 export class TaskInputError extends Error {
@@ -308,6 +342,93 @@ function roleLabel(role: string | null | undefined) {
 function cleanQueueText(value: string | null | undefined) {
   const normalized = value?.trim();
   return normalized && normalized.length ? normalized : "";
+}
+
+function buildEmptyStepNoteMap(taskIds: string[]) {
+  return new Map<string, WorkStepNote[]>(taskIds.map((taskId) => [taskId, []]));
+}
+
+async function buildTaskStepNoteMap(prisma: ReturnType<typeof getPrisma>, taskIds: string[]) {
+  const uniqueTaskIds = Array.from(new Set(taskIds.filter(Boolean)));
+  const stepNoteMap = buildEmptyStepNoteMap(uniqueTaskIds);
+
+  if (!uniqueTaskIds.length) {
+    return stepNoteMap;
+  }
+
+  const [tasks, communications] = await Promise.all([
+    prisma.task.findMany({
+      where: { id: { in: uniqueTaskIds } },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        notes: true,
+        taskDate: true,
+        taskTime: true,
+        createdAt: true,
+      },
+    }) as Promise<TaskStepHistoryTaskRecord[]>,
+    prisma.communicationLog.findMany({
+      where: { taskId: { in: uniqueTaskIds } },
+      select: {
+        id: true,
+        taskId: true,
+        method: true,
+        note: true,
+        discussionTopic: true,
+        followUpNote: true,
+        communicationAt: true,
+        user: { select: { name: true } },
+      },
+      orderBy: [
+        { communicationAt: "asc" },
+        { createdAt: "asc" },
+      ],
+    }) as Promise<TaskStepHistoryCommunicationRecord[]>,
+  ]);
+
+  for (const task of tasks) {
+    const baseNote = cleanQueueText(task.notes) || cleanQueueText(task.description);
+    if (!baseNote) continue;
+
+    const createdAt = task.taskTime ?? task.taskDate ?? task.createdAt;
+    stepNoteMap.get(task.id)?.push({
+      id: `task-${task.id}`,
+      stepLabel: cleanQueueText(task.title) || "Task",
+      note: baseNote,
+      createdAtIso: createdAt.toISOString(),
+      createdAtLabel: formatDateTime(createdAt),
+      source: "TASK",
+    });
+  }
+
+  for (const communication of communications) {
+    if (!communication.taskId) continue;
+
+    const stepLabel = cleanQueueText(communication.discussionTopic) || cleanQueueText(communication.method) || "Follow-up";
+    const note = cleanQueueText(communication.followUpNote) || cleanQueueText(communication.note);
+    if (!note) continue;
+
+    stepNoteMap.get(communication.taskId)?.push({
+      id: `communication-${communication.id}`,
+      stepLabel,
+      note,
+      createdAtIso: communication.communicationAt.toISOString(),
+      createdAtLabel: formatDateTime(communication.communicationAt),
+      source: "COMMUNICATION",
+      actorName: communication.user?.name ?? null,
+    });
+  }
+
+  for (const [taskId, entries] of stepNoteMap) {
+    stepNoteMap.set(
+      taskId,
+      entries.sort((left, right) => new Date(left.createdAtIso).getTime() - new Date(right.createdAtIso).getTime()),
+    );
+  }
+
+  return stepNoteMap;
 }
 
 function normalizePipelineStep(value: string | null | undefined) {
@@ -765,6 +886,7 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
           select: {
             id: true,
             title: true,
+            description: true,
             notes: true,
             reminder: true,
             priority: true,
@@ -781,6 +903,14 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
       ],
     }),
   ]);
+
+  const stepNoteMap = await buildTaskStepNoteMap(
+    prisma,
+    [
+      ...taskRows.map((task) => task.id),
+      ...followUpRows.map((followUp) => followUp.task?.id).filter((value): value is string => Boolean(value)),
+    ],
+  );
 
   const mappedTasks: TodayWorkQueueItem[] = taskRows
     .filter((task) => task.status !== "COMPLETED")
@@ -827,6 +957,7 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
         taskDateIso: mapped.taskDateIso,
         taskDateLabel: mapped.taskDateLabel,
         timeLabel: mapped.timeLabel,
+        stepNotes: stepNoteMap.get(mapped.id) ?? [],
         isPrevious: isCarryForward,
         isOverdue: isCarryForward,
         isDueFollowUp: isDueFollowUpTask,
@@ -869,6 +1000,7 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
       sourceType: "FOLLOW_UP",
       taskId: followUp.task?.id ?? null,
       linkedTaskTitle: followUp.task?.title ?? null,
+      linkedTaskDescription: cleanQueueText(followUp.task?.description) || null,
       linkedTaskNotes: cleanQueueText(followUp.task?.notes) || null,
       linkedTaskReminder: cleanQueueText(followUp.task?.reminder) || null,
       linkedTaskProductId: followUp.task?.productId ?? null,
@@ -904,6 +1036,7 @@ export async function getTodayWorkQueue(actor: TaskActor, filters: TaskFilters =
       taskDateIso: followUpDate.toISOString(),
       taskDateLabel: formatDate(followUpDate),
       timeLabel: formatTime(followUpDate),
+      stepNotes: followUp.task?.id ? stepNoteMap.get(followUp.task.id) ?? [] : [],
       isPrevious: false,
       isOverdue,
       isDueFollowUp: !isOverdue,
@@ -1030,6 +1163,14 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
     }),
   ]);
 
+  const stepNoteMap = await buildTaskStepNoteMap(
+    prisma,
+    [
+      ...tasks.map((task) => task.id),
+      ...followUps.map((followUp) => followUp.task?.id).filter((value): value is string => Boolean(value)),
+    ],
+  );
+
   const taskItems: CompletedWorkItem[] = tasks.map((task) => {
     const mapped = mapTaskRecord(task, actor.role);
     return {
@@ -1065,6 +1206,7 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
       taskDateIso: mapped.taskDateIso,
       taskDateLabel: mapped.taskDateLabel,
       timeLabel: mapped.timeLabel,
+      stepNotes: stepNoteMap.get(mapped.id) ?? [],
       completedAtIso: mapped.completedAtIso ?? mapped.assignedAtIso,
       completedAtLabel: mapped.completedAtLabel,
       completedBy: mapped.completedBy,
@@ -1135,6 +1277,7 @@ export async function getCompletedWorkItems(actor: TaskActor, filters: TaskFilte
       taskDateIso: followUp.followUpDate.toISOString(),
       taskDateLabel: formatDate(followUp.followUpDate),
       timeLabel: formatTime(followUp.followUpDate),
+      stepNotes: followUp.task?.id ? stepNoteMap.get(followUp.task.id) ?? [] : [],
       completedAtIso: completedAt.toISOString(),
       completedAtLabel: formatDateTime(completedAt),
       completedBy,

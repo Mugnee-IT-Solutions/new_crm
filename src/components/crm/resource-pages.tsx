@@ -91,7 +91,7 @@ import type {
   QuotationRow,
   TaskRow,
 } from "@/lib/crm-data";
-import type { CompletedWorkItem, TodayWorkQueueItem } from "@/lib/task-center";
+import type { CompletedWorkItem, TodayWorkQueueItem, WorkStepNote } from "@/lib/task-center";
 import { TASK_REMINDER_OPTIONS, normalizeTaskReminderValue, taskReminderLabel, type TaskReminderValue } from "@/lib/task-reminders";
 import { getCrmDayWindow, getCrmPeriodWindow } from "@/lib/crm-time";
 import { type ReportFormat } from "@/lib/report-definitions";
@@ -1004,6 +1004,42 @@ function InfoLine({ label, value, progress }: { label: string; value: React.Reac
           <div className="h-full rounded-full bg-blue-600" style={{ width: `${progress}%` }} />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function StepNotesHistoryPanel({
+  entries,
+  title = "Step Notes",
+  emptyMessage = "No step note saved yet.",
+  compact = false,
+}: {
+  entries?: WorkStepNote[];
+  title?: string;
+  emptyMessage?: string;
+  compact?: boolean;
+}) {
+  const noteEntries = (entries ?? []).filter((entry) => entry.note && entry.note !== "-");
+
+  return (
+    <div className="min-w-0 self-start rounded-[20px] border border-emerald-200/80 bg-emerald-50/75 px-3 py-2.5">
+      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">{title}</p>
+      {noteEntries.length ? (
+        <div className={cn("mt-2 space-y-1.5", compact ? "max-h-28 overflow-y-auto pr-1" : "max-h-44 overflow-y-auto pr-1")}>
+          {noteEntries.map((entry, index) => (
+            <div key={entry.id} className={cn("rounded-lg border border-white/80 bg-white/80 px-2.5 py-2", index === noteEntries.length - 1 ? "" : "shadow-[0_1px_2px_rgba(15,23,42,0.03)]")}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[11px] font-black uppercase tracking-[0.14em] text-emerald-700">{entry.stepLabel}</p>
+                <p className="text-[10px] font-semibold text-emerald-800/80">{entry.createdAtLabel}</p>
+              </div>
+              <p className="mt-1 whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">{entry.note}</p>
+              {entry.actorName ? <p className="mt-1 text-[10px] font-semibold text-slate-500">By {entry.actorName}</p> : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-[13px] leading-5 text-slate-500">{emptyMessage}</p>
+      )}
     </div>
   );
 }
@@ -2850,6 +2886,7 @@ type EditableTaskModalItem = {
   taskDateIso: string;
   reminder: string;
   statusKey: "PENDING" | "COMPLETED";
+  stepNotes?: WorkStepNote[];
 };
 
 function normalizeEditableTaskPriorityKey(priority: TaskRow["priorityKey"] | undefined): EditableTaskModalItem["priorityKey"] {
@@ -2876,6 +2913,7 @@ function toEditableTaskModalItem(task: TaskRow): EditableTaskModalItem {
     taskDateIso: task.taskDateIso,
     reminder: task.reminder !== "-" ? task.reminder : "",
     statusKey: normalizeEditableTaskStatusKey(task.statusKey),
+    stepNotes: [],
   };
 }
 
@@ -2892,7 +2930,30 @@ function buildCustomerTaskDraft(customer: CompanyRow): EditableTaskModalItem {
     taskDateIso: new Date().toISOString(),
     reminder: "",
     statusKey: "PENDING",
+    stepNotes: [],
   };
+}
+
+function editableTaskStepKey(value?: string | null) {
+  return normalizeCrmPipelineStep(value === "Sale" ? "Sale Won" : value);
+}
+
+function buildStepNoteDraftMap(item?: EditableTaskModalItem | null) {
+  const drafts = new Map<CrmPipelineStep, string>();
+
+  for (const entry of item?.stepNotes ?? []) {
+    const key = editableTaskStepKey(entry.stepLabel);
+    if (!key || !entry.note?.trim()) continue;
+    drafts.set(key, entry.note.trim());
+  }
+
+  const currentKey = editableTaskStepKey(item?.title);
+  const currentNote = item?.notes?.trim();
+  if (currentKey && currentNote) {
+    drafts.set(currentKey, currentNote);
+  }
+
+  return drafts;
 }
 
 function CustomerQuickSummaryPanel({
@@ -6010,6 +6071,7 @@ export type TodayTaskApiRow = {
   taskDateIso: string;
   taskDateLabel: string;
   timeLabel: string;
+  stepNotes?: WorkStepNote[];
   isPrevious: boolean;
   completedAtIso?: string | null;
   completedAtLabel: string;
@@ -6285,6 +6347,7 @@ export function TaskCreateModal({
   const [customerCity, setCustomerCity] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [notes, setNotes] = React.useState("");
+  const [stepNoteDrafts, setStepNoteDrafts] = React.useState<Map<CrmPipelineStep, string>>(() => new Map());
   const [productId, setProductId] = React.useState("");
   const [assignedToId, setAssignedToId] = React.useState("");
   const [priority, setPriority] = React.useState<Exclude<TodayTaskPriorityFilter, "ALL">>("MEDIUM");
@@ -6327,9 +6390,44 @@ export function TaskCreateModal({
     return assigneeOptions[0]?.id ?? "";
   }, [assigneeOptions, role, workspace.user.id]);
   const trimmedCompanyLabel = companyLabel.trim();
+  const showCustomerHelper = !isEditing;
+  const selectedStepKey = editableTaskStepKey(title);
+  const visibleStepNotes = React.useMemo(() => {
+    const drafts = stepNoteDrafts;
+    const entryMap = new Map((initialTask?.stepNotes ?? []).map((entry) => [entry.id, entry]));
+    const byStep = new Map<CrmPipelineStep, WorkStepNote>();
+
+    for (const entry of initialTask?.stepNotes ?? []) {
+      const stepKey = editableTaskStepKey(entry.stepLabel);
+      if (!stepKey) continue;
+      const draft = drafts.get(stepKey);
+      const note = typeof draft === "string" ? draft.trim() : entry.note;
+      if (!note) continue;
+      byStep.set(stepKey, { ...entry, note });
+    }
+
+    for (const [stepKey, draft] of drafts) {
+      const note = draft.trim();
+      if (!note) continue;
+      if (byStep.has(stepKey)) continue;
+      byStep.set(stepKey, {
+        id: `draft-${stepKey}`,
+        stepLabel: stepKey,
+        note,
+        createdAtIso: initialTask?.taskDateIso ?? new Date().toISOString(),
+        createdAtLabel: "Current draft",
+        source: "TASK",
+      });
+    }
+
+    return CRM_PIPELINE_STEPS
+      .map((stepKey) => byStep.get(stepKey))
+      .filter((entry): entry is WorkStepNote => Boolean(entry));
+  }, [initialTask?.stepNotes, initialTask?.taskDateIso, stepNoteDrafts]);
 
   React.useEffect(() => {
     if (!open) return;
+    const nextDrafts = buildStepNoteDraftMap(initialTask);
     setTitle(initialTask?.title || "Call");
     setCompanyId(initialTask?.companyId ?? "");
     setCompanyLabel(initialTask?.companyName ?? "");
@@ -6338,6 +6436,7 @@ export function TaskCreateModal({
     setCustomerCity("");
     setDescription(initialTask?.description && initialTask.description !== "-" ? initialTask.description : "");
     setNotes(initialTask?.notes && initialTask.notes !== "-" ? initialTask.notes : "");
+    setStepNoteDrafts(nextDrafts);
     setProductId(initialTask?.productId ?? "");
     setAssignedToId(initialTask?.assignedToId ?? defaultAssigneeId);
     setPriority(initialTask?.priorityKey ?? "MEDIUM");
@@ -6431,14 +6530,40 @@ export function TaskCreateModal({
   };
 
   return (
-    <FormModal open={open} title={isEditing ? "Edit Task" : "Add Task"} onClose={onClose} panelClassName="max-w-2xl">
-      <form onSubmit={handleSubmit} className="space-y-4">
+    <FormModal
+      open={open}
+      title={isEditing ? "Edit Task" : "Add Task"}
+      onClose={onClose}
+      panelClassName={isEditing ? "max-w-xl" : "max-w-2xl"}
+      contentClassName={isEditing ? "p-4 sm:p-4" : undefined}
+    >
+      <form onSubmit={handleSubmit} className={cn("space-y-4", isEditing && "space-y-3")}>
         <div className={cn("grid gap-3", role === "MARKETER" ? "sm:grid-cols-2" : "sm:grid-cols-2 xl:grid-cols-3")}>
           <label className="block space-y-1.5">
             <span className="text-sm font-semibold text-slate-700">Task Title</span>
             <select
               value={title}
-              onChange={(event) => setTitle(event.target.value)}
+              onChange={(event) => {
+                const nextTitle = event.target.value;
+                if (!isCompletedEdit) {
+                  setTitle(nextTitle);
+                  return;
+                }
+
+                const previousStepKey = editableTaskStepKey(title);
+                const nextStepKey = editableTaskStepKey(nextTitle);
+
+                setStepNoteDrafts((currentDrafts) => {
+                  const nextDrafts = new Map(currentDrafts);
+                  if (previousStepKey) {
+                    nextDrafts.set(previousStepKey, notes);
+                  }
+                  const nextStepNote = nextStepKey ? (nextDrafts.get(nextStepKey) ?? "") : "";
+                  setNotes(nextStepNote);
+                  return nextDrafts;
+                });
+                setTitle(nextTitle);
+              }}
               className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
               required
             >
@@ -6493,6 +6618,7 @@ export function TaskCreateModal({
           }}
           placeholder="Search or type company"
         />
+        {showCustomerHelper ? (
         <div className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/80 p-4">
           <p className="text-sm font-semibold text-slate-700">
             If the customer does not exist yet, simply type a new company name here.
@@ -6530,16 +6656,57 @@ export function TaskCreateModal({
             </label>
           </div>
         </div>
+        ) : null}
         {isCompletedEdit ? (
-          <label className="block space-y-1.5">
-            <span className="text-sm font-semibold text-slate-700">Task Note</span>
-            <textarea
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-              placeholder="Customer callback, update, ba special context ekhane likhun"
-              className="min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-            />
-          </label>
+          <div className="space-y-2">
+            {visibleStepNotes.length ? (
+              <div className="rounded-[18px] border border-emerald-200/80 bg-emerald-50/70 px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">Saved Step Notes</p>
+                  {selectedStepKey ? <p className="text-[10px] font-semibold text-emerald-800/80">Selected step: {selectedStepKey}</p> : null}
+                </div>
+                <div className="mt-1.5 flex max-h-24 flex-col gap-1.5 overflow-y-auto pr-1">
+                  {visibleStepNotes.map((entry) => {
+                    const active = editableTaskStepKey(entry.stepLabel) === selectedStepKey;
+                    return (
+                      <div
+                        key={entry.id}
+                        className={cn(
+                          "rounded-lg border px-2.5 py-2 transition",
+                          active ? "border-emerald-300 bg-white text-slate-800" : "border-white/80 bg-white/70 text-slate-700",
+                        )}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-[11px] font-black uppercase tracking-[0.14em] text-emerald-700">{entry.stepLabel}</p>
+                          <p className="text-[10px] font-semibold text-slate-500">{entry.createdAtLabel}</p>
+                        </div>
+                        <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-[13px] leading-5">{entry.note}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+            <label className="block space-y-1.5">
+              <span className="text-sm font-semibold text-slate-700">Task Note</span>
+              <textarea
+                value={notes}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setNotes(nextValue);
+                  setStepNoteDrafts((currentDrafts) => {
+                    const nextDrafts = new Map(currentDrafts);
+                    if (selectedStepKey) {
+                      nextDrafts.set(selectedStepKey, nextValue);
+                    }
+                    return nextDrafts;
+                  });
+                }}
+                placeholder={selectedStepKey ? `${selectedStepKey} step er note ekhane likhun` : "Customer callback, update, ba special context ekhane likhun"}
+                className="min-h-20 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+              />
+            </label>
+          </div>
         ) : (
           <label className="block space-y-1.5">
             <span className="text-sm font-semibold text-slate-700">Task Details</span>
@@ -6551,11 +6718,11 @@ export function TaskCreateModal({
             />
           </label>
         )}
-        <div className="rounded-2xl border border-blue-200 bg-blue-50/80 p-4">
+        <div className={cn("rounded-2xl border border-blue-200 bg-blue-50/80", isEditing ? "p-3" : "p-4")}>
           <div>
             <p className="text-sm font-black text-slate-900">Task Schedule</p>
           </div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div className={cn("grid sm:grid-cols-2", isEditing ? "mt-2 gap-2.5" : "mt-3 gap-3")}>
             <label className="space-y-1.5">
               <span className="text-sm font-semibold text-slate-700">Scheduled Date</span>
               <Input
@@ -6607,15 +6774,15 @@ export function TaskCreateModal({
         </div>
         {message ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{message}</p> : null}
         <div className="flex flex-wrap gap-2">
-          <Button type="submit" disabled={pending}>
+          <Button type="submit" disabled={pending} className={cn(isEditing && "h-9 px-4")}>
             {pending ? "Saving..." : isEditing ? "Update Task" : "Save Task"}
           </Button>
           {isEditing ? (
-            <Button type="button" variant="destructive" onClick={handleDelete} disabled={pending}>
+            <Button type="button" variant="destructive" onClick={handleDelete} disabled={pending} className="h-9 px-4">
               Delete
             </Button>
           ) : null}
-          <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
+          <Button type="button" variant="outline" onClick={onClose} disabled={pending} className={cn(isEditing && "h-9 px-4")}>
             Cancel
           </Button>
         </div>
@@ -6774,10 +6941,17 @@ export function WorkCompletionModal({
   const [nextFollowUpTime, setNextFollowUpTime] = React.useState("");
   const suggestedStep = rating > 0 ? suggestedCrmPipelineStep(rating) : initialNextStep;
   const showNextFollowUpSchedule = nextStep === "Follow-up";
-  const hideConversationSummary = item?.sourceType === "TASK" && item.description !== "-";
-  const taskDetails = item?.description && item.description !== "-" ? item.description : item?.method && item.method !== "-" ? item.method : "No task detail saved yet.";
-  const taskNote = item?.notes && item.notes !== "-" ? item.notes : "";
-  const hasTaskNote = Boolean(taskNote);
+  const taskDetails = item?.sourceType === "FOLLOW_UP"
+    ? item.linkedTaskDescription && item.linkedTaskDescription !== "-"
+      ? item.linkedTaskDescription
+      : "No task detail saved yet."
+    : item?.description && item.description !== "-"
+      ? item.description
+      : item?.method && item.method !== "-"
+        ? item.method
+        : "No task detail saved yet.";
+  const stepNotes = item?.stepNotes ?? [];
+  const hasStepNotes = stepNotes.length > 0;
 
   React.useEffect(() => {
     if (!item) {
@@ -6820,16 +6994,17 @@ export function WorkCompletionModal({
             <p className="text-sm font-black text-slate-900">{item.title}</p>
             <p className="mt-1 text-xs font-semibold text-slate-500">{item.companyName}</p>
           </div>
-          <div className={cn("grid gap-3", hasTaskNote ? "md:grid-cols-2" : "grid-cols-1")}>
-            <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+          <div className={cn("grid items-start gap-3", hasStepNotes ? "md:grid-cols-2" : "grid-cols-1")}>
+            <div className="min-w-0 self-start rounded-[20px] border border-slate-200 bg-slate-50/80 px-3 py-2.5">
               <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
-              <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">{taskDetails}</p>
+              <p className="mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">{taskDetails}</p>
             </div>
-            {hasTaskNote ? (
-              <div className="min-w-0 rounded-2xl border border-emerald-200/80 bg-emerald-50/70 p-4">
-                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">Task Note</p>
-                <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">{taskNote}</p>
-              </div>
+            {hasStepNotes ? (
+              <StepNotesHistoryPanel
+                entries={stepNotes}
+                title="Step Notes History"
+                emptyMessage="No step note saved yet."
+              />
             ) : null}
           </div>
           <input type="hidden" name="id" value={item.sourceId} />
@@ -6902,13 +7077,10 @@ export function WorkCompletionModal({
             </div>
           </div>
           <TextAreaField
-            label="Notes"
+            label="Task Note"
             name="notes"
             defaultValue=""
           />
-          {!hideConversationSummary ? (
-            <TextAreaField label="Conversation Summary" name="conversationSummary" required defaultValue="" />
-          ) : null}
         </ActionForm>
       ) : null}
     </FormModal>
@@ -7141,14 +7313,22 @@ export function TodayWorkQueueList({
                   </Badge>
                   <TaskPriorityBadge priority={task.priorityKey} />
                 </div>
-                {task.description !== "-" ? (
-                  <div className="mt-2 rounded-2xl border border-slate-200/80 bg-white/80 p-3">
-                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
-                    <p className="mt-1.5 max-h-28 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm font-medium leading-6 text-slate-700">{task.description}</p>
-                  </div>
-                ) : (
-                  <p className="mt-1.5 max-h-20 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm font-medium leading-5 text-slate-700">{task.method}</p>
-                )}
+                <div className={cn("mt-2 grid items-start gap-2", task.stepNotes.length ? "md:grid-cols-2" : "grid-cols-1")}>
+                  {task.description !== "-" ? (
+                    <div className="self-start rounded-[20px] border border-slate-200/80 bg-white/80 px-3 py-2.5">
+                      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
+                      <p className="mt-1.5 max-h-24 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-[13px] font-medium leading-5 text-slate-700">{task.description}</p>
+                    </div>
+                  ) : (
+                    <div className="self-start rounded-[20px] border border-slate-200/80 bg-white/80 px-3 py-2.5">
+                      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
+                      <p className="mt-1.5 max-h-16 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-[13px] font-medium leading-5 text-slate-700">{task.method}</p>
+                    </div>
+                  )}
+                  {task.stepNotes.length ? (
+                    <StepNotesHistoryPanel entries={task.stepNotes} title="Step Notes" compact />
+                  ) : null}
+                </div>
               </div>
               <div className="flex shrink-0 flex-col gap-1.5">
                 {!readOnly ? (
@@ -7262,7 +7442,7 @@ export function CompletedWorkList({
           const hasPhoneNumber = Boolean(task.companyPrimaryPhone && task.companyPrimaryPhone !== "No phone number");
           const scheduledLabel = `${task.taskDateLabel}${task.timeLabel ? ` ${task.timeLabel}` : ""}`;
           const taskDetails = task.description !== "-" ? task.description : task.method;
-          const hasTaskNote = task.notes !== "-";
+          const hasStepNotes = task.stepNotes.length > 0;
           return (
           <div
             key={task.id}
@@ -7334,16 +7514,13 @@ export function CompletedWorkList({
                   {viewerRole !== "MARKETER" ? <span>Assigned: {task.assignedTo}</span> : null}
                   <span>Completed by {task.completedBy}</span>
                 </div>
-                <div className={cn("mt-2 grid gap-2", hasTaskNote ? "md:grid-cols-2" : "grid-cols-1")}>
-                  <div className="min-w-0 rounded-2xl border border-slate-200/80 bg-white/80 p-3">
+                <div className={cn("mt-2 grid items-start gap-2", hasStepNotes ? "md:grid-cols-2" : "grid-cols-1")}>
+                  <div className="min-w-0 self-start rounded-[20px] border border-slate-200/80 bg-white/80 px-3 py-2.5">
                     <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
-                    <p className="mt-1.5 max-h-28 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm leading-6 text-slate-700">{taskDetails}</p>
+                    <p className="mt-1.5 max-h-24 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-[13px] leading-5 text-slate-700">{taskDetails}</p>
                   </div>
-                  {hasTaskNote ? (
-                    <div className="min-w-0 rounded-2xl border border-emerald-200/80 bg-emerald-50/75 p-3">
-                      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">Task Note</p>
-                      <p className="mt-1.5 max-h-28 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-sm leading-6 text-slate-700">{task.notes}</p>
-                    </div>
+                  {hasStepNotes ? (
+                    <StepNotesHistoryPanel entries={task.stepNotes} title="Step Notes History" compact />
                   ) : null}
                 </div>
                 <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
@@ -8140,12 +8317,11 @@ function TodayTasksExecutionView({
               <p className="text-xs font-bold uppercase text-slate-500">Details</p>
               <p className="mt-2 text-sm leading-7 text-slate-700">{detailItem.description || "-"}</p>
             </div>
-            {detailItem.notes !== "-" ? (
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                <p className="text-xs font-bold uppercase text-slate-500">Note</p>
-                <p className="mt-2 text-sm leading-7 text-slate-700">{detailItem.notes}</p>
-              </div>
-            ) : null}
+            <StepNotesHistoryPanel
+              entries={detailItem.stepNotes}
+              title="Step Notes History"
+              emptyMessage="No step note history is available for this task yet."
+            />
             <div className="flex flex-wrap gap-2">
               <StatusBadge value={detailItem.priority} />
               {"queueLabel" in detailItem ? <StatusBadge value={detailItem.queueLabel} /> : <StatusBadge value={detailItem.status} />}

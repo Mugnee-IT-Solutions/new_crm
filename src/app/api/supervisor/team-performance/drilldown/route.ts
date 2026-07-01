@@ -19,6 +19,16 @@ type MetricType =
   | "conversion"
   | "score";
 
+type DrilldownStepNote = {
+  id: string;
+  stepLabel: string;
+  note: string;
+  createdAtIso: string;
+  createdAtLabel: string;
+  source: "TASK" | "FOLLOW_UP" | "COMMUNICATION";
+  actorName?: string | null;
+};
+
 function pickPhone(value?: string | null) {
   if (!value) return "-";
   const [first] = value.split(/[;,|]/);
@@ -52,6 +62,27 @@ function normalizeLeadTitle(value: string | null | undefined, fallbackCustomer: 
   return value?.trim() || fallbackCustomer?.trim() || "Lead";
 }
 
+function cleanText(value?: string | null) {
+  const normalized = value?.trim();
+  return normalized && normalized !== "-" ? normalized : "";
+}
+
+function normalizePipelineStepLabel(value?: string | null) {
+  const normalized = cleanText(value).toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "call" || normalized === "phone call") return "Call";
+  if (normalized === "follow-up" || normalized === "follow up") return "Follow-up";
+  if (normalized === "demo send" || normalized === "demo") return "Demo Send";
+  if (normalized === "quotation" || normalized === "quote" || normalized === "quatation") return "Quotation";
+  if (normalized === "sale" || normalized === "sale won" || normalized === "won" || normalized === "conversion") return "Sale Won";
+  if (normalized === "lead lost" || normalized === "lost") return "Lead Lost";
+  return value?.trim() || "";
+}
+
+function formatTaskDetails(description?: string | null) {
+  return cleanText(description) || "-";
+}
+
 function formatTaskDetailAndNote(description?: string | null, notes?: string | null) {
   const sections = [
     description?.trim() ? `Task Details: ${description.trim()}` : "",
@@ -59,6 +90,129 @@ function formatTaskDetailAndNote(description?: string | null, notes?: string | n
   ].filter(Boolean);
 
   return sections.join("\n\n") || "-";
+}
+
+async function buildTaskStepNoteMap(
+  prisma: ReturnType<typeof getPrisma>,
+  taskIds: Array<string | null | undefined>,
+  formatDisplayDate: (value: Date) => string,
+) {
+  const uniqueTaskIds = Array.from(new Set(taskIds.filter((taskId): taskId is string => Boolean(taskId))));
+  const stepNoteMap = new Map<string, DrilldownStepNote[]>(uniqueTaskIds.map((taskId) => [taskId, []]));
+
+  if (!uniqueTaskIds.length) {
+    return stepNoteMap;
+  }
+
+  const [tasks, followUps, communications] = await Promise.all([
+    prisma.task.findMany({
+      where: { id: { in: uniqueTaskIds } },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        notes: true,
+        taskDate: true,
+        taskTime: true,
+        createdAt: true,
+      },
+    }),
+    prisma.followUp.findMany({
+      where: { taskId: { in: uniqueTaskIds } },
+      select: {
+        id: true,
+        taskId: true,
+        method: true,
+        note: true,
+        nextDiscussionPlan: true,
+        followUpDate: true,
+        assignedTo: { select: { name: true } },
+      },
+      orderBy: [
+        { followUpDate: "asc" },
+        { createdAt: "asc" },
+      ],
+    }),
+    prisma.communicationLog.findMany({
+      where: { taskId: { in: uniqueTaskIds } },
+      select: {
+        id: true,
+        taskId: true,
+        method: true,
+        note: true,
+        discussionTopic: true,
+        followUpNote: true,
+        communicationAt: true,
+        user: { select: { name: true } },
+      },
+      orderBy: [
+        { communicationAt: "asc" },
+        { createdAt: "asc" },
+      ],
+    }),
+  ]);
+
+  for (const task of tasks) {
+    const note = cleanText(task.notes) || cleanText(task.description);
+    if (!note) continue;
+
+    const createdAt = task.taskTime ?? task.taskDate ?? task.createdAt;
+    stepNoteMap.get(task.id)?.push({
+      id: `task-${task.id}`,
+      stepLabel: normalizePipelineStepLabel(task.title) || "Task",
+      note,
+      createdAtIso: createdAt.toISOString(),
+      createdAtLabel: formatDisplayDate(createdAt),
+      source: "TASK",
+    });
+  }
+
+  for (const followUp of followUps) {
+    if (!followUp.taskId) continue;
+    const note = cleanText(followUp.nextDiscussionPlan) || cleanText(followUp.note);
+    if (!note) continue;
+
+    stepNoteMap.get(followUp.taskId)?.push({
+      id: `followup-${followUp.id}`,
+      stepLabel: normalizePipelineStepLabel(followUp.nextDiscussionPlan) || normalizePipelineStepLabel(followUp.note) || normalizePipelineStepLabel(followUp.method) || "Follow-up",
+      note,
+      createdAtIso: followUp.followUpDate.toISOString(),
+      createdAtLabel: formatDisplayDate(followUp.followUpDate),
+      source: "FOLLOW_UP",
+      actorName: followUp.assignedTo?.name ?? null,
+    });
+  }
+
+  for (const communication of communications) {
+    if (!communication.taskId) continue;
+    const note = cleanText(communication.followUpNote) || cleanText(communication.note);
+    if (!note) continue;
+
+    stepNoteMap.get(communication.taskId)?.push({
+      id: `communication-${communication.id}`,
+      stepLabel: normalizePipelineStepLabel(communication.discussionTopic) || normalizePipelineStepLabel(communication.method) || "Update",
+      note,
+      createdAtIso: communication.communicationAt.toISOString(),
+      createdAtLabel: formatDisplayDate(communication.communicationAt),
+      source: "COMMUNICATION",
+      actorName: communication.user?.name ?? null,
+    });
+  }
+
+  for (const [taskId, entries] of stepNoteMap) {
+    const seen = new Set<string>();
+    const normalizedEntries = entries
+      .sort((left, right) => new Date(left.createdAtIso).getTime() - new Date(right.createdAtIso).getTime())
+      .filter((entry) => {
+        const key = `${entry.stepLabel.toLowerCase()}::${entry.note.toLowerCase()}::${entry.createdAtIso}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    stepNoteMap.set(taskId, normalizedEntries);
+  }
+
+  return stepNoteMap;
 }
 
 export async function GET(request: Request) {
@@ -114,6 +268,7 @@ export async function GET(request: Request) {
       companyId?: string | null;
       companyHref?: string | null;
       leadId?: string | null;
+      taskId?: string | null;
       leadName: string;
       contactPerson: string;
       phone: string;
@@ -124,6 +279,9 @@ export async function GET(request: Request) {
       sortDateValue: string;
       status: string;
       note: string;
+      taskDetail?: string;
+      latestNote?: string;
+      stepNotes?: DrilldownStepNote[];
     };
 
     let rows: DrilldownDetailRow[] = [];
@@ -238,6 +396,7 @@ export async function GET(request: Request) {
             nextDiscussionPlan: true,
             status: true,
             followUpDate: true,
+            taskId: true,
             lead: {
               select: {
                 id: true,
@@ -249,7 +408,7 @@ export async function GET(request: Request) {
               },
             },
             company: { select: { name: true, contactPerson: true, phone: true } },
-            task: { select: { title: true } },
+            task: { select: { id: true, title: true, description: true, notes: true } },
           },
           orderBy: { followUpDate: "desc" },
         }),
@@ -265,6 +424,7 @@ export async function GET(request: Request) {
             note: true,
             discussionTopic: true,
             communicationAt: true,
+            taskId: true,
             lead: {
               select: {
                 id: true,
@@ -276,7 +436,7 @@ export async function GET(request: Request) {
               },
             },
             company: { select: { name: true, contactPerson: true, phone: true } },
-            task: { select: { title: true } },
+            task: { select: { id: true, title: true, description: true, notes: true } },
             followUpNote: true,
             productDiscussed: true,
           },
@@ -347,6 +507,7 @@ export async function GET(request: Request) {
           companyId: lead.companyId,
           companyHref: companyHrefFromId(lead.companyId),
           leadId: lead.id,
+          taskId: null,
           leadName: normalizeLeadTitle(lead.title, lead.customerName),
           contactPerson: normalizeContactPerson(lead.company?.contactPerson),
           phone: pickPhone(lead.phone || lead.company?.phone),
@@ -357,12 +518,17 @@ export async function GET(request: Request) {
           sortDateValue: lead.createdAt.toISOString(),
           status: lead.status,
           note: lead.notes ?? "-",
+          taskDetail: "-",
+          latestNote: lead.notes ?? "-",
+          stepNotes: [],
         });
       }
 
       for (const task of tasks) {
         const companyId = task.companyId ?? task.lead?.companyId ?? null;
         const taskDate = task.dueDate ?? task.updatedAt;
+        const taskDetail = formatTaskDetails(task.description);
+        const latestNote = cleanText(task.notes) || "-";
         merged.push({
           id: `task-${task.id}`,
           type: "Task",
@@ -370,6 +536,7 @@ export async function GET(request: Request) {
           companyId,
           companyHref: companyHrefFromId(companyId),
           leadId: task.lead?.id ?? null,
+          taskId: task.id,
           leadName: task.leadName || task.lead?.title || "-",
           contactPerson: normalizeContactPerson(task.company?.contactPerson),
           phone: pickPhone(task.company?.phone || task.lead?.phone),
@@ -380,11 +547,16 @@ export async function GET(request: Request) {
           sortDateValue: taskDate.toISOString(),
           status: task.status,
           note: formatTaskDetailAndNote(task.description, task.notes),
+          taskDetail,
+          latestNote,
+          stepNotes: [],
         });
       }
 
       for (const followUp of followUps) {
         const companyId = followUp.companyId ?? followUp.lead?.companyId ?? null;
+        const taskDetail = formatTaskDetails(followUp.task?.description);
+        const latestNote = cleanText(followUp.nextDiscussionPlan) || cleanText(followUp.note) || "-";
         merged.push({
           id: `followup-${followUp.id}`,
           type: "Follow-up",
@@ -392,6 +564,7 @@ export async function GET(request: Request) {
           companyId,
           companyHref: companyHrefFromId(companyId),
           leadId: followUp.lead?.id ?? null,
+          taskId: followUp.taskId ?? followUp.task?.id ?? null,
           leadName: normalizeLeadTitle(followUp.lead?.title, followUp.lead?.customerName),
           contactPerson: normalizeContactPerson(followUp.company?.contactPerson || followUp.lead?.company?.contactPerson),
           phone: pickPhone(followUp.lead?.phone || followUp.company?.phone),
@@ -401,12 +574,17 @@ export async function GET(request: Request) {
           sortDate: followUp.followUpDate.getTime(),
           sortDateValue: followUp.followUpDate.toISOString(),
           status: followUp.status,
-          note: followUp.note || "-",
+          note: latestNote,
+          taskDetail,
+          latestNote,
+          stepNotes: [],
         });
       }
 
       for (const communication of communications) {
         const companyId = communication.companyId ?? communication.lead?.companyId ?? null;
+        const taskDetail = formatTaskDetails(communication.task?.description);
+        const latestNote = cleanText(communication.followUpNote) || cleanText(communication.note) || "-";
         merged.push({
           id: `communication-${communication.id}`,
           type: "Communication",
@@ -414,6 +592,7 @@ export async function GET(request: Request) {
           companyId,
           companyHref: companyHrefFromId(companyId),
           leadId: communication.lead?.id ?? null,
+          taskId: communication.taskId ?? communication.task?.id ?? null,
           leadName: normalizeLeadTitle(communication.lead?.title, communication.lead?.customerName),
           contactPerson: normalizeContactPerson(communication.company?.contactPerson || communication.lead?.company?.contactPerson),
           phone: pickPhone(communication.lead?.phone || communication.company?.phone),
@@ -423,7 +602,10 @@ export async function GET(request: Request) {
           sortDate: communication.communicationAt.getTime(),
           sortDateValue: communication.communicationAt.toISOString(),
           status: "COMPLETED",
-          note: communication.note || "-",
+          note: latestNote,
+          taskDetail,
+          latestNote,
+          stepNotes: [],
         });
       }
 
@@ -436,6 +618,7 @@ export async function GET(request: Request) {
           companyId,
           companyHref: companyHrefFromId(companyId),
           leadId: quotation.leadId ?? quotation.lead?.id ?? null,
+          taskId: null,
           leadName: normalizeLeadTitle(quotation.lead?.title, quotation.lead?.customerName),
           contactPerson: normalizeContactPerson(quotation.company?.contactPerson || quotation.lead?.company?.contactPerson),
           phone: pickPhone(quotation.lead?.phone || quotation.company?.phone),
@@ -446,6 +629,9 @@ export async function GET(request: Request) {
           sortDateValue: quotation.createdAt.toISOString(),
           status: quotation.status,
           note: quotation.notes || `Amount: ${quotation.totalAmount.toString()}`,
+          taskDetail: "-",
+          latestNote: quotation.notes || `Amount: ${quotation.totalAmount.toString()}`,
+          stepNotes: [],
         });
       }
 
@@ -457,6 +643,7 @@ export async function GET(request: Request) {
           companyId: lead.companyId,
           companyHref: companyHrefFromId(lead.companyId),
           leadId: lead.id,
+          taskId: null,
           leadName: normalizeLeadTitle(lead.title, lead.customerName),
           contactPerson: normalizeContactPerson(lead.company?.contactPerson),
           phone: pickPhone(lead.phone || lead.company?.phone),
@@ -467,6 +654,9 @@ export async function GET(request: Request) {
           sortDateValue: lead.updatedAt.toISOString(),
           status: lead.status,
           note: lead.notes || "-",
+          taskDetail: "-",
+          latestNote: lead.notes || "-",
+          stepNotes: [],
         });
       }
 
@@ -492,6 +682,7 @@ export async function GET(request: Request) {
           status: true,
           followUpDate: true,
           createdAt: true,
+          taskId: true,
           lead: {
             select: {
               id: true,
@@ -503,13 +694,15 @@ export async function GET(request: Request) {
             },
           },
           company: { select: { name: true, contactPerson: true, phone: true } },
-          task: { select: { id: true, title: true } },
+          task: { select: { id: true, title: true, description: true, notes: true } },
         },
         orderBy: { followUpDate: "desc" },
       });
 
       rows = followUps.map((followUp) => {
         const companyId = followUp.companyId ?? followUp.lead?.companyId ?? null;
+        const taskDetail = formatTaskDetails(followUp.task?.description);
+        const latestNote = cleanText(followUp.nextDiscussionPlan) || cleanText(followUp.note) || "-";
 
         return {
           id: followUp.id,
@@ -518,6 +711,7 @@ export async function GET(request: Request) {
           companyId,
           companyHref: companyHrefFromId(companyId),
           leadId: followUp.lead?.id ?? null,
+          taskId: followUp.taskId ?? followUp.task?.id ?? null,
           leadName: normalizeLeadTitle(followUp.lead?.title, followUp.lead?.customerName),
           contactPerson: normalizeContactPerson(followUp.company?.contactPerson || followUp.lead?.company?.contactPerson),
           phone: pickPhone(followUp.lead?.phone || followUp.company?.phone),
@@ -527,7 +721,10 @@ export async function GET(request: Request) {
           sortDate: followUp.followUpDate.getTime(),
           sortDateValue: followUp.followUpDate.toISOString(),
           status: followUp.status,
-          note: followUp.note || "-",
+          note: latestNote,
+          taskDetail,
+          latestNote,
+          stepNotes: [],
         };
       });
     }
@@ -559,6 +756,8 @@ export async function GET(request: Request) {
       rows = tasks.map((task): DrilldownDetailRow => {
         const companyId = task.companyId ?? task.lead?.companyId ?? null;
         const taskDate = task.dueDate ?? task.updatedAt;
+        const taskDetail = formatTaskDetails(task.description);
+        const latestNote = cleanText(task.notes) || "-";
 
         return {
           id: task.id,
@@ -567,6 +766,7 @@ export async function GET(request: Request) {
           companyId,
           companyHref: companyHrefFromId(companyId),
           leadId: task.lead?.id ?? null,
+          taskId: task.id,
           leadName: task.leadName || task.lead?.title || "-",
           contactPerson: normalizeContactPerson(task.company?.contactPerson),
           phone: pickPhone(task.company?.phone || task.lead?.phone),
@@ -577,6 +777,9 @@ export async function GET(request: Request) {
           sortDateValue: taskDate.toISOString(),
           status: task.status,
           note: formatTaskDetailAndNote(task.description, task.notes),
+          taskDetail,
+          latestNote,
+          stepNotes: [],
         };
       }).sort((left, right) => right.sortDate - left.sortDate);
     }
@@ -615,6 +818,7 @@ export async function GET(request: Request) {
         companyId: lead.companyId,
         companyHref: companyHrefFromId(lead.companyId),
         leadId: lead.id,
+        taskId: null,
         leadName: normalizeLeadTitle(lead.title, lead.customerName),
         contactPerson: normalizeContactPerson(lead.company?.contactPerson),
         phone: pickPhone(lead.phone || lead.company?.phone),
@@ -625,6 +829,9 @@ export async function GET(request: Request) {
         sortDateValue: lead.updatedAt.toISOString(),
         status: lead.status,
         note: lead.notes || "-",
+        taskDetail: "-",
+        latestNote: lead.notes || "-",
+        stepNotes: [],
       }));
     }
 
@@ -648,6 +855,7 @@ export async function GET(request: Request) {
           note: true,
           discussionTopic: true,
           communicationAt: true,
+          taskId: true,
           lead: {
             select: {
               id: true,
@@ -659,7 +867,7 @@ export async function GET(request: Request) {
             },
           },
           company: { select: { name: true, contactPerson: true, phone: true } },
-          task: { select: { title: true } },
+          task: { select: { id: true, title: true, description: true, notes: true } },
           followUpNote: true,
           productDiscussed: true,
         },
@@ -671,6 +879,8 @@ export async function GET(request: Request) {
       for (const communication of communications) {
         const companyName = communication.company?.name || communication.lead?.company?.name || communication.lead?.customerName;
         const companyId = communication.companyId ?? communication.lead?.companyId ?? null;
+        const taskDetail = formatTaskDetails(communication.task?.description);
+        const latestNote = cleanText(communication.followUpNote) || cleanText(communication.note) || "-";
         merged.push({
           id: communication.id,
           type: "Communication",
@@ -678,6 +888,7 @@ export async function GET(request: Request) {
           companyId,
           companyHref: companyHrefFromId(companyId),
           leadId: communication.lead?.id ?? null,
+          taskId: communication.taskId ?? communication.task?.id ?? null,
           leadName: normalizeLeadTitle(communication.lead?.title, communication.lead?.customerName),
           contactPerson: normalizeContactPerson(communication.company?.contactPerson || communication.lead?.company?.contactPerson),
           phone: pickPhone(communication.lead?.phone || communication.company?.phone),
@@ -687,12 +898,33 @@ export async function GET(request: Request) {
           sortDate: communication.communicationAt.getTime(),
           sortDateValue: communication.communicationAt.toISOString(),
           status: "COMPLETED",
-          note: communication.note || "-",
+          note: latestNote,
+          taskDetail,
+          latestNote,
+          stepNotes: [],
         });
       }
 
       rows = merged.sort((left, right) => right.sortDate - left.sortDate);
     }
+
+    const taskStepNoteMap = await buildTaskStepNoteMap(prisma, rows.map((row) => row.taskId), formatDisplayDate);
+    rows = rows.map((row) => {
+      const stepNotes = row.taskId ? taskStepNoteMap.get(row.taskId) ?? [] : [];
+      const latestStepNote = stepNotes.at(-1)?.note ?? "";
+      const latestNote = cleanText(row.latestNote) || latestStepNote || "-";
+
+      return {
+        ...row,
+        latestNote,
+        note: row.note && row.note !== "-"
+          ? row.note
+          : (row.taskDetail && row.taskDetail !== "-"
+            ? formatTaskDetailAndNote(row.taskDetail, latestNote === "-" ? "" : latestNote)
+            : latestNote),
+        stepNotes,
+      };
+    });
 
     count = rows.length;
 

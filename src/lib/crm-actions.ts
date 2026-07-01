@@ -1986,10 +1986,6 @@ export async function completeFollowUpWithCommunicationAction(formData: FormData
     return { ok: false, message: "Follow-up reference is missing." };
   }
 
-  if (!conversationSummary) {
-    return { ok: false, message: "Conversation summary is required." };
-  }
-
   if (!(await hasFollowUpAccess(prisma, user, id))) {
     return { ok: false, message: "You are not allowed to complete this follow-up." };
   }
@@ -2017,6 +2013,7 @@ export async function completeFollowUpWithCommunicationAction(formData: FormData
     return { ok: false, message: "This follow-up has already been completed." };
   }
 
+  const resolvedConversationSummary = notes || conversationSummary || discussionTopic || followUp.method || "Follow-up";
   const completedAt = new Date();
 
   const result = await prisma.$transaction(async (tx) => {
@@ -2035,7 +2032,7 @@ export async function completeFollowUpWithCommunicationAction(formData: FormData
         ...(followUp.taskId ? { task: { connect: { id: followUp.taskId } } } : {}),
         user: { connect: { id: user.id } },
         method,
-        note: conversationSummary,
+        note: resolvedConversationSummary,
         discussionTopic,
         productDiscussed,
         communicationAt: completedAt,
@@ -2054,7 +2051,7 @@ export async function completeFollowUpWithCommunicationAction(formData: FormData
             ...(followUp.assignedToId ? { assignedTo: { connect: { id: followUp.assignedToId } } } : { assignedTo: { connect: { id: user.id } } }),
             ...(followUp.taskId ? { task: { connect: { id: followUp.taskId } } } : {}),
             method,
-            note: notes ?? conversationSummary,
+            note: notes ?? resolvedConversationSummary,
             nextDiscussionPlan: discussionTopic ?? notes,
             priority: followUp.priority,
             followUpDate: nextFollowUpDate,
