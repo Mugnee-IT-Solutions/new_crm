@@ -897,6 +897,20 @@ function buildActivityOverviewHref(
   return `${rolePath(role, "activity-overview")}?${params.toString()}`;
 }
 
+function drilldownDisplayText(value?: string | null, fallback = "-") {
+  const normalized = value?.trim();
+  return normalized && normalized.length && normalized !== "-" ? normalized : fallback;
+}
+
+function drilldownStepSummary(entries?: DrilldownStepNote[]) {
+  const labels = (entries ?? [])
+    .map((entry) => entry.stepLabel.trim())
+    .filter(Boolean)
+    .filter((label, index, items) => items.indexOf(label) === index);
+
+  return labels.join(" -> ");
+}
+
 function TeamPerformanceDrilldownTable({
   rows,
   workspace,
@@ -956,77 +970,6 @@ function TeamPerformanceDrilldownTable({
       || normalizeDrilldownLookup(company.name) === fallbackName
     )) ?? null;
   }, [selectedRecord, workspace.companies]);
-
-  const relatedRows = React.useMemo(() => {
-    if (!selectedRecord) return [];
-    const selectedKey = normalizeDrilldownLookup(selectedRecord.customerOrCompany);
-    return orderedRows
-      .filter((row) => (
-        (selectedRecord.companyId && row.companyId && selectedRecord.companyId === row.companyId)
-        || normalizeDrilldownLookup(row.customerOrCompany) === selectedKey
-      ))
-      .slice(0, 8);
-  }, [orderedRows, selectedRecord]);
-
-  const relatedActivities = React.useMemo(() => {
-    if (!selectedRecord) return [];
-    const customerHref = selectedRecord.companyHref ?? (selectedRecord.companyId ? `/customers/${selectedRecord.companyId}` : null);
-    const customerKey = normalizeDrilldownLookup(selectedRecord.customerOrCompany);
-    const marketerKey = normalizeDrilldownLookup(marketerName);
-
-    return workspace.activities
-      .filter((activity) => {
-        const matchesMarketer = (
-          activity.employeeId === marketerId
-          || normalizeDrilldownLookup(activity.employeeName) === marketerKey
-          || normalizeDrilldownLookup(activity.createdBy) === marketerKey
-        );
-
-        if (!matchesMarketer) return false;
-        if (customerHref && (activity.customerHref === customerHref || activity.relatedCustomerHref === customerHref)) return true;
-        return normalizeDrilldownLookup(activity.customerName) === customerKey;
-      })
-      .sort((left, right) => new Date(right.createdAtValue ?? 0).getTime() - new Date(left.createdAtValue ?? 0).getTime())
-      .slice(0, 10);
-  }, [marketerId, marketerName, selectedRecord, workspace.activities]);
-
-  const activitySummary = React.useMemo(() => {
-    return relatedActivities.reduce((summary, activity) => {
-      switch (activity.category) {
-        case "CALL":
-          summary.calls += 1;
-          break;
-        case "WHATSAPP":
-          summary.whatsapp += 1;
-          break;
-        case "MEETING":
-          summary.meetings += 1;
-          break;
-        case "FOLLOW_UP":
-          summary.followUps += 1;
-          break;
-        case "TASK":
-          summary.tasks += 1;
-          break;
-        default:
-          summary.other += 1;
-          break;
-      }
-
-      return summary;
-    }, { calls: 0, whatsapp: 0, meetings: 0, followUps: 0, tasks: 0, other: 0 });
-  }, [relatedActivities]);
-
-  const rowSummary = React.useMemo(() => {
-    return relatedRows.reduce((summary, row) => {
-      const method = row.method.toLowerCase();
-      if (method.includes("call") || method.includes("phone")) summary.calls += 1;
-      if (method.includes("follow")) summary.followUps += 1;
-      if (method.includes("meeting")) summary.meetings += 1;
-      if (method.includes("whatsapp")) summary.whatsapp += 1;
-      return summary;
-    }, { calls: 0, followUps: 0, meetings: 0, whatsapp: 0 });
-  }, [relatedRows]);
 
   const summaryCards = [
     {
@@ -1164,7 +1107,16 @@ function TeamPerformanceDrilldownTable({
                     <p className="shrink-0 text-[11px] font-semibold text-slate-500 sm:text-right">{row.dateTime}</p>
                   </div>
                   <p className="mt-1 text-xs font-semibold text-slate-500">{row.method} - {row.status}</p>
-                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{row.note}</p>
+                  <div className="mt-3 grid gap-2 md:grid-cols-2">
+                    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Task Detail</p>
+                      <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-slate-700">{row.taskDetail && row.taskDetail !== "-" ? row.taskDetail : "No task detail added."}</p>
+                    </div>
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2.5">
+                      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">Latest Note</p>
+                      <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-slate-700">{row.latestNote && row.latestNote !== "-" ? row.latestNote : row.note || "No note added."}</p>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -1172,43 +1124,61 @@ function TeamPerformanceDrilldownTable({
         ) : null}
       </div>
 
-      <div ref={recordsSectionRef} className="max-h-[min(58vh,40rem)] max-w-full overflow-auto rounded-2xl border border-slate-200 [scrollbar-gutter:stable_both-edges]">
-        <table className="min-w-[1040px] w-full text-left text-sm">
-          <thead className="sticky top-0 z-[1] border-b border-slate-100 bg-white text-xs uppercase tracking-[0.12em] text-slate-400">
-            <tr>
-              <th className="px-3 py-2 font-bold">Company / Customer</th>
-              <th className="px-3 py-2 font-bold">Contact</th>
-              <th className="px-3 py-2 font-bold">Phone</th>
-              <th className="px-3 py-2 font-bold">Method</th>
-              <th className="px-3 py-2 font-bold">Title</th>
-              <th className="px-3 py-2 font-bold">Date & Time</th>
-              <th className="px-3 py-2 font-bold">Status</th>
-              <th className="px-3 py-2 font-bold">Details / Note</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {filteredRows.map((record) => (
-              <tr key={drilldownRowKey(record)} className="align-top hover:bg-slate-50/70">
-                <td className="max-w-[220px] px-3 py-3 font-semibold text-slate-900">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedRecordKey(drilldownRowKey(record))}
-                      className="text-left text-blue-700 transition hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+      <div ref={recordsSectionRef} className="max-h-[min(58vh,40rem)] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 [scrollbar-gutter:stable]">
+        <div className="space-y-3">
+          {filteredRows.map((record) => (
+            <div
+              key={drilldownRowKey(record)}
+              role="button"
+              tabIndex={0}
+              onClick={() => setSelectedRecordKey(drilldownRowKey(record))}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedRecordKey(drilldownRowKey(record));
+                }
+              }}
+              className="cursor-pointer rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition hover:border-blue-200 hover:bg-slate-50/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+            >
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  {record.companyHref ? (
+                    <Link
+                      href={record.companyHref}
+                      onClick={(event) => event.stopPropagation()}
+                      className="text-base font-black text-blue-700 transition hover:text-blue-800 hover:underline"
                     >
                       {record.customerOrCompany}
-                  </button>
-                </td>
-                <td className="max-w-[180px] px-3 py-3 text-slate-700">{record.contactPerson}</td>
-                <td className="px-3 py-3 text-slate-700">{record.phone}</td>
-                <td className="px-3 py-3 text-slate-700">{record.method}</td>
-                <td className="max-w-[240px] px-3 py-3 text-slate-700">{record.title}</td>
-                <td className="whitespace-nowrap px-3 py-3 text-slate-700">{record.dateTime}</td>
-                <td className="whitespace-nowrap px-3 py-3 text-slate-700">{record.status}</td>
-                <td className="min-w-[340px] whitespace-pre-wrap px-3 py-3 leading-6 text-slate-800">{record.note || "-"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                    </Link>
+                  ) : (
+                    <p className="text-base font-black text-slate-950">{record.customerOrCompany}</p>
+                  )}
+                  <p className="mt-1 text-sm font-semibold text-slate-700">{record.title}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    {record.method} | {record.status} | {record.dateTime}
+                  </p>
+                </div>
+                <Badge variant={drilldownStatusVariant(record.status)} className="shrink-0">{record.status}</Badge>
+              </div>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5">
+                  <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Task Detail</p>
+                  <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-slate-700">{drilldownDisplayText(record.taskDetail, "No task detail added.")}</p>
+                </div>
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2.5">
+                  <p className="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">Latest Note</p>
+                  <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-slate-700">{drilldownDisplayText(record.latestNote ?? record.note, "No note added.")}</p>
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-col gap-1 text-xs font-semibold text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+                <span>{record.stepNotes?.length ? `Step history: ${drilldownStepSummary(record.stepNotes)}` : "Click this box to see step wise notes."}</span>
+                <span className="text-blue-700">Open details</span>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
       <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
         <p className="text-sm font-semibold text-slate-600">
@@ -1290,10 +1260,10 @@ function TeamPerformanceDrilldownTable({
                           <p className="mt-2 text-sm font-semibold text-slate-900">{marketerName}</p>
                           <p className="mt-1 text-sm text-slate-600">Current stage: {selectedRecord.status}</p>
                           <p className="mt-1 text-sm text-slate-600">
-                            Calls {rowSummary.calls} | Follow-ups {rowSummary.followUps} | Records {relatedRows.length}
+                            Method {selectedRecord.method} | Step notes {selectedRecord.stepNotes?.length ?? 0}
                           </p>
                           <p className="mt-1 text-sm text-slate-500">
-                            Last touch: {relatedActivities[0]?.time || selectedCompany?.lastCommunication || selectedRecord.dateTime}
+                            Last touch: {selectedCompany?.lastCommunication || selectedRecord.dateTime}
                           </p>
                         </div>
                       </div>
@@ -1303,12 +1273,19 @@ function TeamPerformanceDrilldownTable({
                   <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
                     <div className="rounded-[22px] border border-slate-200 bg-white p-5">
                       <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-black text-slate-950">Latest Details / Note</p>
-                        <Badge variant="neutral">{relatedRows.length} items</Badge>
+                        <p className="text-sm font-black text-slate-950">Task Detail & Latest Note</p>
+                        <Badge variant="neutral">{selectedRecord.stepNotes?.length ?? 0} step notes</Badge>
                       </div>
-                      <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                        {selectedRecord.note || "No detailed note added for this record."}
-                      </p>
+                      <div className="mt-3 grid gap-3">
+                        <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5">
+                          <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Task Detail</p>
+                          <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-slate-700">{drilldownDisplayText(selectedRecord.taskDetail, "No task detail added.")}</p>
+                        </div>
+                        <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2.5">
+                          <p className="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">Latest Note</p>
+                          <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-slate-700">{drilldownDisplayText(selectedRecord.latestNote ?? selectedRecord.note, "No note added.")}</p>
+                        </div>
+                      </div>
                       <div className="mt-4 space-y-2 text-sm text-slate-600">
                         <p><span className="font-semibold text-slate-900">Lead:</span> {selectedRecord.leadName || "-"}</p>
                         <p><span className="font-semibold text-slate-900">Method:</span> {selectedRecord.method}</p>
@@ -1319,42 +1296,25 @@ function TeamPerformanceDrilldownTable({
 
                     <div className="rounded-[22px] border border-slate-200 bg-white p-5">
                       <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-sm font-black text-slate-950">Recent Timeline</p>
-                        <p className="text-sm font-semibold text-slate-500">
-                          Calls {activitySummary.calls} | Follow-ups {activitySummary.followUps} | Meetings {activitySummary.meetings}
-                        </p>
+                        <p className="text-sm font-black text-slate-950">Step Wise Notes</p>
+                        <p className="text-sm font-semibold text-slate-500">{selectedRecord.stepNotes?.length ?? 0} saved</p>
                       </div>
-                      {relatedActivities.length ? (
+                      {selectedRecord.stepNotes?.length ? (
                         <div className="mt-4 space-y-3">
-                          {relatedActivities.map((activity) => (
-                            <div key={`${activity.id}-${activity.createdAtValue ?? activity.time}`} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                          {selectedRecord.stepNotes.map((entry) => (
+                            <div key={entry.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
                               <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="text-sm font-bold text-slate-900">{activityCategoryLabel(activity)}</p>
-                                <p className="text-xs font-semibold text-slate-500">{activity.time}</p>
+                                <p className="text-sm font-bold text-slate-900">{entry.stepLabel}</p>
+                                <p className="text-xs font-semibold text-slate-500">{entry.createdAtLabel}</p>
                               </div>
-                              <p className="mt-1 text-xs font-semibold text-slate-500">{activity.title}</p>
-                              <p className="mt-2 text-sm text-slate-700">
-                                {activity.discussionSummary || activity.notes || activity.detail || "No summary available."}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      ) : relatedRows.length ? (
-                        <div className="mt-4 space-y-3">
-                          {relatedRows.map((row) => (
-                            <div key={`${row.id}-${row.dateTime}`} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="text-sm font-bold text-slate-900">{row.title}</p>
-                                <p className="text-xs font-semibold text-slate-500">{row.dateTime}</p>
-                              </div>
-                              <p className="mt-1 text-xs font-semibold text-slate-500">{row.method} - {row.status}</p>
-                              <p className="mt-2 text-sm text-slate-700">{row.note || "No note added."}</p>
+                              <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{entry.note}</p>
+                              {entry.actorName ? <p className="mt-2 text-xs font-semibold text-slate-500">By {entry.actorName}</p> : null}
                             </div>
                           ))}
                         </div>
                       ) : (
                         <p className="mt-3 rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">
-                          Ei company ar marketer pair-er kono recent activity summary khuje paoa jayni.
+                          Ei task er jonno kono step-wise note save kora hoyni.
                         </p>
                       )}
                     </div>
