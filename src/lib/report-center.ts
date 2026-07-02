@@ -1,6 +1,7 @@
 import "server-only";
 
 import { access, readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import * as XLSX from "xlsx";
 import {
@@ -97,6 +98,8 @@ const REPORT_PDF_FONT_CANDIDATES = [
   "/usr/share/fonts/truetype/noto/NotoSerifBengali-Regular.ttf",
 ];
 
+const nodeRequire = createRequire(import.meta.url);
+
 let reportPdfFontBytesPromise: Promise<Uint8Array | null> | null = null;
 let reportPdfFontkitPromise: Promise<unknown | null> | null = null;
 
@@ -104,7 +107,7 @@ async function loadReportPdfFontkit() {
   if (!reportPdfFontkitPromise) {
     reportPdfFontkitPromise = (async () => {
       try {
-        const loaded = await import("@pdf-lib/fontkit/dist/fontkit.es.js");
+        const loaded = nodeRequire("@pdf-lib/fontkit");
         return loaded?.default ?? loaded ?? null;
       } catch {
         return null;
@@ -1242,9 +1245,9 @@ function buildPrintHtml(document: ReportDocument) {
 </html>`;
 }
 
-async function buildPdfBuffer(document: ReportDocument) {
+async function buildPdfBufferWithStrategy(document: ReportDocument, preferUnicodeFont: boolean) {
   const pdfDocument = await PDFDocument.create();
-  const embeddedFontBytes = await loadReportPdfFontBytes();
+  const embeddedFontBytes = preferUnicodeFont ? await loadReportPdfFontBytes() : null;
   const fontkit = embeddedFontBytes ? await loadReportPdfFontkit() : null;
   const supportsUnicodePdf = Boolean(embeddedFontBytes && fontkit);
   if (fontkit) {
@@ -1482,6 +1485,16 @@ async function buildPdfBuffer(document: ReportDocument) {
   });
 
   return Buffer.from(await pdfDocument.save());
+}
+
+async function buildPdfBuffer(document: ReportDocument) {
+  try {
+    return await buildPdfBufferWithStrategy(document, true);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown PDF export error";
+    console.warn(`[report-export] Falling back to standard PDF font: ${message}`);
+    return buildPdfBufferWithStrategy(document, false);
+  }
 }
 
 export async function generateReportExport(actor: ReportActor, reportType: ReportTypeKey, formatType: ReportFormat, filters: ReportFilters): Promise<ReportExportResult> {

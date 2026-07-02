@@ -692,16 +692,17 @@ type TeamPerformanceDrilldownRow = {
   latestNote?: string;
   stepNotes?: DrilldownStepNote[];
 };
-type TeamPerformancePeriod = "today" | "week" | "month";
+type TeamPerformancePeriod = "today" | "yesterday" | "week" | "month";
 type TeamPerformanceSource = "table" | "mobile";
-const teamPerformancePeriods = ["today", "week", "month"] as const;
+const teamPerformancePeriods = ["today", "yesterday", "week", "month"] as const;
 const isTeamPerformancePeriod = (value?: string | null): value is TeamPerformancePeriod => (
-  value === "today" || value === "week" || value === "month"
+  value === "today" || value === "yesterday" || value === "week" || value === "month"
 );
 const performancePeriodLabels: Record<TeamPerformancePeriod, string> = {
   today: "Today",
+  yesterday: "Yesterday",
   week: "Weekly",
-  month: "This Month",
+  month: "Monthly",
 };
 
 const teamPerformanceMetricLabels: Record<TeamPerformanceMetricKey, string> = {
@@ -920,6 +921,51 @@ function drilldownTimelineAction(status?: string | null, fallback?: string | nul
   return normalizedStatus || normalizedFallback || "Activity update";
 }
 
+function drilldownParseDate(value?: string | null) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function drilldownDateMeta(date?: Date | null) {
+  if (!date) {
+    return {
+      groupLabel: "Older",
+      groupDateLabel: "",
+      timeLabel: "-",
+    };
+  }
+
+  const todayStart = getCrmDayWindow(new Date()).from;
+  const todayKey = formatCrmDate(todayStart, "yyyy-MM-dd");
+  const yesterdayKey = formatCrmDate(new Date(todayStart.getTime() - 1000), "yyyy-MM-dd");
+  const rowKey = formatCrmDate(date, "yyyy-MM-dd");
+  const dateLabel = formatCrmDate(date, "dd MMM yyyy");
+  const timeLabel = formatCrmDate(date, "hh:mm a");
+
+  if (rowKey === todayKey) {
+    return {
+      groupLabel: "Today",
+      groupDateLabel: dateLabel,
+      timeLabel,
+    };
+  }
+
+  if (rowKey === yesterdayKey) {
+    return {
+      groupLabel: "Yesterday",
+      groupDateLabel: dateLabel,
+      timeLabel,
+    };
+  }
+
+  return {
+    groupLabel: dateLabel,
+    groupDateLabel: dateLabel,
+    timeLabel: `${formatCrmDate(date, "dd MMM yyyy")} · ${timeLabel}`,
+  };
+}
+
 function drilldownNoteCardClasses(row: TeamPerformanceDrilldownRow) {
   const category = drilldownActivityCategory(row);
 
@@ -990,6 +1036,8 @@ function TeamPerformanceDrilldownTable({
   marketerName,
   initialActivityFilter,
   onSummaryCardClick,
+  currentPeriod,
+  onPeriodChange,
 }: {
   rows: TeamPerformanceDrilldownRow[];
   workspace: CrmWorkspace;
@@ -997,6 +1045,8 @@ function TeamPerformanceDrilldownTable({
   marketerName: string;
   initialActivityFilter?: DrilldownActivityFilter;
   onSummaryCardClick?: (filter: Exclude<DrilldownActivityFilter, "all">) => void;
+  currentPeriod?: TeamPerformancePeriod;
+  onPeriodChange?: (period: TeamPerformancePeriod) => void;
 }) {
   const [selectedRecordKey, setSelectedRecordKey] = React.useState<string | null>(null);
   const [activityFilter, setActivityFilter] = React.useState<DrilldownActivityFilter>(initialActivityFilter ?? "all");
@@ -1033,6 +1083,28 @@ function TeamPerformanceDrilldownTable({
     filteredRows
       .filter((row) => row.note && row.note !== "-")
   ), [filteredRows]);
+
+  const groupedLatestNotes = React.useMemo(() => {
+    const groups: Array<{ label: string; dateLabel: string; rows: TeamPerformanceDrilldownRow[] }> = [];
+
+    latestNotes.forEach((row) => {
+      const meta = drilldownDateMeta(drilldownParseDate(row.sortDateValue ?? row.dateTime));
+      const existingGroup = groups[groups.length - 1];
+
+      if (existingGroup && existingGroup.label === meta.groupLabel) {
+        existingGroup.rows.push(row);
+        return;
+      }
+
+      groups.push({
+        label: meta.groupLabel,
+        dateLabel: meta.groupDateLabel,
+        rows: [row],
+      });
+    });
+
+    return groups;
+  }, [latestNotes]);
 
   const selectedCompany = React.useMemo(() => {
     if (!selectedRecord) return null;
@@ -1134,6 +1206,7 @@ function TeamPerformanceDrilldownTable({
     if (relatedActivities.length) {
       return relatedActivities.slice(0, 8).map((activity) => {
         const label = activityCategoryLabel(activity);
+        const dateMeta = drilldownDateMeta(drilldownParseDate(activity.createdAtValue ?? activity.time));
 
         return {
           id: `${activity.id}-${activity.createdAtValue ?? activity.time}`,
@@ -1142,13 +1215,15 @@ function TeamPerformanceDrilldownTable({
           action: drilldownTimelineAction(activity.title, activityCategoryLabel(activity)),
           meta: activity.category === "FOLLOW_UP" ? "Follow-up update" : label,
           note: readDrilldownText(activity.discussionSummary, activity.notes, activity.detail) || "No details added.",
-          time: activity.time,
+          time: dateMeta.timeLabel,
+          dayLabel: dateMeta.groupLabel,
         };
       });
     }
 
     return relatedRows.slice(0, 8).map((row) => {
       const label = drilldownNoteCategoryLabel(row);
+      const dateMeta = drilldownDateMeta(drilldownParseDate(row.sortDateValue ?? row.dateTime));
 
       return {
         id: `${row.id}-${row.dateTime}`,
@@ -1157,7 +1232,8 @@ function TeamPerformanceDrilldownTable({
         action: drilldownTimelineAction(row.status, row.title || row.method),
         meta: row.method,
         note: readDrilldownText(row.latestNote, row.note, row.taskDetail) || "No details added.",
-        time: row.dateTime,
+        time: dateMeta.timeLabel,
+        dayLabel: dateMeta.groupLabel,
       };
     });
   }, [relatedActivities, relatedRows]);
@@ -1215,36 +1291,9 @@ function TeamPerformanceDrilldownTable({
   };
 
   return (
-    <div className="relative space-y-4">
-      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          {([
-            ["all", "All"],
-            ["call", "Call"],
-            ["followUp", "Follow-up"],
-            ["demo", "Demo Send"],
-            ["quotation", "Quotation"],
-          ] as const).map(([key, label]) => {
-            const active = activityFilter === key;
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setActivityFilter(key)}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold transition",
-                  active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-blue-100 hover:text-slate-900",
-                )}
-              >
-                {label}
-                <span className={cn("rounded-full px-1.5 py-0.5 text-[11px]", active ? "bg-white text-blue-700" : "bg-slate-100 text-slate-500")}>
-                  {filterCounts[key]}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-4">
+    <div className="relative space-y-3">
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+        <div className="mt-3 grid gap-2.5 md:grid-cols-4">
           {summaryCards.map((card) => {
             const active = activityFilter === card.key;
             return (
@@ -1253,7 +1302,7 @@ function TeamPerformanceDrilldownTable({
                 type="button"
                 onClick={() => handleSummaryCardClick(card.key)}
                 className={cn(
-                  "rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300",
+                  "rounded-2xl border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300",
                   active ? card.activeClassName : card.idleClassName,
                 )}
               >
@@ -1265,7 +1314,7 @@ function TeamPerformanceDrilldownTable({
                     )}>
                       {card.label}
                     </p>
-                    <p className="mt-2 text-3xl font-black">{card.value}</p>
+                    <p className="mt-1.5 text-[30px] font-black leading-none">{card.value}</p>
                   </div>
                   <span className={cn(
                     "inline-flex rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em]",
@@ -1274,7 +1323,7 @@ function TeamPerformanceDrilldownTable({
                     Clickable
                   </span>
                 </div>
-                <p className={cn("mt-3 text-xs font-semibold", active ? "text-white/90" : "text-current/80")}>
+                <p className={cn("mt-2 text-xs font-semibold", active ? "text-white/90" : "text-current/80")}>
                   {card.helper}
                 </p>
                 <p className={cn("mt-1 text-[11px] font-bold", active ? "text-white/80" : "text-current/70")}>
@@ -1285,70 +1334,110 @@ function TeamPerformanceDrilldownTable({
           })}
         </div>
         <div ref={recordsSectionRef}>
-          {latestNotes.length ? (
-            <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
-              <div className="flex items-center justify-between gap-3">
+          <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
                 <p className="text-sm font-black text-slate-950">Overall Details / Notes</p>
+                <p className="mt-0.5 text-[11px] font-semibold text-slate-500">
+                  {filteredRows.length ? `${filteredRows.length} of ${filterCounts.all} records` : "No records found for this filter."}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {currentPeriod && onPeriodChange ? teamPerformancePeriods.map((period) => {
+                  const active = currentPeriod === period;
+                  return (
+                    <button
+                      key={period}
+                      type="button"
+                      onClick={() => onPeriodChange(period)}
+                      className={cn(
+                        "inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-bold transition",
+                        active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-blue-100 hover:text-slate-900",
+                      )}
+                    >
+                      {performancePeriodLabels[period]}
+                    </button>
+                  );
+                }) : null}
                 <Badge variant="neutral">{latestNotes.length} notes</Badge>
               </div>
-              <div className="mt-3 max-h-[min(42vh,28rem)] space-y-2 overflow-y-auto pr-2 [scrollbar-gutter:stable]">
-                {latestNotes.map((row) => {
-                  const detailText = readDrilldownText(row.taskDetail);
-                  const noteText = readDrilldownText(row.latestNote, row.note);
-                  const cardClasses = drilldownNoteCardClasses(row);
-                  const categoryLabel = drilldownNoteCategoryLabel(row);
-
-                  return (
-                    <div
-                      key={`${drilldownRowKey(row)}:note`}
-                      className={cn("rounded-xl border px-3 py-2.5", cardClasses.row)}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em]", cardClasses.badge)}>
-                              {categoryLabel}
-                            </span>
-                            <Badge variant={drilldownStatusVariant(row.status)}>{row.status}</Badge>
-                            <button
-                              type="button"
-                              onClick={() => setSelectedRecordKey(drilldownRowKey(row))}
-                              className="truncate text-left text-sm font-black text-slate-950 transition hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-                            >
-                              {row.customerOrCompany}
-                            </button>
-                          </div>
-                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500">
-                            <span className="font-semibold">{row.title}</span>
-                            <span>{row.method}</span>
-                          </div>
-                        </div>
-                        <div className={cn("shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold", cardClasses.timePill)}>
-                          {row.dateTime}
-                        </div>
-                      </div>
-                      <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)]">
-                        <div className="min-w-0">
-                          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
-                          <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-5 text-slate-700">
-                            {detailText || "-"}
-                          </p>
-                        </div>
-                        <div className="min-w-0 border-t border-slate-100 pt-2 md:border-l md:border-t-0 md:pl-3 md:pt-0">
-                          <p className={cn("text-[10px] font-black uppercase tracking-[0.16em]", cardClasses.noteLabel)}>
-                            {detailText ? "Task Note" : "Latest Note"}
-                          </p>
-                          <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-5 text-slate-800">
-                            {noteText || "-"}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
             </div>
-          ) : null}
+            {latestNotes.length ? (
+              <div className="mt-2.5 max-h-[min(34vh,22rem)] space-y-2 overflow-y-auto pr-1.5 [scrollbar-gutter:stable]">
+                {groupedLatestNotes.map((group) => (
+                  <div key={group.label} className="space-y-2">
+                    <div className="sticky top-0 z-[1] flex items-center gap-2 bg-white/95 py-1 backdrop-blur-sm">
+                      <Badge variant={group.label === "Today" ? "default" : group.label === "Yesterday" ? "warning" : "neutral"}>
+                        {group.label}
+                      </Badge>
+                      {group.dateLabel && group.dateLabel !== group.label ? (
+                        <span className="text-[11px] font-semibold text-slate-500">{group.dateLabel}</span>
+                      ) : null}
+                    </div>
+                    {group.rows.map((row) => {
+                      const detailText = readDrilldownText(row.taskDetail);
+                      const noteText = readDrilldownText(row.latestNote, row.note);
+                      const cardClasses = drilldownNoteCardClasses(row);
+                      const categoryLabel = drilldownNoteCategoryLabel(row);
+                      const dateMeta = drilldownDateMeta(drilldownParseDate(row.sortDateValue ?? row.dateTime));
+
+                      return (
+                        <div
+                          key={`${drilldownRowKey(row)}:note`}
+                          className={cn("rounded-xl border px-3 py-2", cardClasses.row)}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em]", cardClasses.badge)}>
+                                  {categoryLabel}
+                                </span>
+                                <Badge variant={drilldownStatusVariant(row.status)}>{row.status}</Badge>
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedRecordKey(drilldownRowKey(row))}
+                                  className="truncate text-left text-sm font-black text-slate-950 transition hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                                >
+                                  {row.customerOrCompany}
+                                </button>
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500">
+                                <span className="font-semibold">{row.title}</span>
+                                <span>{row.method}</span>
+                              </div>
+                            </div>
+                            <div className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold", cardClasses.timePill)}>
+                              {dateMeta.timeLabel}
+                            </div>
+                          </div>
+                          <div className="mt-1.5 grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)]">
+                            <div className="min-w-0">
+                              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
+                              <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px] leading-5 text-slate-700">
+                                {detailText || "-"}
+                              </p>
+                            </div>
+                            <div className="min-w-0 border-t border-slate-100 pt-1.5 md:border-l md:border-t-0 md:pl-3 md:pt-0">
+                              <p className={cn("text-[10px] font-black uppercase tracking-[0.16em]", cardClasses.noteLabel)}>
+                                {detailText ? "Latest Note" : "Latest Note"}
+                              </p>
+                              <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px] leading-5 text-slate-800">
+                                {noteText || "-"}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 rounded-xl bg-slate-50 px-3 py-4 text-sm font-semibold text-slate-500">
+                No note or detail found for this period and filter.
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1484,7 +1573,12 @@ function TeamPerformanceDrilldownTable({
                                   <Badge variant={item.badgeVariant}>{item.badgeLabel}</Badge>
                                   <p className="text-sm font-bold text-slate-900">{item.action}</p>
                                 </div>
-                                <p className="text-xs font-semibold text-slate-500">{item.time}</p>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge variant={item.dayLabel === "Today" ? "default" : item.dayLabel === "Yesterday" ? "warning" : "neutral"}>
+                                    {item.dayLabel}
+                                  </Badge>
+                                  <p className="text-xs font-semibold text-slate-500">{item.time}</p>
+                                </div>
                               </div>
                               <p className="mt-1 text-xs font-semibold text-slate-500">{item.meta}</p>
                               <p className="mt-2 text-sm leading-6 text-slate-700">{item.note}</p>
@@ -3900,31 +3994,10 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
           ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} - ${metricPeriodLabel(drilldownPeriod)}`
           : "Team performance drill-down"}
         onClose={closeDrilldown}
-        panelClassName="w-[96vw] max-w-[1180px]"
-        contentClassName="min-h-0 p-4 sm:p-5"
+        panelClassName="w-[95vw] max-w-[1120px] max-h-[calc(100vh-2.5rem)] sm:max-h-[calc(100vh-4rem)]"
+        contentClassName="min-h-0 p-3 sm:p-4"
       >
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            {teamPerformancePeriods.map((period) => {
-              const active = drilldownPeriod === period;
-              return (
-                <button
-                  key={period}
-                  type="button"
-                  onClick={() => void handleDrilldownPeriodChange(period)}
-                  className={cn(
-                    "inline-flex items-center rounded-full border px-4 py-2 text-sm font-bold transition",
-                    active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-blue-100 hover:text-slate-900",
-                  )}
-                >
-                  {performancePeriodLabels[period]}
-                </button>
-              );
-            })}
-          </div>
-          <p className="text-sm font-semibold text-slate-600">
-            {drilldownRows.length ? `${drilldownRows.length} of ${drilldownCount}` : "No records found for this metric."}
-          </p>
           {drilldownError ? (
             <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
               {drilldownError}
@@ -3942,6 +4015,10 @@ export function SupervisorDashboard({ workspace }: { workspace: CrmWorkspace }) 
                     workspace={workspace}
                     marketerId={drilldownPayload?.marketerId ?? ""}
                     marketerName={drilldownPayload?.marketerName ?? "Marketer"}
+                    currentPeriod={drilldownPeriod}
+                    onPeriodChange={(period) => {
+                      void handleDrilldownPeriodChange(period);
+                    }}
                     onSummaryCardClick={(focus) => {
                       if (!drilldownPayload?.marketerId) return;
                       router.push(
@@ -4566,31 +4643,10 @@ function AdminTeamPerformancePanel({
         open={drilldownOpen}
         title={drilldownPayload ? `${drilldownPayload.marketerName} - ${drilldownPayload.metricLabel} - ${performancePeriodLabels[drilldownPeriod]}` : "Team performance drill-down"}
         onClose={closeDrilldown}
-        panelClassName="w-[96vw] max-w-[1180px]"
-        contentClassName="min-h-0 p-4 sm:p-5"
+        panelClassName="w-[95vw] max-w-[1120px] max-h-[calc(100vh-2.5rem)] sm:max-h-[calc(100vh-4rem)]"
+        contentClassName="min-h-0 p-3 sm:p-4"
       >
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            {teamPerformancePeriods.map((period) => {
-              const active = drilldownPeriod === period;
-              return (
-                <button
-                  key={period}
-                  type="button"
-                  onClick={() => void handleDrilldownPeriodChange(period)}
-                  className={cn(
-                    "inline-flex items-center rounded-full border px-4 py-2 text-sm font-bold transition",
-                    active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:border-blue-100 hover:text-slate-900",
-                  )}
-                >
-                  {performancePeriodLabels[period]}
-                </button>
-              );
-            })}
-          </div>
-          <p className="text-sm font-semibold text-slate-600">
-            {drilldownRows.length ? `${drilldownRows.length} of ${drilldownCount}` : "No records found for this metric."}
-          </p>
           {drilldownError ? (
             <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
               {drilldownError}
@@ -4608,6 +4664,10 @@ function AdminTeamPerformancePanel({
                     workspace={workspace}
                     marketerId={drilldownPayload?.marketerId ?? ""}
                     marketerName={drilldownPayload?.marketerName ?? "Marketer"}
+                    currentPeriod={drilldownPeriod}
+                    onPeriodChange={(period) => {
+                      void handleDrilldownPeriodChange(period);
+                    }}
                     onSummaryCardClick={(focus) => {
                       if (!drilldownPayload?.marketerId) return;
                       router.push(
@@ -4757,9 +4817,6 @@ function AdminRecentActivitiesPanel({ rows }: { rows: CrmWorkspace["activities"]
 
 export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
   const dashboardRef = React.useRef<HTMLDivElement | null>(null);
-  const pathname = usePathname();
-  const router = useRouter();
-  const searchParams = useSearchParams();
   const greeting = useDashboardGreeting(workspace.user.name, "ADMIN");
   const workspacePeriod = workspace.teamPerformance?.period ?? null;
   const initialPeriod: TeamPerformancePeriod = isTeamPerformancePeriod(workspacePeriod) ? workspacePeriod : "today";
@@ -4800,44 +4857,6 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
       window.cancelAnimationFrame(frame);
     };
   }, [initialPeriod]);
-
-  const updatePerformancePeriod = React.useCallback((period: TeamPerformancePeriod) => {
-    if (!pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
-    if (params.get("performancePeriod") === period) return;
-    params.set("performancePeriod", period);
-    const nextQuery = params.toString();
-    const href = nextQuery ? `${pathname}?${nextQuery}` : pathname;
-    React.startTransition(() => {
-      router.replace(href, { scroll: false });
-    });
-  }, [pathname, router, searchParams]);
-
-  const handlePeriodChange = React.useCallback((period: TeamPerformancePeriod) => {
-    if (period === performancePeriod) return;
-    setPerformancePeriod(period);
-    updatePerformancePeriod(period);
-  }, [performancePeriod, updatePerformancePeriod]);
-
-  const performanceFilterToolbar = (
-    <div className="inline-flex rounded-full border border-slate-200 bg-white p-1">
-      {teamPerformancePeriods.map((option) => (
-        <button
-          key={option}
-          type="button"
-          onClick={() => handlePeriodChange(option)}
-          className={cn(
-            "rounded-full px-3 py-1.5 text-xs font-bold",
-            performancePeriod === option
-              ? "bg-blue-600 text-white shadow-sm"
-              : "text-slate-600 hover:bg-slate-50",
-          )}
-        >
-          {performancePeriodLabels[option]}
-        </button>
-      ))}
-    </div>
-  );
 
   React.useEffect(() => {
     if (!dashboardRef.current) return;
@@ -4881,7 +4900,7 @@ export function AdminDashboard({ workspace }: { workspace: CrmWorkspace }) {
       <AdminKpiGrid items={adminStats} />
 
       <div data-admin-section>
-        <AdminTeamPerformancePanel workspace={workspace} rows={adminTeamRows} period={performancePeriod} toolbar={performanceFilterToolbar} />
+        <AdminTeamPerformancePanel workspace={workspace} rows={adminTeamRows} period={performancePeriod} />
       </div>
 
       <div data-admin-section>

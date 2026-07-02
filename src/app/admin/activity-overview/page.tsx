@@ -3,7 +3,7 @@ import { ActivityOverviewDetailsPage } from "@/components/crm/dashboard-pages";
 import { requireCurrentUser } from "@/lib/auth";
 import { getCrmWorkspace } from "@/lib/crm-data";
 
-type TeamPerformancePeriod = "today" | "week" | "month";
+type TeamPerformancePeriod = "today" | "yesterday" | "week" | "month";
 
 export default async function AdminActivityOverviewPage({
   searchParams,
@@ -14,7 +14,7 @@ export default async function AdminActivityOverviewPage({
   const rawPeriod = params.period;
   const isValidPeriod = (value: string | string[] | undefined): value is TeamPerformancePeriod => {
     const period = Array.isArray(value) ? value[0] : value;
-    return period === "today" || period === "week" || period === "month";
+    return period === "today" || period === "yesterday" || period === "week" || period === "month";
   };
   const period = isValidPeriod(rawPeriod) ? (Array.isArray(rawPeriod) ? rawPeriod[0] : rawPeriod) : "today";
 

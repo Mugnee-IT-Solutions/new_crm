@@ -4,7 +4,7 @@ const CRM_UTC_OFFSET_MINUTES = 6 * 60;
 const CRM_UTC_OFFSET_MS = CRM_UTC_OFFSET_MINUTES * 60 * 1000;
 const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
 
-export type CrmPeriod = "today" | "week" | "month" | "year" | "custom";
+export type CrmPeriod = "today" | "yesterday" | "week" | "month" | "year" | "custom";
 
 export type CrmPeriodWindow = {
   period: CrmPeriod;
@@ -138,7 +138,10 @@ export function getCrmPeriodWindow(
   let fromParts: CrmPlainDate = todayParts;
   let toExclusiveParts = shiftCrmPlainDate(todayParts, 1);
 
-  if (period === "week") {
+  if (period === "yesterday") {
+    fromParts = shiftCrmPlainDate(todayParts, -1);
+    toExclusiveParts = todayParts;
+  } else if (period === "week") {
     const dayIndex = new Date(Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day)).getUTCDay();
     const daysFromMonday = (dayIndex + 6) % 7;
     fromParts = shiftCrmPlainDate(todayParts, -daysFromMonday);

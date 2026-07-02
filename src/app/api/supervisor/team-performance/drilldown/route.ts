@@ -233,7 +233,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, message: "marketerId is required." }, { status: 400 });
     }
 
-    const period: TeamPerformancePeriod = (rawPeriod === "today" || rawPeriod === "week" || rawPeriod === "month" || rawPeriod === "year" || rawPeriod === "custom")
+    const period: TeamPerformancePeriod = (rawPeriod === "today" || rawPeriod === "yesterday" || rawPeriod === "week" || rawPeriod === "month" || rawPeriod === "year" || rawPeriod === "custom")
       ? rawPeriod
       : "month";
     const metric = (metricType === "overview" || metricType === "leads" || metricType === "calls" || metricType === "whatsapp" || metricType === "meetings" || metricType === "followUps" || metricType === "pendingTasks"
