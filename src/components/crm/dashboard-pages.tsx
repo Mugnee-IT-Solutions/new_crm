@@ -819,6 +819,17 @@ function drilldownRowKey(row: TeamPerformanceDrilldownRow) {
   return `${row.type}:${row.id}:${row.sortDateValue ?? row.dateTime}`;
 }
 
+function readDrilldownText(...values: Array<string | null | undefined>) {
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (normalized && normalized !== "-") {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
 function drilldownStatusVariant(status: string) {
   const normalized = status.trim().toUpperCase();
   if (normalized.includes("COMPLETED") || normalized.includes("WON")) return "success" as const;
@@ -879,6 +890,81 @@ function drilldownActivityCategory(row: TeamPerformanceDrilldownRow): Exclude<Dr
   if (haystack.includes("demo")) return "demo";
   if (haystack.includes("follow")) return "followUp";
   return null;
+}
+
+function drilldownNoteCategoryLabel(row: TeamPerformanceDrilldownRow) {
+  const category = drilldownActivityCategory(row);
+
+  if (category === "call") return "Call";
+  if (category === "followUp") return "Follow-up";
+  if (category === "demo") return "Demo";
+  if (category === "quotation") return "Quotation";
+  return row.type;
+}
+
+function drilldownTimelineBadgeVariant(label?: string | null) {
+  const normalized = label?.trim().toLowerCase() ?? "";
+
+  if (normalized.includes("call") || normalized.includes("phone")) return "default" as const;
+  if (normalized.includes("follow")) return "warning" as const;
+  if (normalized.includes("demo")) return "violet" as const;
+  if (normalized.includes("quotation") || normalized.includes("quote")) return "success" as const;
+  if (normalized.includes("meeting")) return "neutral" as const;
+  return "neutral" as const;
+}
+
+function drilldownTimelineAction(status?: string | null, fallback?: string | null) {
+  const normalizedStatus = status?.trim();
+  const normalizedFallback = fallback?.trim();
+  if (normalizedStatus && normalizedFallback) return `${normalizedStatus} - ${normalizedFallback}`;
+  return normalizedStatus || normalizedFallback || "Activity update";
+}
+
+function drilldownNoteCardClasses(row: TeamPerformanceDrilldownRow) {
+  const category = drilldownActivityCategory(row);
+
+  if (category === "call") {
+    return {
+      row: "border-blue-100 border-l-4 border-l-blue-500 bg-white shadow-[0_6px_16px_rgba(37,99,235,0.06)]",
+      badge: "border border-blue-200 bg-blue-50 text-blue-700",
+      timePill: "border border-blue-100 bg-blue-50 text-blue-700",
+      noteLabel: "text-blue-700",
+    };
+  }
+
+  if (category === "followUp") {
+    return {
+      row: "border-amber-100 border-l-4 border-l-amber-500 bg-white shadow-[0_6px_16px_rgba(245,158,11,0.06)]",
+      badge: "border border-amber-200 bg-amber-50 text-amber-700",
+      timePill: "border border-amber-100 bg-amber-50 text-amber-700",
+      noteLabel: "text-amber-700",
+    };
+  }
+
+  if (category === "demo") {
+    return {
+      row: "border-violet-100 border-l-4 border-l-violet-500 bg-white shadow-[0_6px_16px_rgba(124,58,237,0.06)]",
+      badge: "border border-violet-200 bg-violet-50 text-violet-700",
+      timePill: "border border-violet-100 bg-violet-50 text-violet-700",
+      noteLabel: "text-violet-700",
+    };
+  }
+
+  if (category === "quotation") {
+    return {
+      row: "border-emerald-100 border-l-4 border-l-emerald-500 bg-white shadow-[0_6px_16px_rgba(16,185,129,0.06)]",
+      badge: "border border-emerald-200 bg-emerald-50 text-emerald-700",
+      timePill: "border border-emerald-100 bg-emerald-50 text-emerald-700",
+      noteLabel: "text-emerald-700",
+    };
+  }
+
+  return {
+    row: "border-slate-200 border-l-4 border-l-slate-400 bg-white shadow-[0_6px_16px_rgba(15,23,42,0.05)]",
+    badge: "border border-slate-200 bg-slate-100 text-slate-700",
+    timePill: "border border-slate-200 bg-slate-100 text-slate-600",
+    noteLabel: "text-slate-700",
+  };
 }
 
 function buildActivityOverviewHref(
@@ -1028,6 +1114,54 @@ function TeamPerformanceDrilldownTable({
     }, { calls: 0, followUps: 0, meetings: 0, whatsapp: 0 });
   }, [relatedRows]);
 
+  const timelineSummary = relatedActivities.length
+    ? activitySummary
+    : { calls: rowSummary.calls, followUps: rowSummary.followUps, meetings: rowSummary.meetings };
+
+  const selectedDetailText = React.useMemo(() => (
+    readDrilldownText(selectedRecord?.taskDetail)
+  ), [selectedRecord?.taskDetail]);
+
+  const selectedNoteText = React.useMemo(() => (
+    readDrilldownText(selectedRecord?.latestNote, selectedRecord?.note)
+  ), [selectedRecord?.latestNote, selectedRecord?.note]);
+
+  const companyNoteText = React.useMemo(() => (
+    readDrilldownText(selectedCompany?.notes)
+  ), [selectedCompany?.notes]);
+
+  const timelineItems = React.useMemo(() => {
+    if (relatedActivities.length) {
+      return relatedActivities.slice(0, 8).map((activity) => {
+        const label = activityCategoryLabel(activity);
+
+        return {
+          id: `${activity.id}-${activity.createdAtValue ?? activity.time}`,
+          badgeLabel: label,
+          badgeVariant: drilldownTimelineBadgeVariant(label),
+          action: drilldownTimelineAction(activity.title, activityCategoryLabel(activity)),
+          meta: activity.category === "FOLLOW_UP" ? "Follow-up update" : label,
+          note: readDrilldownText(activity.discussionSummary, activity.notes, activity.detail) || "No details added.",
+          time: activity.time,
+        };
+      });
+    }
+
+    return relatedRows.slice(0, 8).map((row) => {
+      const label = drilldownNoteCategoryLabel(row);
+
+      return {
+        id: `${row.id}-${row.dateTime}`,
+        badgeLabel: label,
+        badgeVariant: drilldownTimelineBadgeVariant(label),
+        action: drilldownTimelineAction(row.status, row.title || row.method),
+        meta: row.method,
+        note: readDrilldownText(row.latestNote, row.note, row.taskDetail) || "No details added.",
+        time: row.dateTime,
+      };
+    });
+  }, [relatedActivities, relatedRows]);
+
   const summaryCards = [
     {
       key: "call" as const,
@@ -1150,70 +1284,72 @@ function TeamPerformanceDrilldownTable({
             );
           })}
         </div>
-        {latestNotes.length ? (
-          <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-black text-slate-950">Overall Details / Notes</p>
-              <Badge variant="neutral">{latestNotes.length} notes</Badge>
-            </div>
-            <div className="mt-3 max-h-[min(42vh,28rem)] space-y-2 overflow-y-auto pr-2 [scrollbar-gutter:stable]">
-              {latestNotes.map((row) => (
-                <div key={`${drilldownRowKey(row)}:note`} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                    <p className="text-xs font-black text-slate-900">{row.customerOrCompany} - {row.title}</p>
-                    <p className="shrink-0 text-[11px] font-semibold text-slate-500 sm:text-right">{row.dateTime}</p>
-                  </div>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">{row.method} - {row.status}</p>
-                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{row.note}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
+        <div ref={recordsSectionRef}>
+          {latestNotes.length ? (
+            <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-black text-slate-950">Overall Details / Notes</p>
+                <Badge variant="neutral">{latestNotes.length} notes</Badge>
+              </div>
+              <div className="mt-3 max-h-[min(42vh,28rem)] space-y-2 overflow-y-auto pr-2 [scrollbar-gutter:stable]">
+                {latestNotes.map((row) => {
+                  const detailText = readDrilldownText(row.taskDetail);
+                  const noteText = readDrilldownText(row.latestNote, row.note);
+                  const cardClasses = drilldownNoteCardClasses(row);
+                  const categoryLabel = drilldownNoteCategoryLabel(row);
 
-      <div ref={recordsSectionRef} className="max-h-[min(58vh,40rem)] max-w-full overflow-auto rounded-2xl border border-slate-200 [scrollbar-gutter:stable_both-edges]">
-        <table className="min-w-[1040px] w-full text-left text-sm">
-          <thead className="sticky top-0 z-[1] border-b border-slate-100 bg-white text-xs uppercase tracking-[0.12em] text-slate-400">
-            <tr>
-              <th className="px-3 py-2 font-bold">Company / Customer</th>
-              <th className="px-3 py-2 font-bold">Contact</th>
-              <th className="px-3 py-2 font-bold">Phone</th>
-              <th className="px-3 py-2 font-bold">Method</th>
-              <th className="px-3 py-2 font-bold">Title</th>
-              <th className="px-3 py-2 font-bold">Date & Time</th>
-              <th className="px-3 py-2 font-bold">Status</th>
-              <th className="px-3 py-2 font-bold">Details / Note</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {filteredRows.map((record) => (
-              <tr key={drilldownRowKey(record)} className="align-top hover:bg-slate-50/70">
-                <td className="max-w-[220px] px-3 py-3 font-semibold text-slate-900">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedRecordKey(drilldownRowKey(record))}
-                      className="text-left text-blue-700 transition hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                  return (
+                    <div
+                      key={`${drilldownRowKey(row)}:note`}
+                      className={cn("rounded-xl border px-3 py-2.5", cardClasses.row)}
                     >
-                      {record.customerOrCompany}
-                  </button>
-                </td>
-                <td className="max-w-[180px] px-3 py-3 text-slate-700">{record.contactPerson}</td>
-                <td className="px-3 py-3 text-slate-700">{record.phone}</td>
-                <td className="px-3 py-3 text-slate-700">{record.method}</td>
-                <td className="max-w-[240px] px-3 py-3 text-slate-700">{record.title}</td>
-                <td className="whitespace-nowrap px-3 py-3 text-slate-700">{record.dateTime}</td>
-                <td className="whitespace-nowrap px-3 py-3 text-slate-700">{record.status}</td>
-                <td className="min-w-[340px] whitespace-pre-wrap px-3 py-3 leading-6 text-slate-800">{record.note || "-"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-        <p className="text-sm font-semibold text-slate-600">
-          {filteredRows.length ? `Showing all ${filteredRows.length} records. Scroll kore niche shob dekhte parben.` : "No records found for this filter."}
-        </p>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em]", cardClasses.badge)}>
+                              {categoryLabel}
+                            </span>
+                            <Badge variant={drilldownStatusVariant(row.status)}>{row.status}</Badge>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedRecordKey(drilldownRowKey(row))}
+                              className="truncate text-left text-sm font-black text-slate-950 transition hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                            >
+                              {row.customerOrCompany}
+                            </button>
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500">
+                            <span className="font-semibold">{row.title}</span>
+                            <span>{row.method}</span>
+                          </div>
+                        </div>
+                        <div className={cn("shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold", cardClasses.timePill)}>
+                          {row.dateTime}
+                        </div>
+                      </div>
+                      <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)]">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Task Details</p>
+                          <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-5 text-slate-700">
+                            {detailText || "-"}
+                          </p>
+                        </div>
+                        <div className="min-w-0 border-t border-slate-100 pt-2 md:border-l md:border-t-0 md:pl-3 md:pt-0">
+                          <p className={cn("text-[10px] font-black uppercase tracking-[0.16em]", cardClasses.noteLabel)}>
+                            {detailText ? "Task Note" : "Latest Note"}
+                          </p>
+                          <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-5 text-slate-800">
+                            {noteText || "-"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <AnimatePresence>
@@ -1303,52 +1439,55 @@ function TeamPerformanceDrilldownTable({
                   <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
                     <div className="rounded-[22px] border border-slate-200 bg-white p-5">
                       <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-black text-slate-950">Latest Details / Note</p>
-                        <Badge variant="neutral">{relatedRows.length} items</Badge>
+                        <p className="text-sm font-black text-slate-950">Latest Update</p>
+                        <Badge variant="neutral">Current</Badge>
                       </div>
-                      <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                        {selectedRecord.note || "No detailed note added for this record."}
+                      <p className="mt-3 rounded-2xl bg-slate-50 px-3 py-3 text-sm leading-6 text-slate-700">
+                        {selectedNoteText || "No detailed note added for this record."}
                       </p>
-                      <div className="mt-4 space-y-2 text-sm text-slate-600">
-                        <p><span className="font-semibold text-slate-900">Lead:</span> {selectedRecord.leadName || "-"}</p>
-                        <p><span className="font-semibold text-slate-900">Method:</span> {selectedRecord.method}</p>
-                        <p><span className="font-semibold text-slate-900">Status:</span> {selectedRecord.status}</p>
-                        <p><span className="font-semibold text-slate-900">Company Note:</span> {selectedCompany?.notes && selectedCompany.notes !== "-" ? selectedCompany.notes : "No company note saved yet."}</p>
+                      <div className="mt-4 space-y-3">
+                        <div className="grid gap-3 text-sm text-slate-600 sm:grid-cols-2">
+                          <p><span className="font-semibold text-slate-900">Method:</span> {selectedRecord.method}</p>
+                          <p><span className="font-semibold text-slate-900">Status:</span> {selectedRecord.status}</p>
+                          <p><span className="font-semibold text-slate-900">Lead:</span> {selectedRecord.leadName || "-"}</p>
+                          <p><span className="font-semibold text-slate-900">Time:</span> {selectedRecord.dateTime}</p>
+                        </div>
+                        <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
+                          <p className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-500">Task Details</p>
+                          <p className="mt-1 text-sm leading-6 text-slate-700">{selectedDetailText || "-"}</p>
+                        </div>
+                        {companyNoteText ? (
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
+                            <p className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-500">Company Note</p>
+                            <p className="mt-1 text-sm leading-6 text-slate-700">{companyNoteText}</p>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
 
                     <div className="rounded-[22px] border border-slate-200 bg-white p-5">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <p className="text-sm font-black text-slate-950">Recent Timeline</p>
-                        <p className="text-sm font-semibold text-slate-500">
-                          Calls {activitySummary.calls} | Follow-ups {activitySummary.followUps} | Meetings {activitySummary.meetings}
-                        </p>
-                      </div>
-                      {relatedActivities.length ? (
-                        <div className="mt-4 space-y-3">
-                          {relatedActivities.map((activity) => (
-                            <div key={`${activity.id}-${activity.createdAtValue ?? activity.time}`} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="text-sm font-bold text-slate-900">{activityCategoryLabel(activity)}</p>
-                                <p className="text-xs font-semibold text-slate-500">{activity.time}</p>
-                              </div>
-                              <p className="mt-1 text-xs font-semibold text-slate-500">{activity.title}</p>
-                              <p className="mt-2 text-sm text-slate-700">
-                                {activity.discussionSummary || activity.notes || activity.detail || "No summary available."}
-                              </p>
-                            </div>
-                          ))}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="default">{timelineSummary.calls} Calls</Badge>
+                          <Badge variant="warning">{timelineSummary.followUps} Follow-ups</Badge>
+                          <Badge variant="neutral">{timelineSummary.meetings} Meetings</Badge>
                         </div>
-                      ) : relatedRows.length ? (
+                      </div>
+                      <p className="mt-2 text-xs font-semibold text-slate-500">Newest update first. Each row shows what happened, when it happened, and the short note.</p>
+                      {timelineItems.length ? (
                         <div className="mt-4 space-y-3">
-                          {relatedRows.map((row) => (
-                            <div key={`${row.id}-${row.dateTime}`} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                          {timelineItems.map((item) => (
+                            <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
                               <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="text-sm font-bold text-slate-900">{row.title}</p>
-                                <p className="text-xs font-semibold text-slate-500">{row.dateTime}</p>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge variant={item.badgeVariant}>{item.badgeLabel}</Badge>
+                                  <p className="text-sm font-bold text-slate-900">{item.action}</p>
+                                </div>
+                                <p className="text-xs font-semibold text-slate-500">{item.time}</p>
                               </div>
-                              <p className="mt-1 text-xs font-semibold text-slate-500">{row.method} - {row.status}</p>
-                              <p className="mt-2 text-sm text-slate-700">{row.note || "No note added."}</p>
+                              <p className="mt-1 text-xs font-semibold text-slate-500">{item.meta}</p>
+                              <p className="mt-2 text-sm leading-6 text-slate-700">{item.note}</p>
                             </div>
                           ))}
                         </div>
